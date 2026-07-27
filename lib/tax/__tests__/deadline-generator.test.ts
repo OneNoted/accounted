@@ -50,6 +50,18 @@ function nextMonthPeriod(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
+/** A live system row the generator is about to replace. */
+type SupersededRow = {
+  tax_deadline_type: string
+  tax_period: string
+  status?: string
+  status_changed_at?: string | null
+  notes?: string | null
+  due_time?: string | null
+  priority?: string | null
+  customer_id?: string | null
+}
+
 /**
  * Recording mock: captures the order of insert/delete operations and the
  * insert payload, so the tests can assert the insert-first/delete-after
@@ -58,7 +70,7 @@ function nextMonthPeriod(): string {
 function makeRecordingSupabase(opts: {
   insertError?: { code: string; message: string }
   completedRows?: Array<{ tax_deadline_type: string; tax_period: string }>
-  inProgressRows?: Array<{ tax_deadline_type: string; tax_period: string; status: string }>
+  supersededRows?: SupersededRow[]
 } = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
@@ -66,7 +78,9 @@ function makeRecordingSupabase(opts: {
   const from = vi.fn(() => {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {}
     let isDelete = false
-    let isInProgressQuery = false
+    // The completed/dismissed lookup is the only read that uses .or();
+    // the other read is the superseded-row lookup.
+    let isCompletedQuery = false
     const self = () => chain
     chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
       calls.push('insert')
@@ -84,11 +98,11 @@ function makeRecordingSupabase(opts: {
       isDelete = true
       return chain
     })
-    chain.eq = vi.fn((...args: unknown[]) => {
-      if (args[0] === 'status' && args[1] === 'in_progress') isInProgressQuery = true
+    chain.eq = vi.fn(self)
+    chain.or = vi.fn(() => {
+      isCompletedQuery = true
       return chain
     })
-    chain.or = vi.fn(self)
     chain.is = vi.fn(self)
     chain.gte = vi.fn(self)
     chain.lte = vi.fn(self)
@@ -103,7 +117,7 @@ function makeRecordingSupabase(opts: {
       return chain
     })
     chain.then = vi.fn((resolve: (value: unknown) => unknown) => Promise.resolve({
-      data: isInProgressQuery ? (opts.inProgressRows ?? []) : (opts.completedRows ?? []),
+      data: isCompletedQuery ? (opts.completedRows ?? []) : (opts.supersededRows ?? []),
       error: null,
     }).then(resolve))
     return chain
@@ -213,7 +227,7 @@ describe('generateTaxDeadlinesForUser', () => {
   it('keeps a manually set in_progress status on the replacement row', async () => {
     const period = nextMonthPeriod()
     const { supabase, getInsertPayload } = makeRecordingSupabase({
-      inProgressRows: [
+      supersededRows: [
         { tax_deadline_type: 'f_skatt', tax_period: period, status: 'in_progress' },
       ],
     })
@@ -258,6 +272,229 @@ describe('generateTaxDeadlinesForUser', () => {
       due_date: paymentDueDate,
       tax_assessment_notice_id: 'notice-1',
     }))
+  })
+})
+
+/**
+ * Regeneration deletes and reinserts, so anything the replacement row does not
+ * carry across is silently discarded. The rule: the generator owns what the
+ * statute decides (title, due date, linked report), the row owns every mark a
+ * person put on it (notes, clock time, priority, manually reported status).
+ */
+describe('generateTaxDeadlinesForUser: what survives regeneration', () => {
+  const period = nextMonthPeriod()
+
+  /** The replacement row for the edited f-skatt obligation. */
+  async function regenerateWith(superseded: SupersededRow) {
+    const { supabase, getInsertPayload } = makeRecordingSupabase({
+      supersededRows: [superseded],
+    })
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+    const rows = getInsertPayload()!
+    return {
+      replaced: rows.find(
+        (row) => row.tax_deadline_type === 'f_skatt' && row.tax_period === period,
+      )!,
+      untouched: rows.find(
+        (row) => row.tax_deadline_type === 'f_skatt' && row.tax_period !== period,
+      )!,
+      rows,
+    }
+  }
+
+  it('keeps a note the user wrote on a system deadline', async () => {
+    const { replaced, untouched } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      notes: 'Ring revisorn innan betalning',
+    })
+
+    expect(replaced.notes).toBe('Ring revisorn innan betalning')
+    // A row with nothing to inherit still gets the column (PostgREST bulk
+    // inserts reject objects whose key sets differ).
+    expect(untouched.notes).toBeNull()
+  })
+
+  it('keeps a priority the user raised on a system deadline', async () => {
+    const { replaced, untouched } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      priority: 'critical',
+    })
+
+    expect(replaced.priority).toBe('critical')
+    // Untouched rows keep the template priority.
+    expect(untouched.priority).toBe('important')
+  })
+
+  it('keeps a due_time the user set on a system deadline', async () => {
+    const { replaced, untouched } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      due_time: '09:00:00',
+    })
+
+    expect(replaced.due_time).toBe('09:00:00')
+    // The generator never sets a clock time itself.
+    expect(untouched.due_time).toBeNull()
+  })
+
+  it('keeps a customer link the user made on a system deadline', async () => {
+    const { replaced } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      customer_id: '11111111-1111-1111-1111-111111111111',
+    })
+
+    expect(replaced.customer_id).toBe('11111111-1111-1111-1111-111111111111')
+  })
+
+  it('keeps every user edit at once, not just the last one added', async () => {
+    const { replaced } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      status: 'in_progress',
+      notes: 'Underlag hos byrån',
+      due_time: '17:00:00',
+      priority: 'critical',
+    })
+
+    expect(replaced).toMatchObject({
+      status: 'in_progress',
+      notes: 'Underlag hos byrån',
+      due_time: '17:00:00',
+      priority: 'critical',
+    })
+  })
+
+  it('keeps a manually reported submitted status, not just in_progress', async () => {
+    // 'submitted' leaves is_completed false, so the row IS replaced: without
+    // preservation the user's "I have filed this" report silently reverts.
+    const { replaced } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      status: 'submitted',
+      status_changed_at: '2020-01-02T03:04:05.000Z',
+    })
+
+    expect(replaced.status).toBe('submitted')
+    // The mark keeps its own timestamp: it was not made just now.
+    expect(replaced.status_changed_at).toBe('2020-01-02T03:04:05.000Z')
+  })
+
+  it('recomputes the date-derived statuses instead of freezing them', async () => {
+    // 'upcoming' is the status engine's own output, not a user report: a row
+    // whose due date has since moved inside the 14-day window must become
+    // action_needed rather than inherit a stale 'upcoming'.
+    const { rows } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      status: 'upcoming',
+      status_changed_at: '2020-01-02T03:04:05.000Z',
+    })
+
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    for (const row of rows) {
+      const daysUntil = Math.ceil(
+        (new Date(`${row.due_date as string}T00:00:00`).getTime() - today.getTime()) / 86_400_000,
+      )
+      expect(row.status).toBe(daysUntil <= 14 ? 'action_needed' : 'upcoming')
+      expect(row.status_changed_at).not.toBe('2020-01-02T03:04:05.000Z')
+    }
+  })
+
+  it('still propagates the statutory title and due date to an untouched row', async () => {
+    // The schema cannot tell a user edit apart from a template change on the
+    // statutory columns, so the template always wins there: a corrected date
+    // or a renamed obligation must reach rows nobody touched.
+    const { supabase, getInsertPayload } = makeRecordingSupabase({
+      supersededRows: [
+        {
+          tax_deadline_type: 'f_skatt',
+          tax_period: period,
+          // Values from a superseded schedule / an older title template.
+          notes: 'behåll mig',
+        },
+      ],
+    })
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+
+    const replaced = getInsertPayload()!.find(
+      (row) => row.tax_deadline_type === 'f_skatt' && row.tax_period === period,
+    )!
+    // Title comes from the current template, not from the replaced row.
+    const monthNames = [
+      'januari', 'februari', 'mars', 'april', 'maj', 'juni',
+      'juli', 'augusti', 'september', 'oktober', 'november', 'december',
+    ]
+    const [labelYear, labelMonth] = period.split('-')
+    expect(replaced.title).toBe(
+      `Betala preliminärskatt ${monthNames[Number(labelMonth) - 1]} ${labelYear}`,
+    )
+    // due_date must equal the schedule's own computed date, which is exactly
+    // what getExpectedUpcomingDeadlineKeys expects; otherwise the backfill
+    // cron flags this company forever.
+    expect(
+      getExpectedUpcomingDeadlineKeys(SETTINGS, GEN_YEARS).has(
+        `f_skatt:${period}:${replaced.due_date as string}`,
+      ),
+    ).toBe(true)
+    expect(replaced.notes).toBe('behåll mig')
+  })
+
+  it('drops an obligation the settings no longer produce, edits and all', async () => {
+    // Deliberate: turning off vat_registered is the user's own statement that
+    // the obligation does not apply. Keeping an edited momsdeklaration row
+    // would leave a phantom statutory deadline on the page.
+    const { supabase, getInsertPayload } = makeRecordingSupabase({
+      supersededRows: [
+        {
+          tax_deadline_type: 'moms_monthly',
+          tax_period: period,
+          notes: 'anteckning på en moms-deadline',
+          priority: 'critical',
+        },
+      ],
+    })
+
+    await generateTaxDeadlinesForUser(
+      supabase,
+      'company-1',
+      { ...SETTINGS, vat_registered: false, moms_period: null },
+      GEN_YEARS,
+    )
+
+    expect(getInsertPayload()!.some((row) => row.tax_deadline_type === 'moms_monthly')).toBe(false)
+  })
+
+  it('never inherits user_id: system deadlines stay company-owned', async () => {
+    const { rows } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      notes: 'x',
+    })
+
+    for (const row of rows) {
+      expect('user_id' in row).toBe(false)
+    }
+  })
+
+  it('gives every inserted row the identical key set', async () => {
+    // PostgREST rejects a bulk insert whose objects have differing keys
+    // (PGRST102), so an inherited column must be present-and-null rather
+    // than omitted on rows with nothing to inherit.
+    const { rows } = await regenerateWith({
+      tax_deadline_type: 'f_skatt',
+      tax_period: period,
+      notes: 'x',
+      due_time: '08:00:00',
+      customer_id: '11111111-1111-1111-1111-111111111111',
+    })
+
+    const keys = rows.map((row) => Object.keys(row).sort().join(','))
+    expect(new Set(keys).size).toBe(1)
   })
 })
 

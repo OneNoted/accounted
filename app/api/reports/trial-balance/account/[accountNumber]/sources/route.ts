@@ -1,6 +1,6 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 
@@ -77,48 +77,38 @@ export const GET = withRouteContext<{ params: Promise<{ accountNumber: string }>
   // cannot give us a chronological parent order. Without a stable parent order
   // a raw `.limit()` returns an arbitrary subset that varies between identical
   // requests, which surfaced as the trial-balance drill-down showing
-  // "different rows on every reload" for high-volume accounts. We instead page
-  // on the line PK (`id`) for a stable total order (see fetch-all.ts) and do
-  // the chronological sort here, mirroring `generateGeneralLedger`.
-  const rows = await fetchAllRows<{
+  // "different rows on every reload" for high-volume accounts. The two-step
+  // fetch pages both sides on their PK for a stable total order (see
+  // fetch-all.ts) and we do the chronological sort here, mirroring
+  // `generateGeneralLedger`.
+  //
+  // The scope filters used to live on a `journal_entries!inner` embed, which
+  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
+  // journal_entry_lines table across all tenants (see
+  // lib/bookkeeping/entry-lines.ts); driving from the entry side keeps the
+  // work inside this company's period.
+  const rows = await fetchEntryLines<{
     id: string
     debit_amount: number
     credit_amount: number
     dimensions: Record<string, string> | null
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     journal_entries: any
-  }>(({ from, to }) => {
-    let query = supabase
-      .from('journal_entry_lines')
-      .select(`
-        id,
-        debit_amount,
-        credit_amount,
-        dimensions,
-        journal_entry_id,
-        journal_entries!inner(
-          id,
-          voucher_number,
-          voucher_series,
-          entry_date,
-          description,
-          status,
-          company_id,
-          fiscal_period_id
-        )
-      `)
-      .eq('account_number', accountNumber)
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-
-    if (dimFilter.dimensions) {
+  }>({
+    supabase,
+    entryColumns: 'id, voucher_number, voucher_series, entry_date, description, status, company_id, fiscal_period_id',
+    lineColumns: 'id, debit_amount, credit_amount, dimensions, journal_entry_id',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .in('status', ['posted', 'reversed']),
+    filterLines: (q: EntryLinesQuery) => {
+      const scoped = q.eq('account_number', accountNumber)
       // jsonb containment (@>): served by idx_jel_dimensions_gin.
-      query = query.contains('dimensions', dimFilter.dimensions)
-    }
-
-    return query.order('id', { ascending: true }).range(from, to)
-  }, { dedupeBy: (r) => r.id })
+      return dimFilter.dimensions ? scoped.contains('dimensions', dimFilter.dimensions) : scoped
+    },
+  })
 
   // Map then sort in JS (date ASC, voucher_number ASC, journal_entry_id ASC as
   // a final deterministic tiebreak for lines sharing a date and voucher number

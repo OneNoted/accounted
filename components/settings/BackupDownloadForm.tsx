@@ -1,7 +1,8 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -12,7 +13,10 @@ import { Cloud, Download, Info, Loader2 } from 'lucide-react'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 import type { FiscalPeriod } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  getErrorMessage as getUserErrorMessage,
+  type ErrorLocale,
+} from '@/lib/errors/get-error-message'
 
 const CloudBackupPanel = getSettingsPanel('cloud-backup')
 const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
@@ -31,12 +35,22 @@ const LAST_DOWNLOAD_STORAGE_KEY = 'Accounted:last-backup-download'
 
 export function BackupDownloadForm() {
   const t = useTranslations('settings_backup_download')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { company } = useCompany()
 
   const [scope, setScope] = useState<Scope>('all')
   const [includeDocuments, setIncludeDocuments] = useState(true)
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
+  // null = the fiscal years are not known: still loading, or the read failed
+  // (periodsError). A failed read must never render the confirmed-empty
+  // "Inga räkenskapsår" option: the company usually has fiscal years, the
+  // read just did not land. Scope "all" never touches this list, so the full
+  // backup keeps working either way.
+  const [periods, setPeriods] = useState<FiscalPeriod[] | null>(null)
+  // detail === null: transient, so the line carries a retry. A detail sentence
+  // means the user has to act (an expired session) and a retry cannot help.
+  const [periodsError, setPeriodsError] = useState<{ detail: string | null } | null>(null)
+  const [periodsReloadKey, setPeriodsReloadKey] = useState(0)
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>('')
   const [estimate, setEstimate] = useState<EstimateResponse | null>(null)
   const [isLoadingEstimate, setIsLoadingEstimate] = useState(false)
@@ -56,26 +70,50 @@ export function BackupDownloadForm() {
   useEffect(() => {
     let cancelled = false
     async function loadPeriods() {
+      setPeriodsError(null)
       try {
         const res = await fetch('/api/bookkeeping/fiscal-periods')
-        const { data } = await res.json()
+        if (!res.ok) {
+          // Not-JSON bodies (an HTML error page, an empty 502) leave null,
+          // and getErrorMessage falls back to the status map.
+          const body = await res.json().catch(() => null)
+          if (cancelled) return
+          const sessionGone = res.status === 401 || res.status === 403
+          setPeriods(null)
+          setPeriodsError({
+            detail: sessionGone
+              ? getUserErrorMessage(body, { statusCode: res.status, locale: errorLocale })
+              : null,
+          })
+          return
+        }
+        // A 200 whose body will not parse throws into the catch below; a 200
+        // without the list is a failed read too. Neither may become a
+        // fabricated "Inga räkenskapsår".
+        const body = await res.json()
         if (cancelled) return
-        const sorted = (data || []) as FiscalPeriod[]
+        if (!Array.isArray(body?.data)) {
+          setPeriods(null)
+          setPeriodsError({ detail: null })
+          return
+        }
+        const sorted = body.data as FiscalPeriod[]
         setPeriods(sorted)
-        if (sorted.length > 0 && !selectedPeriodId) {
-          setSelectedPeriodId(sorted[0].id)
+        if (sorted.length > 0) {
+          setSelectedPeriodId((prev) => prev || sorted[0].id)
         }
       } catch {
-        // silent: scope=all still works without periods loaded
+        if (!cancelled) {
+          setPeriods(null)
+          setPeriodsError({ detail: null })
+        }
       }
     }
-    loadPeriods()
+    void loadPeriods()
     return () => {
       cancelled = true
     }
-    // Intentionally run once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [periodsReloadKey, errorLocale])
 
   const estimateUrl = useMemo(() => {
     const params = new URLSearchParams({ estimate: '1', scope })
@@ -208,6 +246,28 @@ export function BackupDownloadForm() {
                 recommendedLabel={t('recommended')}
               />
             </div>
+            {/* Live region always mounted so the failure is announced when it
+                appears, not merely inserted. The full-history scope stays
+                fully functional; the line only reports that per-period backup
+                cannot be offered until the fiscal years can be read. */}
+            <div role="status" aria-live="polite" className="min-w-0">
+              {periodsError && (
+                <AttnLine
+                  action={
+                    periodsError.detail
+                      ? undefined
+                      : {
+                          label: t('periods_load_retry'),
+                          onClick: () => setPeriodsReloadKey((k) => k + 1),
+                        }
+                  }
+                >
+                  {periodsError.detail
+                    ? `${t('periods_load_failed')} ${periodsError.detail}`
+                    : t('periods_load_failed')}
+                </AttnLine>
+              )}
+            </div>
           </div>
 
           {scope === 'period' && (
@@ -218,10 +278,14 @@ export function BackupDownloadForm() {
                 value={selectedPeriodId}
                 onChange={(e) => setSelectedPeriodId(e.target.value)}
                 className="flex h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                disabled={periods.length === 0}
+                disabled={periods === null || periods.length === 0}
               >
-                {periods.length === 0 && <option value="">{t('no_fiscal_years')}</option>}
-                {periods.map((p) => (
+                {/* The confirmed-empty option only after a confirmed empty
+                    read; an unknown list renders an empty disabled select. */}
+                {periods !== null && periods.length === 0 && (
+                  <option value="">{t('no_fiscal_years')}</option>
+                )}
+                {(periods ?? []).map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.period_start}: {p.period_end}
                   </option>

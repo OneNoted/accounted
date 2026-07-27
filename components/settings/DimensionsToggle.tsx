@@ -87,6 +87,18 @@ export function DimensionsToggle() {
           })
         }
       }
+    } catch (err) {
+      // A rejected fetch (offline, DNS failure, aborted request) never reaches
+      // the !res.ok arm above, and the switch is controlled by the settings
+      // context, so it simply stays where it was: without this toast the click
+      // looks like a dead control rather than a save that did not happen.
+      // One toast per failed click, never two: TOAST_LIMIT is 1
+      // (components/ui/use-toast.tsx) and a second would evict the first.
+      toast({
+        title: t('settings_save_failed_title'),
+        description: getErrorMessage(err, { locale: errorLocale }),
+        variant: 'destructive',
+      })
     } finally {
       setIsSaving(false)
     }

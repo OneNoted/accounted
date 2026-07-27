@@ -23,6 +23,7 @@ import {
 import { Palmtree, Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 interface BalanceRow {
   employee_vacation_balance_id: string
@@ -96,11 +97,14 @@ export function VacationBalanceCard({ canWrite }: { canWrite: boolean }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dry_run: true }),
     })
-    const body = await res.json()
-    if (res.ok) {
+    const body = await res.json().catch(() => null)
+    if (res.ok && body) {
       setReport(body.data.report as CloseReport)
     } else {
-      setPreviewError(body.error ?? t('vacation_close_preview_failed'))
+      // Resolve via the parsed body plus the status: the route answers thrown
+      // errors with the canonical envelope `{ error: { code, message } }`,
+      // and rendering that object would crash React.
+      setPreviewError(getErrorMessage(body, { statusCode: res.status }))
     }
     setPreviewing(false)
   }
@@ -112,7 +116,7 @@ export function VacationBalanceCard({ canWrite }: { canWrite: boolean }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ book_adjustment: true }),
     })
-    const body = await res.json()
+    const body = await res.json().catch(() => null)
     if (res.ok) {
       toast({ title: t('vacation_close_done') })
       setDialogOpen(false)
@@ -121,7 +125,7 @@ export function VacationBalanceCard({ canWrite }: { canWrite: boolean }) {
     } else {
       toast({
         title: t('vacation_close_failed'),
-        description: body.error,
+        description: getErrorMessage(body, { statusCode: res.status }),
         variant: 'destructive',
       })
     }

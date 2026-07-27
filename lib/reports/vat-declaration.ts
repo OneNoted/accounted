@@ -4,6 +4,7 @@ import type {
   VatDeclarationRutor,
   VatPeriodType,
 } from '@/types'
+import type { VatCheckAccountTotals } from './vat-declaration-checks'
 
 /**
  * Calculate VAT declaration (Momsdeklaration) for a given period.
@@ -138,6 +139,23 @@ export const VAT_OUTPUT_ACCOUNTS = Object.entries(ACCOUNT_RUTA)
 export const VAT_INPUT_ACCOUNTS = Object.entries(ACCOUNT_RUTA)
   .filter(([, mapping]) => mapping.box === 'ruta48')
   .map(([account]) => account)
+
+/**
+ * The reverse-charge INPUT VAT accounts the momsdeklaration completeness check
+ * compares rutor 30-32 against: 2645 (beräknad ingående moms på förvärv från
+ * utlandet, EU and non-EU) and 2647 (ingående moms, omvänd betalningsskyldighet
+ * i Sverige). The other five ruta 48 accounts are not reverse charge and stay
+ * out, 2649 (blandad verksamhet) above all: counting it would reintroduce the
+ * aggregation the sharpened check exists to remove.
+ *
+ * Mirrors RC_INPUT_ACCOUNTS in ./vat-declaration-checks, which keeps its copy
+ * private. The two lists are pinned together behaviourally in
+ * __tests__/vat-declaration.test.ts: it feeds the projected pair and a full
+ * totals map carrying a balance on every OTHER ruta 48 account to
+ * runVatDeclarationChecks and asserts identical findings, so widening the list
+ * on one side without the other fails there.
+ */
+export const RC_INPUT_VAT_ACCOUNTS = ['2645', '2647'] as const
 
 /**
  * Calculate period start and end dates
@@ -401,6 +419,41 @@ export function rutorFromTotals(
 }
 
 /**
+ * Project the reverse-charge input pair (2645/2647) out of a full totals map,
+ * for `VatDeclaration.rcInputAccountTotals`.
+ *
+ * Both keys are always present, zeros included, so the wire shape is stable and
+ * an absent field keeps meaning "this producer does not carry the pair" rather
+ * than "no reverse charge in the period".
+ */
+function rcInputTotals(
+  totals: Map<string, { debit: number; credit: number }>
+): Record<string, { debit: number; credit: number }> {
+  const pair: Record<string, { debit: number; credit: number }> = {}
+  for (const account of RC_INPUT_VAT_ACCOUNTS) {
+    const t = totals.get(account)
+    pair[account] = { debit: round(t?.debit ?? 0), credit: round(t?.credit ?? 0) }
+  }
+  return pair
+}
+
+/**
+ * Rebuild the per-account totals map `runVatDeclarationChecks` takes as its
+ * optional second argument, from a declaration that may have arrived as JSON
+ * over HTTP.
+ *
+ * Returns undefined when the pair is absent, which makes the check fall back to
+ * its weaker ruta 48 comparison. That is deliberate: an empty map would read as
+ * "0 kr beräknad ingående moms" and turn a correct declaration into a warning.
+ */
+export function rcInputTotalsFromDeclaration(
+  declaration: Pick<VatDeclaration, 'rcInputAccountTotals'>
+): VatCheckAccountTotals | undefined {
+  const pair = declaration.rcInputAccountTotals
+  return pair ? new Map(Object.entries(pair)) : undefined
+}
+
+/**
  * Calculate VAT declaration from the general ledger.
  *
  * Sums posted journal entry lines on the BAS accounts in ACCOUNT_RUTA per the
@@ -465,6 +518,10 @@ export async function calculateVatDeclaration(
   return {
     period: { type: periodType, year, period, start, end },
     rutor,
+    // The 2645/2647 pair travels with the declaration so an HTTP caller can run
+    // the sharp RC_INPUT_VAT_MISMATCH comparison instead of the ruta 48
+    // fallback: see VatDeclaration.rcInputAccountTotals.
+    rcInputAccountTotals: rcInputTotals(totals),
     invoiceCount,
     transactionCount,
     breakdown: {

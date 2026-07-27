@@ -78,7 +78,16 @@ export function SkattekontoMatchDialog({
         const json = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          throw new Error(json.error || t('search_failed_default'))
+          // Map the parsed body plus the status, never `new Error(json.error)`:
+          // the Error constructor stringifies a non-string body field, and the
+          // mapper would discard the route's own Swedish reason.
+          toast({
+            title: t('fetch_candidates_failed_title'),
+            description: getUserErrorMessage(json, { statusCode: res.status }),
+            variant: 'destructive',
+          })
+          onClose()
+          return
         }
         setCandidates(json.data.candidates as MatchCandidate[])
       } catch (err) {
@@ -112,7 +121,12 @@ export function SkattekontoMatchDialog({
       )
       const json = await res.json()
       if (!res.ok) {
-        throw new Error(json.error || t('match_failed_default'))
+        toast({
+          title: t('match_failed_title'),
+          description: getUserErrorMessage(json, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
       }
       toast({ title: t('match_success_title') })
       onMatched()

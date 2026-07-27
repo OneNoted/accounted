@@ -86,12 +86,18 @@ export function calculateDaysOverdue(dueDate: string): number {
  * email template and persisted on the invoice_reminders row for audit.
  */
 export interface ReminderSurcharges {
+  /** Dröjsmålsränta: a share of the invoice total, so it carries the INVOICE currency. */
   interestAmount: number
   interestRate: number
   interestFromDate: string
   interestDays: number
+  /**
+   * Lagstadgad påminnelseavgift, always in SEK (Lag 1981:739; booked 1510/3990
+   * in SEK). Deliberately NOT summed with the invoice-currency amounts here:
+   * the template derives the per-currency amount to pay via
+   * calculateReminderAmounts().
+   */
   reminderFee: number
-  totalDue: number
 }
 
 /**
@@ -324,8 +330,10 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       }
     }
 
-    const totalDue =
-      Math.round((invoice.total + interest.amount + reminderFee) * 100) / 100
+    // No "totalDue" scalar is computed here on purpose: invoice.total and
+    // interest.amount are in the invoice currency while reminderFee is a
+    // statutory SEK amount. Summing them would produce a nonsense figure for a
+    // EUR/USD invoice. The email template splits the amount to pay per currency.
 
     // Create reminder record first (to get action token), persisting the
     // computed surcharges so the public action page + audit trail show them.
@@ -372,7 +380,6 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
         interestFromDate: interest.fromDate,
         interestDays: interest.days,
         reminderFee,
-        totalDue,
       },
     )
 

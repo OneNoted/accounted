@@ -105,11 +105,62 @@ const PAID_INVOICES = Array.from({ length: 5 }, () => ({
   paid_at: '2026-01-11',
 }))
 
+function supplierRow(
+  overrides: Partial<{
+    supplier_id: string
+    total: number
+    total_sek: number | null
+    currency: string
+    exchange_rate: number | null
+    supplier: { id: string; name: string }
+  }> = {}
+) {
+  const supplierId = overrides.supplier_id ?? 'sup-1'
+  return {
+    supplier_id: supplierId,
+    total: 100,
+    total_sek: null,
+    currency: 'SEK',
+    exchange_rate: null,
+    supplier: { id: supplierId, name: 'Leverantören AB' },
+    ...overrides,
+  }
+}
+
 const SUPPLIER_ROWS = [
-  { supplier_id: 'sup-1', total_sek: 400, total: 400, supplier: { id: 'sup-1', name: 'Leverantören AB' } },
-  { supplier_id: 'sup-1', total_sek: 100, total: 100, supplier: { id: 'sup-1', name: 'Leverantören AB' } },
-  { supplier_id: 'sup-2', total_sek: 200, total: 200, supplier: { id: 'sup-2', name: 'Andra AB' } },
+  supplierRow({ supplier_id: 'sup-1', total: 400, total_sek: 400 }),
+  supplierRow({ supplier_id: 'sup-1', total: 100, total_sek: 100 }),
+  supplierRow({
+    supplier_id: 'sup-2',
+    total: 200,
+    total_sek: 200,
+    supplier: { id: 'sup-2', name: 'Andra AB' },
+  }),
 ]
+
+/**
+ * The realistic shape of an ordinary Swedish supplier invoice: currency SEK,
+ * no exchange rate, and `total_sek` NULL because no conversion ever ran.
+ */
+const SEK_ONLY_ROWS = [
+  supplierRow({ supplier_id: 'sup-1', total: 1250, supplier: { id: 'sup-1', name: 'Städbolaget AB' } }),
+  supplierRow({ supplier_id: 'sup-1', total: 750.5, supplier: { id: 'sup-1', name: 'Städbolaget AB' } }),
+  supplierRow({
+    supplier_id: 'sup-2',
+    total: 400,
+    supplier: { id: 'sup-2', name: 'Kontorsvaror AB' },
+  }),
+]
+
+/** Queue the six responses the hot path consumes after the fiscal period. */
+function enqueueHotPath(supplierRows: unknown[]) {
+  enqueue({ data: aggPayload() }) // rpc get_kpi_report_aggregates
+  enqueue({ data: [] }) // rpc compute_prior_opening_balances
+  enqueue({ data: CHART }) // chart_of_accounts
+  enqueue({ data: null }) // extension_data prefs
+  enqueue({ data: [] }) // invoices
+  enqueue({ data: supplierRows }) // supplier_invoices
+}
 
 function kpiRequest(searchParams: Record<string, string> = { period_id: 'period-1' }) {
   return createMockRequest('/api/reports/kpi', { searchParams })
@@ -186,6 +237,7 @@ describe('GET /api/reports/kpi', () => {
         { supplier_id: 'sup-1', supplier_name: 'Leverantören AB', total: 500 },
         { supplier_id: 'sup-2', supplier_name: 'Andra AB', total: 200 },
       ],
+      topSuppliersUnconvertedFxCount: 0,
     })
 
     expect(supabase.rpc).toHaveBeenCalledWith('get_kpi_report_aggregates', {
@@ -277,6 +329,83 @@ describe('GET /api/reports/kpi', () => {
       dimensions,
     })
     expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('populates Största leverantörer for a SEK-only company whose total_sek is NULL', async () => {
+    // Headline regression: total_sek is only written when a conversion runs,
+    // so an ordinary Swedish supplier invoice has it NULL. Reading total_sek
+    // alone left the panel permanently empty for these companies.
+    enqueue({ data: makePeriod() }) // fiscal_periods
+    enqueueHotPath(SEK_ONLY_ROWS)
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.topSuppliers).toEqual([
+      { supplier_id: 'sup-1', supplier_name: 'Städbolaget AB', total: 2000.5 },
+      { supplier_id: 'sup-2', supplier_name: 'Kontorsvaror AB', total: 400 },
+    ])
+    expect(body.data.topSuppliersUnconvertedFxCount).toBe(0)
+  })
+
+  it('aggregates a mixed SEK/EUR company in SEK', async () => {
+    enqueue({ data: makePeriod() }) // fiscal_periods
+    enqueueHotPath([
+      // SEK invoice: total is the SEK total, exactly.
+      supplierRow({ supplier_id: 'sup-1', total: 1000, supplier: { id: 'sup-1', name: 'Svensk Lev AB' } }),
+      // EUR invoice with a rate: converted at 100 * 11.4567 = 1145.67.
+      supplierRow({
+        supplier_id: 'sup-1',
+        total: 100,
+        currency: 'EUR',
+        exchange_rate: 11.4567,
+        supplier: { id: 'sup-1', name: 'Svensk Lev AB' },
+      }),
+      // EUR invoice with a stored SEK total: that value wins.
+      supplierRow({
+        supplier_id: 'sup-2',
+        total: 200,
+        total_sek: 2300,
+        currency: 'EUR',
+        exchange_rate: 11.5,
+        supplier: { id: 'sup-2', name: 'Euro Supplier GmbH' },
+      }),
+    ])
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.topSuppliers).toEqual([
+      { supplier_id: 'sup-2', supplier_name: 'Euro Supplier GmbH', total: 2300 },
+      { supplier_id: 'sup-1', supplier_name: 'Svensk Lev AB', total: 2145.67 },
+    ])
+    expect(body.data.topSuppliersUnconvertedFxCount).toBe(0)
+  })
+
+  it('reports an unconvertible FX invoice instead of silently dropping it', async () => {
+    enqueue({ data: makePeriod() }) // fiscal_periods
+    enqueueHotPath([
+      supplierRow({ supplier_id: 'sup-1', total: 1000, supplier: { id: 'sup-1', name: 'Svensk Lev AB' } }),
+      // USD, no rate and no SEK total: cannot be expressed in SEK.
+      supplierRow({
+        supplier_id: 'sup-2',
+        total: 500,
+        currency: 'USD',
+        supplier: { id: 'sup-2', name: 'US Vendor Inc' },
+      }),
+    ])
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
+
+    expect(status).toBe(200)
+    // The raw 500 USD is neither added as SEK nor hidden: it is counted.
+    expect(body.data.topSuppliers).toEqual([
+      { supplier_id: 'sup-1', supplier_name: 'Svensk Lev AB', total: 1000 },
+    ])
+    expect(body.data.topSuppliersUnconvertedFxCount).toBe(1)
   })
 
   it('returns 500 when the aggregates RPC fails', async () => {

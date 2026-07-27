@@ -4,8 +4,12 @@
  *
  * No DB or Supabase dependency: all inputs are plain data.
  */
-import { resolveSekAmount } from './currency-utils'
-import { getRevenueAccount, getOutputVatAccount } from './invoice-entries'
+import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
+import {
+  getRevenueAccount,
+  getOutputVatAccount,
+  InvoiceFxRateMissingError,
+} from './invoice-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
 import { roundOre } from '@/lib/money'
@@ -112,11 +116,12 @@ function buildSendLines(
   const desc = invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'
 
   const toSek = (amount: number): number => {
-    if (!isForeign) return amount
-    if (invoice.exchange_rate != null && invoice.exchange_rate > 0) {
-      return Math.round(amount * invoice.exchange_rate * 100) / 100
-    }
-    return amount
+    const sek = resolveSekAmountOrNull(amount, null, invoice.currency, invoice.exchange_rate)
+    // Unreachable behind the fxUnconvertible bail below; kept as an assertion so
+    // removing that bail fails loudly instead of silently relabelling foreign
+    // amounts as kronor.
+    if (sek === null) throw new InvoiceFxRateMissingError(invoice.currency)
+    return sek
   }
 
   // Build credit lines per VAT rate group
@@ -127,6 +132,26 @@ function buildSendLines(
   // amount. Returning no proposal keeps an inconsistent text-only invoice from
   // producing a debit-only entry; the user must correct its economic rows.
   if (accountingItems.length === 0 && (invoice.items?.length ?? 0) > 0) {
+    return []
+  }
+
+  // Item-driven legs have only `exchange_rate` to convert with: an InvoiceItem
+  // carries no per-item SEK column. Without a rate every proposed leg would be
+  // the raw foreign number relabelled as kronor, and because the 1510 debit is
+  // derived from the sum of the credits the grid would even read "Balanserar".
+  // Return no proposal (the same signal used just above for a text-only invoice)
+  // so the dialog hides the journal preview rather than displaying fabricated
+  // amounts. The send itself still routes through createInvoiceJournalEntry,
+  // which refuses this case outright with INVOICE_FX_RATE_MISSING.
+  //
+  // Why bail instead of throwing the way propose-payment-lines does:
+  // proposeSendLines runs inside a useMemo during SendInvoiceDialog's render,
+  // where a throw takes out the page instead of producing a toast. `editable` is
+  // SEK-only, so an empty proposal cannot disable the submit button either.
+  // Scoped to the item path on purpose: the invoice-level fallback below has a
+  // genuine second source (subtotal_sek / vat_amount_sek) and is left alone.
+  const fxUnconvertible = isForeign && !(invoice.exchange_rate != null && invoice.exchange_rate > 0)
+  if (accountingItems.length > 0 && fxUnconvertible) {
     return []
   }
 

@@ -5,6 +5,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
+import { employeeFieldValue, loadActiveEmployeeCount } from '@/lib/agent/composer/employee-facts'
 import AgentOnboarding from '@/components/onboarding/agent/AgentOnboarding'
 
 export const dynamic = 'force-dynamic'
@@ -41,12 +42,13 @@ export default async function AgentOnboardingPage() {
     { data: profile },
     { data: existingProfile },
     { data: atomRows },
+    activeEmployees,
     hdrs,
   ] = await Promise.all([
     supabase
       .from('company_settings')
       .select(
-        'is_sandbox, city, address_line1, postal_code, f_skatt, vat_registered, moms_period, fiscal_year_start_month, employee_count, has_employees',
+        'is_sandbox, city, address_line1, postal_code, f_skatt, vat_registered, moms_period, fiscal_year_start_month, employer_registered, pays_salaries',
       )
       .eq('company_id', companyId)
       .maybeSingle(),
@@ -61,6 +63,9 @@ export default async function AgentOnboardingPage() {
       .select('id, title')
       .eq('is_active', true)
       .is('parent_atom_id', null), // skill titles only; reference children never appear as profile chips
+    // The only source that actually knows the headcount. Cheap: a head-only
+    // count served by idx_employees_active, and it rides the same batch.
+    loadActiveEmployeeCount(supabase, companyId).catch(() => null),
     headers(),
   ])
 
@@ -101,7 +106,7 @@ export default async function AgentOnboardingPage() {
   const firstName = profile?.full_name?.split(' ')[0] ?? null
   // Pre-render-friendly snapshot of company info: used to seed Phase B fields
   // before the stream completes so the layout doesn't jump.
-  const initialFields = buildInitialFields(company, settings)
+  const initialFields = buildInitialFields(company, settings, activeEmployees)
 
   const atomTitles: Record<string, string> = {}
   for (const row of (atomRows ?? []) as { id: string; title: string }[]) {
@@ -143,8 +148,12 @@ interface CompanySettingsForPhaseB {
   vat_registered: boolean | null
   moms_period: string | null
   fiscal_year_start_month: number | null
-  employee_count: number | null
-  has_employees: boolean | null
+  // The employer facts that exist on company_settings. This select used to name
+  // `employee_count` and `has_employees`, neither of which is a column on this
+  // table, so PostgREST rejected the select whole (42703) and every field above
+  // arrived null as well.
+  employer_registered: boolean | null
+  pays_salaries: boolean | null
 }
 
 function buildInitialFields(
@@ -155,6 +164,7 @@ function buildInitialFields(
     tic_snapshot: Record<string, unknown> | null
   },
   settings: CompanySettingsForPhaseB | null,
+  activeEmployees: number | null,
 ): InitialFields {
   const tic = (company.tic_snapshot ?? null) as Record<string, unknown> | null
   const entityLabel =
@@ -173,7 +183,7 @@ function buildInitialFields(
   let fSkatt: string | null = null
   let vatPeriod: string | null = null
   let fiscalPeriod: string | null = null
-  let employees: string | null = null
+  let ticEmployeeRange: string | null = null
 
   if (tic) {
     const sni = (tic.sniCodes as { code: string; name: string }[] | undefined) ?? []
@@ -184,7 +194,7 @@ function buildInitialFields(
     if (addr?.city) city = addr.city
     const reg = tic.registration as { fTax?: boolean } | undefined
     if (reg) fSkatt = reg.fTax ? 'Aktivt' : 'Saknas'
-    if (tic.employeeRange) employees = tic.employeeRange as string
+    if (tic.employeeRange) ticEmployeeRange = tic.employeeRange as string
     // v2 caches `fiscalYear` (current fiscal-year configuration) on the
     // snapshot. Prefer it over the user-entered value below so onboarding
     // can show the registered fiscal period from Bolagsverket without
@@ -208,12 +218,18 @@ function buildInitialFields(
     if (!fiscalPeriod && settings.fiscal_year_start_month != null) {
       fiscalPeriod = fiscalYearLabel(settings.fiscal_year_start_month)
     }
-    if (!employees && settings.employee_count != null) {
-      employees = String(settings.employee_count)
-    } else if (!employees && settings.has_employees != null) {
-      employees = settings.has_employees ? 'Ja' : 'Nej'
-    }
   }
+
+  // "Anställda": the live headcount if there is one, else Bolagsverket's
+  // interval, else the attested employer facts, else null so the row shows its
+  // placeholder instead of a number nobody entered. See employee-facts.ts for
+  // why pays_salaries === false is not treated as "Nej".
+  const employees = employeeFieldValue({
+    activeEmployees,
+    ticEmployeeRange,
+    employerRegistered: settings?.employer_registered ?? null,
+    paysSalaries: settings?.pays_salaries ?? null,
+  })
 
   return {
     entity_type_label: entityLabel,

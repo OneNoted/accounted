@@ -29,7 +29,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
 import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
-import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
+import { decryptPersonnummer, encryptPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 
@@ -354,6 +354,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const body = parsed.data
+
+    // CreateEmployeeSchema only checks the shape (12 digits), so on its own it
+    // lets a check-digit-invalid number into payroll. That number then surfaces
+    // as a rejected arbetsgivardeklaration from Skatteverket weeks later, which
+    // is a far worse place to discover it. Run the same date + Luhn validation
+    // the cookie-session route runs, before the dry-run branch so a dry run
+    // reports it too. The error text is a static Swedish message: it never
+    // echoes the supplied personnummer back (GDPR Art.5(1)(c)).
+    const pnrValidation = validatePersonnummer(body.personnummer)
+    if (!pnrValidation.valid) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'personnummer', message: pnrValidation.error },
+      })
+    }
 
     // An enskild firma owner cannot be put on payroll (owner takes egna uttag,
     // not lön). Reject owner/board employment types for EF: validated before

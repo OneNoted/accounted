@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -155,6 +157,46 @@ export const POST = withRouteContext(
           source: 'manual' | 'riksbanken'
         }
 
+    // A bank row is stored in ITS OWN currency: transactions.amount is
+    // denominated in transactions.currency, and the SEK value lives either in
+    // amount_sek (pre-computed at ingest) or is derivable from exchange_rate.
+    // Every journal entry line is SEK, so a foreign row whose SEK value cannot
+    // be established must not be booked or allocated at all: substituting the
+    // raw foreign number would settle a 500 USD receipt as 500 SEK, a tenth of
+    // the real payment. Rows in exactly that shape exist: when the Riksbanken
+    // lookup fails at ingest the transaction is written with neither field
+    // (lib/transactions/ingest.ts). Refuse loudly, the same way the
+    // match_batch_allocate RPC refuses with BATCH_FX_RATE_MISSING, instead of
+    // guessing a rate of 1.
+    const txIsForeign = !!transaction.currency && transaction.currency !== 'SEK'
+    if (
+      txIsForeign &&
+      transaction.amount_sek == null &&
+      !(transaction.exchange_rate != null && transaction.exchange_rate > 0)
+    ) {
+      return errorResponseFromCode('MATCH_INVOICE_TX_FX_RATE_MISSING', txLog, {
+        requestId,
+        details: {
+          transactionCurrency: transaction.currency,
+          transactionDate: transaction.date,
+        },
+      })
+    }
+    // The actual SEK that hit the bank. Resolved through the SAME helper
+    // buildInvoicePaymentClearingLines uses for the bank leg (amount_sek first,
+    // then amount * exchange_rate), so the FX conversion below and the posted
+    // verifikat can never disagree on the SEK figure. SEK rows return
+    // Math.abs(amount) unchanged.
+    const txAbsSek =
+      Math.round(
+        resolveSekAmount(
+          Math.abs(transaction.amount),
+          transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
+          transaction.currency,
+          transaction.exchange_rate,
+        ) * 100,
+      ) / 100
+
     let fx: FxConversion = { required: false }
     if (transaction.currency !== invoice.currency) {
       const manualRate =
@@ -184,10 +226,6 @@ export const POST = withRouteContext(
           },
         })
       }
-      const txAbsSek =
-        transaction.currency === 'SEK'
-          ? Math.abs(transaction.amount)
-          : Math.abs(transaction.amount) * (transaction.exchange_rate ?? 1)
       const paidInInvoiceCurrency = Math.round((txAbsSek / rate) * 10000) / 10000
       fx = {
         required: true,
@@ -239,6 +277,11 @@ export const POST = withRouteContext(
         transactionId,
         transactionDate: transaction.date,
         transactionAmount: transaction.amount,
+        // `amount` is in `currency`; the 19xx legs the detector compares it
+        // against are always SEK. Selected above via select('*').
+        transactionCurrency: transaction.currency ?? null,
+        transactionAmountSek: transaction.amount_sek ?? null,
+        transactionExchangeRate: transaction.exchange_rate ?? null,
       })
       if (!force) {
         if (candidate) {
@@ -376,7 +419,6 @@ export const POST = withRouteContext(
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
 
     let journalEntryId: string | null = null
-    let journalEntryError: string | null = null
 
     try {
       if (customLines) {
@@ -463,6 +505,19 @@ export const POST = withRouteContext(
           fx.required ? fx.paidInInvoiceCurrency : undefined,
           paymentAccount,
         )
+        // Re-propagate the invoice's default dimension bag onto every leg,
+        // including the FX result lines, so a project's kursvinst/kursförlust
+        // stays inside the project P&L. createInvoicePaymentJournalEntry does
+        // this for its own callers; the shared line-builder is dimension-
+        // agnostic, so the two routes that use it have to do it themselves or
+        // dimension users silently lose the tagging on payment vouchers.
+        // Copied per line: a shared object would let one line's mutation leak.
+        const defaultDimensions = coerceDimensionsBag(
+          (invoice as { default_dimensions?: unknown }).default_dimensions,
+        )
+        if (defaultDimensions) {
+          for (const line of clearingLines) line.dimensions = { ...defaultDimensions }
+        }
         const journalEntry = await createJournalEntry(supabase, companyId!, user.id, {
           fiscal_period_id: fiscalPeriodId,
           entry_date: transaction.date,
@@ -478,11 +533,40 @@ export const POST = withRouteContext(
       if (err instanceof AccountsNotInChartError) {
         return errorResponse(err, txLog, { requestId })
       }
+      // A foreign-currency invoice with no booking rate is a missing-input
+      // failure, not a transient booking failure: buildInvoicePaymentClearing
+      // Lines refuses rather than valuing the 1510 credit at a fabricated rate.
+      // Fully retryable once invoice.exchange_rate is on file.
+      // Dispatch on `code`, not instanceof: the class lives in a module route
+      // tests routinely vi.mock away, and the literal keeps a mocked-away
+      // export from turning into an `undefined === undefined` catch-all.
+      if ((err as { code?: unknown })?.code === 'MATCH_INVOICE_BOOKING_RATE_MISSING') {
+        return errorResponse(err, txLog, { requestId })
+      }
       txLog.error('failed to create payment journal entry', err as Error)
-      // Other errors are recorded but don't abort the match: the user can
-      // re-book the verifikation manually. All errors map to Swedish via
-      // getErrorMessage; the raw message must never reach the user (issue #337).
-      journalEntryError = getErrorMessage(err, { context: 'invoice' })
+      // ANY failed payment voucher fails the whole match (mirrors
+      // match-supplier-invoice): proceeding used to mark the invoice paid and
+      // link the transaction with NO verifikat, an unrecoverable half-state:
+      // mark-paid rejects 'paid' invoices and this route rejects linked
+      // transactions, so no flow could ever complete the booking afterwards.
+      // Typed bookkeeping errors (period locked, no fiscal period, ...) map
+      // to their registered envelope; everything else returns the invoice-
+      // side payment-failure code with a Swedish reason via getErrorMessage,
+      // so the raw message never reaches the user (issue #337).
+      if (isBookkeepingError(err)) {
+        return errorResponse(err, txLog, { requestId })
+      }
+      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, {
+        requestId,
+        details: { reason: getErrorMessage(err, { context: 'invoice' }) },
+      })
+    }
+
+    if (!journalEntryId) {
+      // createJournalEntry resolved without an id: the same unrecoverable
+      // half-state as a thrown failure, so the match aborts here too
+      // (mirrors the supplier route's !journalEntryId guard).
+      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, { requestId })
     }
 
     // Underlag for the payment verifikation: re-attach the invoice PDF that
@@ -652,13 +736,6 @@ export const POST = withRouteContext(
       txLog.warn('invoice.match_confirmed event emission failed', err as Error)
     }
 
-    if (journalEntryError) {
-      txLog.warn('match recorded but payment journal entry failed', {
-        errorCode: 'MATCH_INVOICE_PARTIAL',
-        message: journalEntryError,
-      })
-    }
-
     return NextResponse.json({
       success: true,
       invoice_status: newStatus,
@@ -666,7 +743,9 @@ export const POST = withRouteContext(
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,
-      journal_entry_error: journalEntryError,
+      // Always null since a failed voucher now aborts the whole match; the
+      // field survives for response-shape compatibility with existing callers.
+      journal_entry_error: null,
       category: 'income_services',
     })
   },

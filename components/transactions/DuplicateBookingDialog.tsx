@@ -5,7 +5,7 @@ import { useTranslations, useLocale } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2 } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
@@ -160,13 +160,62 @@ export default function DuplicateBookingDialog({
                     ? t('dialog_duplicate_voucher_label', { label: candidate.voucher_label })
                     : t('dialog_duplicate_voucher_generic')}
                 </span>
-                <span className="tabular-nums">{formatCurrency(candidate.amount)}</span>
+                {/* candidate.amount is ALWAYS SEK or null, never a foreign
+                    number (booking-duplicate-detection.ts): the explicit 'SEK'
+                    states that contract at the call site. When the sibling is
+                    foreign and carries no stored rate, amount is null and the
+                    honest figure is the sibling's own amount in its own
+                    currency, explicitly labelled. */}
+                <span className="tabular-nums">
+                  {candidate.amount != null
+                    ? formatCurrency(candidate.amount, 'SEK')
+                    : candidate.currency && candidate.amount_in_currency != null
+                      ? formatCurrency(candidate.amount_in_currency, candidate.currency)
+                      : t('dialog_duplicate_amount_unknown')}
+                </span>
               </div>
+              {/* Verified FX sibling: the kr figure above is the sibling's own
+                  booked SEK value; show the foreign original beneath it so the
+                  user can recognise their EUR/USD line at a glance. */}
+              {candidate.amount != null &&
+                candidate.currency &&
+                candidate.amount_in_currency != null && (
+                  <div className="text-right text-xs text-muted-foreground tabular-nums">
+                    {formatCurrency(candidate.amount_in_currency, candidate.currency)}
+                  </div>
+                )}
               <div className="text-xs text-muted-foreground tabular-nums">
                 {formatDate(candidate.entry_date)}
               </div>
               {candidate.description && (
                 <div className="truncate text-xs text-muted-foreground">{candidate.description}</div>
+              )}
+              {/* Rateless foreign sibling: the amounts matched exactly in the
+                  shared currency, but no SEK value exists for it, so say that
+                  instead of printing an authoritative-looking kr figure.
+                  Gated on candidate.currency: the sentence names the currency,
+                  and interpolating an empty string renders broken Swedish
+                  ("samma belopp i , men..."). A null-currency candidate with a
+                  null amount already shows dialog_duplicate_amount_unknown. */}
+              {candidate.amount == null && candidate.currency && (
+                <div className="flex items-start gap-2 pt-1">
+                  <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-warning-foreground leading-snug">
+                    {t('dialog_duplicate_sek_unavailable', { currency: candidate.currency })}
+                  </p>
+                </div>
+              )}
+              {/* Ledger-only candidate found for a bank line that has no SEK
+                  value: the kr figure above is the voucher leg's real amount,
+                  but it could not be compared against the transaction, so the
+                  match rests on date + account + direction alone. */}
+              {candidate.amount != null && !candidate.amount_verified && (
+                <div className="flex items-start gap-2 pt-1">
+                  <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-warning-foreground leading-snug">
+                    {t('dialog_duplicate_amount_unverified')}
+                  </p>
+                </div>
               )}
             </div>
           )}

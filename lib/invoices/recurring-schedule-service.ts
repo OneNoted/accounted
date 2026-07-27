@@ -13,7 +13,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
@@ -196,8 +196,15 @@ export async function executeRecurringSchedule(
   }
 
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
-  const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
-  const allowedRates = new Set(availableRates.map((r) => r.rate))
+  // Gate on the PERMITTED set, not the picker default, exactly like
+  // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
+  // (hotel/restaurang 12%, persontransport and event admission 6%,
+  // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
+  // foreign business customer. A monthly hotel or catering retainer to a German
+  // company is such a schedule. The default is still 0% (vatRules.rate is the
+  // fallback below), so a Swedish rate only lands here when the schedule set it.
+  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+  const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // 2. Compute amounts (mirrors POST /api/invoices).
   const items = (schedule.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
@@ -238,7 +245,15 @@ export async function executeRecurringSchedule(
   let vatAmountSek: number | null = null
   let totalSek: number | null = null
   if (schedule.currency !== 'SEK') {
-    const rateData = await fetchExchangeRate(schedule.currency)
+    // Same call shape as buildInvoiceWriteData: the date anchors the rate on
+    // the invoice date (the taxable event for a schedule-spawned invoice), and
+    // the supabase client routes the lookup through the shared exchange_rates
+    // cache on BOTH legs (read-through before Riksbanken, last-cached-
+    // observation fallback when Riksbanken 429s). Without them a transient
+    // rate limit left every cron-generated foreign invoice with a permanently
+    // NULL exchange_rate. A null rate still only skips the SEK columns: the
+    // cron deliberately does not fail closed here.
+    const rateData = await fetchExchangeRate(schedule.currency, new Date(invoiceDate), supabase)
     if (rateData) {
       exchangeRate = rateData.rate
       exchangeRateDate = rateData.date

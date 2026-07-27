@@ -33,6 +33,9 @@ vi.mock('@/lib/invoices/vat-rules', () => ({
   getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
   calculateVat: (...args: unknown[]) => mockCalculateVat(...args),
   getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+  // The builder gates on the permitted set (taxed-where-performed exceptions);
+  // these route tests only care that the gate reads the stubbed rates.
+  getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
   calculateTotal: vi.fn(),
 }))
 
@@ -400,6 +403,42 @@ describe('POST /api/invoices (create credit note)', () => {
 
   it('returns 400 when invoice is in draft status', async () => {
     const original = makeInvoice({ id: VALID_UUID, status: 'draft' })
+    enqueue({ data: original, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_SENT')
+  })
+
+  it('returns 400 when invoice is cancelled', async () => {
+    const original = makeInvoice({ id: VALID_UUID, status: 'cancelled' })
+    enqueue({ data: original, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_SENT')
+  })
+
+  // Documents a KNOWN GAP, not a rule. ML (2023:200) 17 kap 22-23 SS permits an
+  // aendringsfaktura against a part-paid invoice; the app refuses it because
+  // issueCreditNote() cannot flip a 'partially_paid' original to 'credited' and
+  // would strand a posted reversing verifikat (see the comment on the guard in
+  // route.ts and the DECISIONS.md entry). This test exists so lifting the gap
+  // fails here and forces the coordinated change rather than passing silently.
+  it('refuses a partially paid invoice (known gap: needs issue-credit-note.ts too)', async () => {
+    const original = makeInvoice({ id: VALID_UUID, status: 'partially_paid' })
     enqueue({ data: original, error: null })
 
     const request = createMockRequest('/api/invoices', {

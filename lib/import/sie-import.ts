@@ -37,7 +37,7 @@ import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 import { populateTemplatesFromSieVouchers } from '@/lib/bookkeeping/counterparty-templates'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
-import { parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
+import { monthsBetween, parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
 import { findUntransferredResults } from '@/lib/reports/imbalance-diagnosis'
 import { formatCurrency } from '@/lib/utils'
 
@@ -201,11 +201,20 @@ async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<Supabas
  * on each journal_entries DELETE (old_state JSONB snapshot).
  *
  * The whole cleanup is atomic via the replace_sie_import DB RPC.
+ *
+ * `userId` is the authorising user and is required. Since migration
+ * 20260727120000 the RPC gates on owner/admin membership resolved from
+ * COALESCE(p_user_id, auth.uid()), and it usually runs on the service client
+ * (see rpcClientForBulkDelete) where auth.uid() is NULL: without an explicit
+ * actor the gate can never match and always raises. Making the parameter
+ * required means a caller that has no authenticated user fails to compile
+ * rather than discovering the closed gate at runtime.
  */
 export async function replaceSIEImport(
   supabase: SupabaseClient,
   companyId: string,
-  importId: string
+  importId: string,
+  userId: string
 ): Promise<{ success: boolean; deletedEntries: number; error?: string }> {
   // 1. Fetch and validate the import record
   const { data: importRecord } = await supabase
@@ -238,11 +247,15 @@ export async function replaceSIEImport(
   }
 
   // 3. Atomically delete entries and mark import as replaced via DB RPC.
-  // Runs on the service client: see rpcClientForBulkDelete.
+  // Runs on the service client: see rpcClientForBulkDelete. Pass the
+  // authorising user explicitly: on the service client auth.uid() is NULL,
+  // so the RPC's owner/admin gate resolves against p_user_id instead.
+  const actorId = userId
   const rpcClient = await rpcClientForBulkDelete(supabase)
   const { data: deletedCount, error: rpcError } = await rpcClient.rpc('replace_sie_import', {
     p_company_id: companyId,
     p_import_id: importId,
+    p_user_id: actorId,
   })
 
   if (rpcError) {
@@ -430,6 +443,33 @@ export async function ensureFiscalPeriod(
     periodToReplaceId = existing.id
   }
 
+  const startParts = parseDateParts(startDate)
+  const endParts = parseDateParts(endDate)
+
+  // Max 18 months per BFL 3 kap. Reuses monthsBetween() from
+  // lib/bookkeeping/validate-period-duration.ts, the same arithmetic and the
+  // same threshold validatePeriodDuration() applies on every other
+  // period-creation path (fiscal-periods POST/PATCH, period-service's
+  // createNextPeriod/createPreviousPeriod, onboarding's computeFiscalPeriod),
+  // so an 18-month förlängt räkenskapsår imports exactly as it does there and
+  // a 19-month one does not. 18 is the ceiling for an extended or re-laid
+  // year; ongoing years are 12. BFL sets no minimum, so there is no floor here.
+  //
+  // Refuse rather than warn: no reading of BFL 3 kap. permits a räkenskapsår
+  // longer than 18 months, so this is a malformed or merged #RAR, not
+  // historical data booked under different rules. Continuing would stamp every
+  // imported voucher with an illegal period that no UI path can repair
+  // afterwards (the fiscal-period editor rejects the very same span), leaving
+  // undo_sie_import as the only way out. Checked before the destructive delete
+  // below so a refused import leaves the company untouched.
+  const months = monthsBetween(startDate, endDate)
+  if (months > 18) {
+    throw new Error(
+      `SIE-filens räkenskapsår (${startDate} till ${endDate}) omfattar ${months} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.). ` +
+        `Kontrollera #RAR-raden i filen och exportera om från källsystemet med ett räkenskapsår per fil.`
+    )
+  }
+
   // Pre-validate against the DB-side enforce_period_start_day trigger so the
   // user gets an actionable Swedish error instead of a raw Postgres message.
   // Per BFL 3 kap., only the company's chronologically FIRST fiscal year may
@@ -438,9 +478,6 @@ export async function ensureFiscalPeriod(
   // that starts earlier?" rather than "does any period exist?" so a user can
   // retroactively import an old first fiscal year via SIE even after an
   // onboarding-created period already exists later in time.
-  const startParts = parseDateParts(startDate)
-  const endParts = parseDateParts(endDate)
-
   if (startParts.day !== 1) {
     const { data: earlier } = await supabase
       .from('fiscal_periods')
@@ -1719,36 +1756,89 @@ export async function finalizeImportRecord(
 }
 
 /**
- * Save account mappings to the database for future use
+ * Save account mappings to the database for future use.
+ *
+ * Two things this function got wrong for four months, both of which have to
+ * stay fixed together:
+ *
+ * 1. `user_id` must be in the payload. sie_account_mappings.user_id is NOT NULL
+ *    with no column default and no BEFORE INSERT trigger to fill it in (the
+ *    only trigger on the table is the BEFORE UPDATE updated_at one), and the
+ *    multi-tenant refactor added company_id without ever adding user_id to this
+ *    payload. PostgREST sends an upsert as INSERT ... ON CONFLICT DO UPDATE and
+ *    Postgres checks NOT NULL on the proposed tuple before conflict resolution,
+ *    so omitting it raises 23502 even when the row already exists: neither the
+ *    insert nor the update path can land. company_id is the tenant key; user_id
+ *    records who approved the mapping review, matching what the PUT handler in
+ *    app/api/import/sie/mappings writes for a single mapping.
+ * 2. The upsert result must be inspected. supabase-js resolves with
+ *    `{ data, error }` and does not throw on a Postgres error, so a bare
+ *    `await supabase.from(...).upsert(...)` discards the failure and the caller
+ *    reports success. That is why 834 imports since 2026-03-30 wrote zero
+ *    mapping rows without a single complaint.
+ *
+ * Pass `userId` explicitly. It is only resolved from the session as a fallback
+ * for callers that cannot supply it: API-key/MCP paths run on a cookieless
+ * service client where auth.uid() is NULL and there is no session to read, so
+ * a derived id is never something this function can rely on.
+ *
+ * Throws when the mappings cannot be persisted. The account mapping is the
+ * user's manual review work (SIE carries no mapping and no VAT codes, so the
+ * source-to-BAS decision per account is made by hand): losing it silently means
+ * the next import re-opens the whole review. Callers that have already committed
+ * verifikationer must catch this and surface it as a warning rather than
+ * unwinding an otherwise-good import.
  */
 export async function saveMappings(
   supabase: SupabaseClient,
   companyId: string,
-  mappings: AccountMapping[]
+  mappings: AccountMapping[],
+  userId?: string
 ): Promise<void> {
   // Filter to only mapped accounts
-  const mappingsToSave = mappings
-    .filter((m) => m.targetAccount)
-    .map((m) => ({
-      company_id: companyId,
-      source_account: m.sourceAccount,
-      source_name: m.sourceName,
-      target_account: m.targetAccount,
-      confidence: m.confidence,
-      match_type: m.matchType,
-    }))
+  const mapped = mappings.filter((m) => m.targetAccount)
 
-  if (mappingsToSave.length === 0) return
+  if (mapped.length === 0) return
+
+  const resolvedUserId = userId ?? (await supabase.auth.getUser()).data.user?.id
+  if (!resolvedUserId) {
+    throw new Error(
+      'Kunde inte spara kontomappningar: user_id saknas. ' +
+      'sie_account_mappings.user_id är NOT NULL utan default, och anropet ' +
+      'kördes utan session (API-nyckel/MCP använder en cookie-lös ' +
+      'service-klient). Skicka userId till saveMappings().'
+    )
+  }
+
+  const mappingsToSave = mapped.map((m) => ({
+    user_id: resolvedUserId,
+    company_id: companyId,
+    source_account: m.sourceAccount,
+    source_name: m.sourceName,
+    target_account: m.targetAccount,
+    confidence: m.confidence,
+    match_type: m.matchType,
+  }))
 
   // Batch upsert in chunks of 100
   const BATCH_SIZE = 100
+  let saved = 0
   for (let i = 0; i < mappingsToSave.length; i += BATCH_SIZE) {
     const batch = mappingsToSave.slice(i, i + BATCH_SIZE)
-    await supabase
+    const { error } = await supabase
       .from('sie_account_mappings')
       .upsert(batch, {
         onConflict: 'company_id,source_account',
       })
+
+    if (error) {
+      throw new Error(
+        `Kunde inte spara kontomappningar: ${saved} av ` +
+        `${mappingsToSave.length} sparades innan felet ` +
+        `(${error.code ?? 'okänd kod'}: ${error.message}).`
+      )
+    }
+    saved += batch.length
   }
 }
 
@@ -1894,8 +1984,11 @@ export async function executeSIEImport(
           supabase, companyId, fyStart, fyEnd
         )
         if (priorPeriodImport) {
+          // Pass the authorising user: this path often runs on an API-key /
+          // MCP client where auth.uid() is NULL, and the replace_sie_import
+          // owner/admin gate would otherwise fail closed.
           const replaceResult = await replaceSIEImport(
-            supabase, companyId, priorPeriodImport.id
+            supabase, companyId, priorPeriodImport.id, userId
           )
           if (!replaceResult.success) {
             result.errors.push(
@@ -2347,12 +2440,24 @@ export async function executeSIEImport(
       }
     }
 
-    // Save account mappings for future use (non-fatal, import data is already committed)
+    // Save account mappings for future use. Non-fatal by design: the
+    // verifikationer are already committed and unwinding them over a lookup
+    // table would be worse than losing the table. But it is not silent either:
+    // the mapping is the user's manual source-to-BAS review, so a failure has
+    // to reach result.warnings (rendered as "Varningar" in ImportResultStep)
+    // instead of being swallowed the way the missing { error } destructure
+    // swallowed it for four months. userId is passed explicitly: this path also
+    // runs on API-key/MCP service clients with no session to derive it from.
     try {
-      await saveMappings(supabase, companyId, mappings)
+      await saveMappings(supabase, companyId, mappings, userId)
     } catch (mappingError) {
       console.error('[sie-import] Failed to save mappings (non-fatal):', mappingError)
-      result.warnings.push('Kunde inte spara kontomappningar: påverkar inte importerade data')
+      result.warnings.push(
+        `Kontomappningarna kunde inte sparas: de importerade verifikationerna ` +
+        `påverkas inte, men mappningen mellan källkontona och BAS finns inte ` +
+        `kvar, så nästa import av samma källsystem måste mappas om manuellt. ` +
+        `(${mappingError instanceof Error ? mappingError.message : 'okänt fel'})`
+      )
     }
 
     // Pragmatic IB resync: if a chronologically-later fiscal period already

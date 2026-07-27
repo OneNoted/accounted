@@ -76,7 +76,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    if (error) {
+      // A CHECK violation is bad input, not a server fault. The create schema
+      // now mirrors every CHECK on the table (benefit_type, monthly_value >= 0,
+      // valid_to >= valid_from), so this is only the backstop for non-schema
+      // callers; answering 500 told the user to retry an insert that can never
+      // succeed.
+      const status = error.code === '23514' ? 400 : 500
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status })
+    }
 
     return NextResponse.json({ data }, { status: 201 })
   },

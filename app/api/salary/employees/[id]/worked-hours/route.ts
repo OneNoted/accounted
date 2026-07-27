@@ -43,7 +43,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data, error } = await supabase
       .from('salary_worked_days')
-      .select('id, work_date, hours, notes, salary_run_employee_id, created_at, updated_at')
+      .select(
+        'id, work_date, hours, notes, salary_run_employee_id, start_time, end_time, created_at, updated_at',
+      )
       .eq('company_id', companyId)
       .eq('employee_id', employeeId)
       .gte('work_date', query.data.from)
@@ -80,6 +82,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Upsert via DELETE+INSERT on the natural key (employee, date). Worked days
     // have one row per date: re-marking overwrites. Mirrors the absence route's
     // pattern so behaviour stays predictable across the two calendars.
+    //
+    // Replace semantics are deliberate here: this endpoint addresses exactly one
+    // day and the caller can describe every field of it, so an omitted field
+    // means "not set". The batch endpoint cannot make that claim (one shared
+    // body for N dates), which is why it carries omitted values forward instead.
     const { error: deleteError } = await supabase
       .from('salary_worked_days')
       .delete()
@@ -100,6 +107,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         hours: body.hours,
         notes: body.notes ?? null,
         salary_run_employee_id: body.salary_run_employee_id ?? null,
+        // The shift window. Persisting it is what lets the shift-premium engine
+        // intersect the real hours with the OB rule windows; a row without times
+        // falls back to an assumed 08:00-17:00 day, so a night shift would be
+        // paid as office hours and OB-tillägg would never trigger. The schema
+        // guarantees both fields are present or both absent.
+        start_time: body.start_time ?? null,
+        end_time: body.end_time ?? null,
       })
       .select()
       .single()

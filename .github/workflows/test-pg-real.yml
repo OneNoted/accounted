@@ -52,10 +52,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Deliberately no `cache: npm` here. This workflow runs on pull_request
+      # only, so the cache is never written on main, and GitHub scopes caches
+      # by ref: every PR uploaded its own 284 MB copy under an identical key
+      # that no other PR could ever restore. Fourteen dead copies (4 GB, 40% of
+      # the repo quota) accumulated in a single day. If this is ever worth
+      # caching again, it has to be actions/cache/save on main plus
+      # actions/cache/restore here, which is the only shape that gets hits.
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
 
       - run: npm ci
 

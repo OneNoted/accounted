@@ -181,6 +181,76 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     expect(body.data.summary.succeeded).toBe(0)
   })
 
+  // A validated EU business: the picker default is 0% (huvudregeln, ML 6 kap.
+  // 34 §), but the ML 6 kap. supplies taxed where they are performed carry
+  // Swedish VAT to that same customer, so the gate reads getPermittedVatRates.
+  const EU_CUSTOMER = {
+    id: CUSTOMER_ID,
+    customer_type: 'eu_business',
+    vat_number_validated: true,
+  }
+
+  it('accepts a 12% line to a validated EU business (taxed where performed)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: EU_CUSTOMER, error: null },
+        invoices: { data: { id: 'inv-1', invoice_number: null, status: 'draft', total: 1120 }, error: null },
+        invoice_items: { data: null, error: null },
+      }),
+    )
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, {
+        invoices: [
+          {
+            customer_id: CUSTOMER_ID,
+            invoice_date: '2026-05-12',
+            due_date: '2026-06-11',
+            currency: 'SEK',
+            items: [{ ...SAMPLE_ITEM('Hotellnatt Stockholm'), vat_rate: 12 }],
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(true)
+    expect(body.data.summary.succeeded).toBe(1)
+  })
+
+  it('still rejects a non-Swedish rate for a validated EU business', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: EU_CUSTOMER, error: null },
+      }),
+    )
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, {
+        invoices: [
+          {
+            customer_id: CUSTOMER_ID,
+            invoice_date: '2026-05-12',
+            due_date: '2026-06-11',
+            currency: 'SEK',
+            items: [{ ...SAMPLE_ITEM('A'), vat_rate: 10 }],
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].error.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
+    expect(body.data.results[0].error.details.allowed_rates).toEqual([0, 25, 12, 6])
+  })
+
   it('returns 400 VALIDATION_ERROR when the bulk envelope is malformed', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

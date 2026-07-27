@@ -24,12 +24,20 @@ interface InvoiceData {
   previousResponse: 'marked_paid' | 'disputed' | null
   // Dröjsmålsränta + lagstadgad påminnelseavgift (Räntelagen §6, Lag 1981:739).
   // Default to 0 for older reminders sent before the surcharge feature shipped.
+  //
+  // interestAmount is a share of the invoice total, so it is in `currency`.
+  // The påminnelseavgift is a fixed krona amount fixed by statute and booked
+  // 1510/3990 in SEK, so it is quoted in `reminderFeeCurrency` (always 'SEK')
+  // and is only inside `totalDue` when the invoice itself is in SEK. Otherwise
+  // it arrives as `feeDueSeparately` and is shown as its own amount.
   interestAmount: number
   interestRate: number
   interestFromDate: string | null
   interestDays: number | null
   reminderFee: number
+  reminderFeeCurrency?: string
   totalDue: number
+  feeDueSeparately?: number
 }
 
 export default function InvoiceActionPage({ params }: { params: Promise<{ token: string }> }) {
@@ -151,6 +159,12 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
   const now = new Date()
   const daysOverdue = Math.floor((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
 
+  // The statutory påminnelseavgift is a krona amount (Lag 1981:739). On a
+  // foreign-currency invoice it is never converted or relabelled: it is shown
+  // as its own SEK amount next to the invoice-currency total.
+  const feeCurrency = invoice.reminderFeeCurrency || 'SEK'
+  const feeDueSeparately = invoice.feeDueSeparately ?? 0
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white py-12 px-4">
       <div className="max-w-lg mx-auto">
@@ -212,7 +226,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
                   {invoice.reminderFee > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Påminnelseavgift</span>
-                      <span>{formatCurrency(invoice.reminderFee, invoice.currency)}</span>
+                      <span>{formatCurrency(invoice.reminderFee, feeCurrency)}</span>
                     </div>
                   )}
                   <div className="border-t border-destructive/20 pt-2 mt-2" />
@@ -221,10 +235,24 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
 
               <p className="text-2xl font-bold text-destructive tabular-nums">
                 {formatCurrency(invoice.totalDue || invoice.total, invoice.currency)}
+                {feeDueSeparately > 0 && (
+                  <>
+                    {' + '}
+                    {formatCurrency(feeDueSeparately, feeCurrency)}
+                  </>
+                )}
               </p>
               {(invoice.interestAmount > 0 || invoice.reminderFee > 0) && (
                 <p className="text-xs text-muted-foreground">
-                  Att betala (inkl. dröjsmålsränta och påminnelseavgift)
+                  {feeDueSeparately > 0
+                    ? 'Att betala (inkl. dröjsmålsränta) plus påminnelseavgift i SEK'
+                    : 'Att betala (inkl. dröjsmålsränta och påminnelseavgift)'}
+                </p>
+              )}
+              {feeDueSeparately > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Påminnelseavgiften är lagstadgad (Lag 1981:739) och anges i svenska kronor.
+                  Den räknas inte om till fakturans valuta utan betalas som ett separat belopp i SEK.
                 </p>
               )}
             </div>

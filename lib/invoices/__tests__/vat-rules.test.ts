@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   getAvailableVatRates,
+  getPermittedVatRates,
   getVatTreatmentForRate,
   getVatRules,
   calculateVat,
@@ -75,6 +76,61 @@ describe('getAvailableVatRates', () => {
     const rates = getAvailableVatRates('swedish_business')
     expect(rates).toHaveLength(4)
     expect(rates.map((r) => r.rate)).toEqual([25, 12, 6, 0])
+  })
+})
+
+// ============================================================
+// getPermittedVatRates
+//
+// The DEFAULT for a foreign business customer is 0% (huvudregeln,
+// ML 6 kap. 34 §: B2B services taxed where the buyer is established).
+// The PERMITTED set is wider: the ML 6 kap. exceptions taxed where the supply
+// is performed carry Swedish VAT even to a foreign business customer.
+// ============================================================
+
+describe('getPermittedVatRates', () => {
+  it('matches the offered set for domestic customer types', () => {
+    for (const type of ['individual', 'swedish_business'] as const) {
+      expect(getPermittedVatRates(type)).toEqual(getAvailableVatRates(type))
+    }
+    expect(getPermittedVatRates('eu_business', false)).toEqual(
+      getAvailableVatRates('eu_business', false),
+    )
+  })
+
+  it('permits Swedish rates for a validated EU business (taxed where performed)', () => {
+    // Restaurang/catering and hotel are taxed where performed (12%), admission
+    // to cultural/sports events where the event is held (6%), fastighets-
+    // tjänster and korttidsuthyrning of vehicles at 25%. All lawful on an
+    // invoice to a German company, so all three must be permitted.
+    const rates = getPermittedVatRates('eu_business', true)
+    expect(rates.map((r) => r.rate)).toEqual([0, 25, 12, 6])
+  })
+
+  it('permits Swedish rates for a non-EU business (taxed where performed)', () => {
+    const rates = getPermittedVatRates('non_eu_business')
+    expect(rates.map((r) => r.rate)).toEqual([0, 25, 12, 6])
+  })
+
+  it('keeps the 0% reverse-charge / export option FIRST so the default stays 0%', () => {
+    // Consumers that treat element 0 as the default must keep defaulting to
+    // 0%: widening the permitted set must never start booking 25% by itself.
+    expect(getPermittedVatRates('eu_business', true)[0]).toEqual({
+      rate: 0,
+      label: '0% (omvänd skattskyldighet)',
+      treatment: 'reverse_charge',
+    })
+    expect(getPermittedVatRates('non_eu_business')[0]).toEqual({
+      rate: 0,
+      label: '0% (export)',
+      treatment: 'export',
+    })
+  })
+
+  it('does NOT widen the picker default: getAvailableVatRates stays locked to 0%', () => {
+    // The picker default and the validation gate are deliberately separate.
+    expect(getAvailableVatRates('eu_business', true)).toHaveLength(1)
+    expect(getAvailableVatRates('non_eu_business')).toHaveLength(1)
   })
 })
 

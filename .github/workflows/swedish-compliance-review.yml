@@ -57,10 +57,23 @@ jobs:
           fi
           echo "number=$NUM" >> "$GITHUB_OUTPUT"
       - name: Install Anthropic Bedrock SDK
-        # Pinned exact version + --ignore-scripts: this is the privileged job
-        # (write token in env), so no floating @latest and no dependency
-        # lifecycle scripts may execute here.
-        run: npm install --no-save --no-package-lock --ignore-scripts @anthropic-ai/bedrock-sdk@0.31.0
+        # Installed ONE DIRECTORY ABOVE the checkout on purpose. Running this
+        # inside the repo makes npm re-resolve the whole dependency tree from
+        # package.json (--no-package-lock throws away the pinned resolutions),
+        # and that re-resolution dies on an unrelated floating peer conflict
+        # (@hookform/resolvers -> valibot), which silently killed this review on
+        # every PR. Out of tree npm resolves this one package and nothing else,
+        # so an unrelated peer conflict can never take the compliance gate down
+        # again. Node still finds it: ESM bare specifiers walk up the parent
+        # directories' node_modules. NODE_PATH is not an alternative here, the
+        # ESM loader ignores it (CommonJS only).
+        # Version tracks the exact package.json pin: 0.32.0 broke Bedrock
+        # streaming in prod (DECISIONS.md 2026-07-08) and check:guards enforces
+        # 0.29.1 repo-wide, so this job must not be the one place running an
+        # unvetted build. Pinned exact + --ignore-scripts because this is the
+        # privileged job (write token in env): no floating @latest, and no
+        # dependency lifecycle scripts may execute here.
+        run: npm install --prefix "$GITHUB_WORKSPACE/.." --no-save --no-package-lock --ignore-scripts @anthropic-ai/bedrock-sdk@0.29.1
       - name: Run compliance review
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

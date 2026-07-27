@@ -8,6 +8,7 @@ import { generateGeneralLedger } from './general-ledger'
 import { generateJournalRegister } from './journal-register'
 import { calculateVatDeclaration } from './vat-declaration'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
+import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
 import {
@@ -492,9 +493,17 @@ async function writeDocuments(
         }
 
         try {
-          const { data: fileData, error } = await supabase.storage
-            .from('documents')
-            .download(doc.storage_path)
+          // Dual-layout download: the document batch is snapshotted up
+          // front, and a concurrent Phase B backfill can re-home an object
+          // (legacy uploader-scoped -> company-scoped) and later remove the
+          // source mid-run, leaving the stored pointer stale. The helper
+          // tries the stored pointer first, then the alternate layout, so a
+          // healthy document never lands in the manifest as an error.
+          const { blob: fileData, error } = await downloadDocumentObject(
+            supabase,
+            doc.storage_path,
+            companyId
+          )
 
           if (error || !fileData) {
             manifest.push({
@@ -770,6 +779,26 @@ export interface MasterDataTableSpec {
    * table through `fk IN (...)` chunks.
    */
   via?: { parent: string; fk: string }
+  /**
+   * Parent columns copied onto every child row as `<prefix><column>`.
+   *
+   * A child line row carries money but no unit: `invoice_items.line_total` is
+   * denominated in the parent invoice's currency, and the row's own `unit`
+   * column means "st"/"timmar", not the money unit. Parent dumps are fine
+   * (`select('*')` carries `currency`, `exchange_rate` and the `*_sek` twins
+   * side by side), so this is the only place where a reader of a single file
+   * cannot tell SEK from EUR. Denormalising the parent's currency makes each
+   * line self-describing instead of requiring a join back to the parent file.
+   *
+   * Copy the conversion basis (currency + exchange_rate), never the parent's
+   * totals: a line's SEK value is not the invoice's `total_sek`. Leave unset
+   * when the parent has no currency column (nothing to copy, and inventing
+   * one would put a fabricated unit into a statutory archive).
+   *
+   * Additive only. Archives already handed to a revisor must keep every key
+   * they shipped with, so append new keys and never rename or drop one.
+   */
+  denormalize?: { prefix: string; columns: string[] }
 }
 
 /**
@@ -788,7 +817,12 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'articles', file: 'articles.json', orderBy: 'created_at' },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
-  { name: 'invoice_items', file: 'invoice_items.json', via: { parent: 'invoices', fk: 'invoice_id' } },
+  {
+    name: 'invoice_items',
+    file: 'invoice_items.json',
+    via: { parent: 'invoices', fk: 'invoice_id' },
+    denormalize: { prefix: 'invoice_', columns: ['currency', 'exchange_rate'] },
+  },
   { name: 'invoice_payments', file: 'invoice_payments.json', orderBy: 'payment_date' },
   { name: 'invoice_reminders', file: 'invoice_reminders.json' },
   // Delivery metadata proves which recipient received the archived PDF and
@@ -797,11 +831,23 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },
-  { name: 'supplier_invoice_items', file: 'supplier_invoice_items.json', via: { parent: 'supplier_invoices', fk: 'supplier_invoice_id' } },
+  {
+    name: 'supplier_invoice_items',
+    file: 'supplier_invoice_items.json',
+    via: { parent: 'supplier_invoices', fk: 'supplier_invoice_id' },
+    denormalize: { prefix: 'supplier_invoice_', columns: ['currency', 'exchange_rate'] },
+  },
   { name: 'supplier_invoice_payments', file: 'supplier_invoice_payments.json' },
   // Receipts
   { name: 'receipts', file: 'receipts.json', orderBy: 'receipt_date' },
-  { name: 'receipt_line_items', file: 'receipt_line_items.json', via: { parent: 'receipts', fk: 'receipt_id' } },
+  // `receipts` has no exchange_rate column, so only the currency is copied:
+  // enough to read the unit, which is what the line was missing.
+  {
+    name: 'receipt_line_items',
+    file: 'receipt_line_items.json',
+    via: { parent: 'receipts', fk: 'receipt_id' },
+    denormalize: { prefix: 'receipt_', columns: ['currency'] },
+  },
   // Bank and categorization
   // NOTE: the date column on transactions is `date` (a previous spec said
   // booking_date, which does not exist: every backup got an error stub).
@@ -851,6 +897,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'journal_entry_rattelse_log', file: 'journal_entry_rattelse_log.json', orderBy: 'created_at' },
   { name: 'journal_entry_no_doc_required', file: 'journal_entry_no_doc_required.json', pageKey: 'journal_entry_id' },
   { name: 'rot_rut_payout_requests', file: 'rot_rut_payout_requests.json', orderBy: 'created_at' },
+  // No `denormalize`: rot_rut_payout_requests has no currency column either.
+  // A HUS-avdrag claim to Skatteverket is SEK by statute, so there is no unit
+  // to copy down and asserting one here would fabricate it.
   { name: 'rot_rut_payout_request_items', file: 'rot_rut_payout_request_items.json', via: { parent: 'rot_rut_payout_requests', fk: 'request_id' } },
   { name: 'fiscal_period_tax_adjustments', file: 'fiscal_period_tax_adjustments.json', orderBy: 'created_at' },
   { name: 'tax_assessment_notices', file: 'tax_assessment_notices.json', orderBy: 'created_at' },
@@ -940,19 +989,35 @@ async function fetchChildTableRows(
   spec: MasterDataTableSpec
 ): Promise<Record<string, unknown>[]> {
   const via = spec.via!
-  const parents = await fetchAllRows<{ id: string }>(({ from, to }) =>
-    supabase
-      .from(via.parent)
-      .select('id')
-      .eq('company_id', companyId)
-      .order('id', { ascending: true })
-      .range(from, to)
+  const denormalize = spec.denormalize
+  // Narrow select (id + only the denormalized columns): the parent table can
+  // be large and `*` would pull every invoice column just to read a currency.
+  const parentSelect = ['id', ...(denormalize?.columns ?? [])].join(', ')
+  const parents = await fetchAllRows<Record<string, unknown>>(
+    ({ from, to }) =>
+      supabase
+        .from(via.parent)
+        .select(parentSelect)
+        .eq('company_id', companyId)
+        .order('id', { ascending: true })
+        // The select list is built at runtime, so PostgREST's literal-string
+        // type inference cannot resolve it and falls back to an error type.
+        // The runtime shape is id + the declared columns, by construction.
+        .range(from, to) as unknown as PromiseLike<{
+        data: Record<string, unknown>[] | null
+        error: { message: string } | null
+      }>
   )
+
+  const parentById = new Map<string, Record<string, unknown>>()
+  if (denormalize) {
+    for (const parent of parents) parentById.set(String(parent.id), parent)
+  }
 
   const pageKey = spec.pageKey ?? 'id'
   const rows: Record<string, unknown>[] = []
   for (let i = 0; i < parents.length; i += CHILD_FK_CHUNK) {
-    const chunk = parents.slice(i, i + CHILD_FK_CHUNK).map((p) => p.id)
+    const chunk = parents.slice(i, i + CHILD_FK_CHUNK).map((p) => String(p.id))
     const chunkRows = await fetchAllRows<Record<string, unknown>>(
       ({ from, to }) => {
         let q = supabase.from(spec.name).select('*').in(via.fk, chunk)
@@ -961,6 +1026,20 @@ async function fetchChildTableRows(
       },
       { dedupeBy: (r) => String(r[pageKey]) }
     )
+    if (denormalize) {
+      for (const row of chunkRows) {
+        const parent = parentById.get(String(row[via.fk]))
+        for (const column of denormalize.columns) {
+          const key = `${denormalize.prefix}${column}`
+          // Never clobber a real child column that happens to share the name:
+          // the table's own data always wins over the copied parent value.
+          if (key in row) continue
+          // `?? null` is load-bearing: JSON.stringify drops undefined keys, so
+          // a missing parent would silently produce a row with no unit again.
+          row[key] = parent?.[column] ?? null
+        }
+      }
+    }
     rows.push(...chunkRows)
   }
   return rows

@@ -12,7 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NotificationType } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { sendNotificationToUser } from './notification-sender'
+import { sendNotificationToUser, readNotificationSettings } from './notification-sender'
 import {
   createTaxDeadlinePayload,
   createInvoiceOverduePayload,
@@ -63,14 +63,14 @@ export async function sendTaxDeadlineNotifications(
   }
 
   for (const [userId, userDls] of userDeadlines) {
-    // Check user-level tax_deadlines_enabled
-    const { data: settings } = await supabase
-      .from('notification_settings')
-      .select('tax_deadlines_enabled')
-      .eq('company_id', userId)
-      .single()
-
-    if (settings && !settings.tax_deadlines_enabled) {
+    // Check user-level tax_deadlines_enabled. Unreadable settings mean no
+    // send; a missing row means the defaults (enabled) apply.
+    const settingsRead = await readNotificationSettings(supabase, userId)
+    if (!settingsRead.readable) {
+      skipped += userDls.length
+      continue
+    }
+    if (settingsRead.settings && !settingsRead.settings.tax_deadlines_enabled) {
       skipped += userDls.length
       continue
     }
@@ -152,14 +152,14 @@ export async function sendInvoiceNotifications(
   }
 
   for (const [userId, userInvs] of userInvoices) {
-    // Check user-level invoice_reminders_enabled
-    const { data: settings } = await supabase
-      .from('notification_settings')
-      .select('invoice_reminders_enabled')
-      .eq('company_id', userId)
-      .single()
-
-    if (settings && !settings.invoice_reminders_enabled) {
+    // Check user-level invoice_reminders_enabled. Unreadable settings mean no
+    // send; a missing row means the defaults (enabled) apply.
+    const settingsRead = await readNotificationSettings(supabase, userId)
+    if (!settingsRead.readable) {
+      skipped += userInvs.length
+      continue
+    }
+    if (settingsRead.settings && !settingsRead.settings.invoice_reminders_enabled) {
       skipped += userInvs.length
       continue
     }
@@ -357,14 +357,14 @@ export async function sendMissingUnderlagNotifications(
   }
 
   for (const [userId, count] of userMissingCounts) {
-    // Check user setting
-    const { data: settings } = await supabase
-      .from('notification_settings')
-      .select('missing_underlag_enabled')
-      .eq('company_id', userId)
-      .single()
-
-    if (settings && settings.missing_underlag_enabled === false) {
+    // Check user setting. Unreadable settings mean no send; a missing row
+    // means the defaults (enabled) apply.
+    const settingsRead = await readNotificationSettings(supabase, userId)
+    if (!settingsRead.readable) {
+      skipped++
+      continue
+    }
+    if (settingsRead.settings && settingsRead.settings.missing_underlag_enabled === false) {
       skipped++
       continue
     }

@@ -1,7 +1,140 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
+import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import type { FiscalPeriod, PeriodStatus } from '@/types'
+
+const log = createLogger('period-service')
+
+/**
+ * The two ways a bank transaction can still owe the period a verifikation.
+ *
+ * Triage is the act of answering "is this an affärshändelse for the company?".
+ * The three answers, and what each means for a period lock:
+ *
+ *   is_business IS NULL, is_ignored = false -> NOT TRIAGED. Nobody has looked
+ *       at it. Counted as `untriaged`; blocks.
+ *   is_business = true                      -> TRIAGED AS A BUSINESS EVENT. It
+ *       owes a verifikation. Blocks unless it already has one (see below);
+ *       counted as `businessUnbooked` when it does not.
+ *   is_business = false                     -> TRIAGED AND EXCLUDED (privat
+ *       uttag / not the company's affär). Never blocks: there is nothing to
+ *       bokföra, and holding a lock hostage to a private coffee is over-
+ *       blocking, not compliance.
+ *   is_ignored = true                       -> TRIAGED AND EXCLUDED, the user's
+ *       explicit "hide this, never going to book it" (migration
+ *       20260529190000). Never blocks. The column is NOT NULL DEFAULT false,
+ *       so `.eq('is_ignored', false)` cannot silently drop rows.
+ *
+ * "Already has a verifikation" is deliberately NOT `journal_entry_id IS NOT
+ * NULL`. That column only covers the 1:1 case; bulk-booked (N tx -> 1 JE, via
+ * transaction_voucher_links) and multi-allocated (invoice_payments /
+ * supplier_invoice_payments) transactions stay NULL while being anchored to a
+ * real verifikat. See lib/transactions/is-booked.ts and its Postgres mirror
+ * public.is_transaction_booked(uuid); this helper reproduces all three
+ * locations so the guard does not block on already-booked rows.
+ */
+export interface UnbookedInPeriod {
+  /** Never triaged: is_business IS NULL AND is_ignored = false. */
+  untriaged: number
+  /** Triaged as a business event but anchored to no verifikat at all. */
+  businessUnbooked: number
+}
+
+/** PostgREST rejects very long URLs, so `.in()` lists are chunked. */
+const ANCHOR_LOOKUP_CHUNK = 200
+
+/**
+ * Count the bank transactions in [periodStart, periodEnd] that a period lock
+ * would strand. Throws on any query failure so the caller can fail closed:
+ * never return 0 for a check that did not actually run.
+ */
+export async function countUnbookedInPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<UnbookedInPeriod> {
+  // Leg 1: never triaged. This is the canonical "att bokföra" predicate from
+  // lib/worklist/categories.ts, so the number here reconciles with the
+  // "N st att bokföra" badge instead of being a second, unexplainable count.
+  // Served by the partial index idx_transactions_company_unbooked.
+  const { count: untriaged, error: untriagedError } = await supabase
+    .from('transactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .is('is_business', null)
+    .eq('is_ignored', false)
+    .gte('date', periodStart)
+    .lte('date', periodEnd)
+  if (untriagedError) {
+    throw new Error(`untriaged transaction count failed: ${untriagedError.message}`)
+  }
+
+  // Leg 2: triaged as a business event, but no verifikat anywhere. The user has
+  // already confirmed this is the company's affärshändelse, so a lock strands
+  // it just as hard as an untriaged one, only with less excuse. Fetch the ids
+  // and subtract the ones anchored via the non-denormalized locations.
+  //
+  // Paginated via fetchAllRows with a stable id order: PostgREST silently caps
+  // a bare select at 1000 rows, and this candidate set is NOT bounded in
+  // practice, because bulk-booked transactions keep journal_entry_id NULL
+  // (anchored only via transaction_voucher_links). An unpaginated read would
+  // drop every candidate past row 1000, under-counting businessUnbooked and
+  // letting a period lock while genuinely unbooked affärshändelser are
+  // stranded in it (BFL 5 kap 2 §).
+  let candidates: Array<{ id?: string }>
+  try {
+    candidates = await fetchAllRows<{ id?: string }>(({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('is_business', true)
+        .eq('is_ignored', false)
+        .is('journal_entry_id', null)
+        .gte('date', periodStart)
+        .lte('date', periodEnd)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+  } catch (err) {
+    throw new Error(
+      `business transaction lookup failed: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+
+  const candidateIds = candidates
+    .map((row) => row.id)
+    .filter((id): id is string => typeof id === 'string')
+  if (candidateIds.length === 0) {
+    return { untriaged: untriaged ?? 0, businessUnbooked: 0 }
+  }
+
+  const anchored = new Set<string>()
+  for (const table of ['transaction_voucher_links', 'invoice_payments', 'supplier_invoice_payments'] as const) {
+    for (let i = 0; i < candidateIds.length; i += ANCHOR_LOOKUP_CHUNK) {
+      const chunk = candidateIds.slice(i, i + ANCHOR_LOOKUP_CHUNK)
+      const { data, error } = await supabase
+        .from(table)
+        .select('transaction_id')
+        .in('transaction_id', chunk)
+      if (error) {
+        throw new Error(`${table} anchor lookup failed: ${error.message}`)
+      }
+      for (const row of data ?? []) {
+        const id = (row as { transaction_id?: string | null }).transaction_id
+        if (id) anchored.add(id)
+      }
+    }
+  }
+
+  return {
+    untriaged: untriaged ?? 0,
+    businessUnbooked: candidateIds.filter((id) => !anchored.has(id)).length,
+  }
+}
 
 /**
  * Lock a fiscal period: prevents new journal entries from being posted.
@@ -34,19 +167,68 @@ export async function lockPeriod(
     throw new Error('Period is already locked')
   }
 
-  // Check for uncategorized business transactions in this period
-  const { count: unbookedCount } = await supabase
-    .from('transactions')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .is('journal_entry_id', null)
-    .eq('is_business', true)
-    .gte('date', period.period_start)
-    .lte('date', period.period_end)
-
-  if (unbookedCount && unbookedCount > 0) {
+  // Refuse to lock while the period still holds bank transactions that would be
+  // stranded. BFL 5 kap 2 § requires every affärshändelse to be bokförd in the
+  // period it belongs to; once locked_at is set the enforce_period_lock trigger
+  // makes these rows unbookable in place, leaving affärshändelser that can only
+  // be entered by unlocking again or via a rättelse.
+  //
+  // Hard block, not an advisory warning with a bypass. There is no legitimate
+  // "lock anyway" case: locking is a voluntary internal control with no legal
+  // deadline, while the affärshändelser it would strand do have one (BFL 5 kap
+  // 2 §: kontant senast nästa arbetsdag, övrigt "så snart det kan ske").
+  // Every escape hatch the user could want is already an exit from the
+  // predicate and is named in the message: book it, mark it privat, or mark it
+  // ignored. Locking first and unlocking later is strictly worse, because the
+  // unlock lands in the immutable audit_log as a control override.
+  let unbooked: UnbookedInPeriod
+  try {
+    unbooked = await countUnbookedInPeriod(
+      supabase,
+      companyId,
+      period.period_start,
+      period.period_end,
+    )
+  } catch (err) {
+    // Fail closed. A guard that cannot run must not wave the lock through:
+    // that is exactly how the previous dead predicate went unnoticed.
+    log.error('unbooked-transaction guard failed, refusing to lock', {
+      companyId,
+      fiscalPeriodId,
+      reason: err instanceof Error ? err.message : String(err),
+    })
     throw new Error(
-      `Kan inte låsa period: ${unbookedCount} affärstransaktion(er) saknar bokföring. Bokför alla transaktioner innan perioden låses.`
+      'Kunde inte kontrollera obokförda banktransaktioner i perioden. Perioden lämnas olåst. Försök igen.'
+    )
+  }
+
+  const blockingCount = unbooked.untriaged + unbooked.businessUnbooked
+  if (blockingCount > 0) {
+    // Message wording is load-bearing for two separate matchers; keep both
+    // phrases when editing:
+    //   - "saknar bokföring" -> both lock routes map this to the
+    //     PERIOD_HAS_UNBOOKED_TRANSACTIONS envelope (400) instead of a 500
+    //     (app/api/bookkeeping/fiscal-periods/[id]/lock/route.ts and
+    //      app/api/v1/companies/[companyId]/fiscal-periods/[id]/lock/route.ts)
+    //   - /Kan inte låsa period:.*affärstransaktion/ -> inferCode() in
+    //     lib/errors/get-structured-error.ts derives the same code for the
+    //     MCP/agent surfaces, which have no HTTP envelope to read. The word
+    //     "affärstransaktion" therefore has to appear unconditionally, not
+    //     only in the breakdown clause that the untriaged-only case omits.
+    // The infra message above deliberately matches neither: an unreachable DB
+    // must not send an agent off remediating transactions.
+    const breakdown = [
+      unbooked.untriaged > 0 ? `${unbooked.untriaged} ej hanterade` : null,
+      unbooked.businessUnbooked > 0
+        ? `${unbooked.businessUnbooked} markerade som affärshändelse men utan verifikat`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(', ')
+    throw new Error(
+      `Kan inte låsa period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
+        `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden låses. ` +
+        `Gå till Transaktioner, bokför dem eller markera dem som privata eller ignorerade, och lås perioden därefter.`
     )
   }
 
@@ -435,9 +617,54 @@ export interface PeriodStatusForDate {
   /**
    * For `locked` status: either the period's `locked_at` timestamp (ISO) or the
    * company-wide `bookkeeping_locked_through` date (ISO), whichever applies.
-   * `null` for open/closed.
+   * `null` for open/closed, and `null` when `lookup_failed` is true.
    */
   lock_date: string | null
+  /**
+   * True when the lock lookup itself failed (PostgREST error, an overlapping
+   * fiscal_periods pair breaking `.maybeSingle()`, a network blip). `status`
+   * is then reported as `'locked'`, because a period whose state we could not
+   * read must never be presented as writable.
+   *
+   * Keep the three cases distinguishable, callers treat them differently:
+   *   { status: 'open',   period_id: <id>  }              -> verified open
+   *   { status: 'open',   period_id: null  }              -> verified: no
+   *       covering period exists at all. Not an error: the engine's
+   *       ensure-period helper creates one on write.
+   *   { status: 'locked', period_id: null, lookup_failed } -> unverified.
+   *       Nothing is known about the date. Retryable; a genuinely locked
+   *       period always carries a real period_id or lock_date.
+   *
+   * Deliberately an additive optional field rather than a fourth
+   * `PeriodStatusValue`: the union is consumed as an exhaustive
+   * `Record<PeriodStatusValue, string>` in lib/agent/intents/bokslut-step.ts,
+   * so widening it would break unrelated callers at compile time.
+   */
+  lookup_failed?: boolean
+}
+
+/**
+ * Fail-closed verdict for a lock lookup that could not be completed.
+ *
+ * Reported as `locked` on purpose. The alternative (`open`) is the bug this
+ * exists to prevent: every caller of resolvePeriodStatusForDate uses the
+ * result to decide whether a write into a period is allowed, so a swallowed
+ * query error used to read as "go ahead" on the storno, MCP staging, agent
+ * draft and pending-operation commit paths.
+ */
+function periodLookupFailed(
+  companyId: string,
+  date: string,
+  stage: 'company_settings' | 'fiscal_periods',
+  error: { message?: string } | null,
+): PeriodStatusForDate {
+  log.error('period status lookup failed, failing closed', {
+    companyId,
+    date,
+    stage,
+    reason: error?.message,
+  })
+  return { period_id: null, status: 'locked', lock_date: null, lookup_failed: true }
 }
 
 /**
@@ -451,6 +678,11 @@ export interface PeriodStatusForDate {
  * Returned shape is the canonical `period_status` envelope threaded into MCP
  * tool responses so agents and widgets can disable writes without round-trips.
  *
+ * Fails CLOSED: if either lookup errors we report `locked` with
+ * `lookup_failed: true` rather than `open`. Never reintroduce a bare
+ * `const { data } = await ...` here; dropping the `error` is what turned this
+ * shared helper into a fail-open on every write path that consults it.
+ *
  * Mirrors lib/api/v1/check-period-lock.ts (used by the v1 REST surface). The
  * two helpers share the same query pattern; if either changes, update both.
  */
@@ -460,14 +692,21 @@ export async function resolvePeriodStatusForDate(
   date: string,
 ): Promise<PeriodStatusForDate> {
   // Layer 1: company-wide lock date.
-  const { data: settings } = await supabase
+  const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
     .select('bookkeeping_locked_through')
     .eq('company_id', companyId)
     .maybeSingle()
+  if (settingsError) {
+    // Unknown company lock date: the date could be behind it. Fail closed.
+    return periodLookupFailed(companyId, date, 'company_settings', settingsError)
+  }
   const lockThrough = settings?.bookkeeping_locked_through ?? null
   if (lockThrough && date <= lockThrough) {
-    // Find the covering period if any: useful for widget greying.
+    // Find the covering period if any: useful for widget greying. An error
+    // here is deliberately non-fatal: the verdict is already `locked` on the
+    // company lock date alone, so a failed refinement can only cost the
+    // period_id, never flip the answer to open.
     const { data: period } = await supabase
       .from('fiscal_periods')
       .select('id')
@@ -479,13 +718,19 @@ export async function resolvePeriodStatusForDate(
   }
 
   // Layer 2: fiscal period status.
-  const { data: period } = await supabase
+  const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
     .select('id, is_closed, locked_at')
     .eq('company_id', companyId)
     .lte('period_start', date)
     .gte('period_end', date)
     .maybeSingle()
+
+  if (periodError) {
+    // Distinct from `!period` below: that is "verified, no covering period
+    // exists"; this is "we do not know what period covers this date".
+    return periodLookupFailed(companyId, date, 'fiscal_periods', periodError)
+  }
 
   if (!period) {
     // No covering period: treated as open at this layer; the engine's own

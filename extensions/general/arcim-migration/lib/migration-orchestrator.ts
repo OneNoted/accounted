@@ -39,6 +39,8 @@ import {
   mapSupplierInvoice,
   mapCompanyInfo,
   inferTypeFromParty,
+  buildFxRateIndex,
+  type FxUnresolved,
 } from './entity-mapper'
 
 export interface MigrationOptions {
@@ -77,6 +79,22 @@ function getOrgNumberFromParty(party: PartyDto): string | null {
     party.legalEntity?.companyId ||
     party.identifications?.find((i) => i.schemeId === 'SE:ORGNR')?.id ||
     null
+  )
+}
+
+/**
+ * Log a foreign-currency document that was imported WITHOUT a SEK conversion.
+ *
+ * It is still imported (dropping it would lose räkenskapsinformation), but it
+ * carries exchange_rate = null, so every booking path refuses it loudly rather
+ * than posting it as if 1 unit = 1 SEK. Counted into the step's result so the
+ * migration reports it instead of passing it off as an ordinary import.
+ */
+function logFxUnresolved(kind: string, invoiceNumber: string, fx: FxUnresolved): void {
+  console.error(
+    `[migration] ${kind} ${invoiceNumber}: imported without a SEK conversion ` +
+      `(${fx.currency} @ ${fx.date || 'okänt datum'}, reason=${fx.reason}). ` +
+      `Set an exchange rate before booking it.`
   )
 }
 
@@ -460,10 +478,21 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           return !!r.customerId
         })
 
+        // Phase B2: resolve the SEK conversion for every foreign-currency
+        // invoice, at the rate valid on its OWN issue date. The provider DTO
+        // carries no rate and no SEK amount, so without this every foreign
+        // invoice lands unconverted. One pass over the whole step (not per
+        // chunk) so repeat (currency, date) pairs are fetched once.
+        const fxRates = await buildFxRateIndex(
+          supabase,
+          ready.map((r) => ({ currencyCode: r.dto.currencyCode, issueDate: r.dto.issueDate }))
+        )
+        let fxUnresolved = 0
+
         // Phase C: chunk-insert invoices + their line items.
         for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
           const mappedBatch = batch.map((r) => ({
-            ...mapSalesInvoice(r.dto, userId, companyId, r.customerId),
+            ...mapSalesInvoice(r.dto, userId, companyId, r.customerId, fxRates),
             dto: r.dto,
           }))
 
@@ -486,6 +515,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             for (const item of mappedBatch[i].items) {
               allItems.push({ ...item, invoice_id: invoiceId })
             }
+            const fx = mappedBatch[i].fxUnresolved
+            if (fx) {
+              fxUnresolved++
+              logFxUnresolved('Sales invoice', mappedBatch[i].dto.invoiceNumber, fx)
+            }
             imported++
           }
 
@@ -499,7 +533,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons }
+        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved }
       } catch (err) {
         console.error('Failed to import sales invoices:', err)
       }
@@ -653,11 +687,21 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           return true
         })
 
+        // Resolve the SEK conversion for every foreign-currency invoice at the
+        // rate valid on its OWN issue date (see the sales-invoice step).
+        const fxRates = await buildFxRateIndex(
+          supabase,
+          ready.map((r) => ({ currencyCode: r.dto.currencyCode, issueDate: r.dto.issueDate }))
+        )
+        let fxUnresolved = 0
+
         for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
           const mappedBatch = batch.map((r) => {
-            const { invoice, items } = mapSupplierInvoice(r.dto, userId, companyId, r.supplierId)
+            const { invoice, items, fxUnresolved: fx } = mapSupplierInvoice(
+              r.dto, userId, companyId, r.supplierId, fxRates
+            )
             invoice.arrival_number = nextArrivalNumber++
-            return { invoice, items, dto: r.dto }
+            return { invoice, items, fxUnresolved: fx, dto: r.dto }
           })
 
           const { data: insertedInvoices, error: invErr } = await supabase
@@ -681,6 +725,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             for (const item of mappedBatch[i].items) {
               allItems.push({ ...item, supplier_invoice_id: invoiceId })
             }
+            const fx = mappedBatch[i].fxUnresolved
+            if (fx) {
+              fxUnresolved++
+              logFxUnresolved('Supplier invoice', mappedBatch[i].dto.invoiceNumber, fx)
+            }
             imported++
           }
 
@@ -694,7 +743,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons }
+        results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved }
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)
       }

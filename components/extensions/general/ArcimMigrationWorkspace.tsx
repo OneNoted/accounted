@@ -555,7 +555,18 @@ function ConnectStep({
                   const h = 700
                   const left = window.screenX + (window.outerWidth - w) / 2
                   const top = window.screenY + (window.outerHeight - h) / 2
-                  window.open(authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+                  const popup = window.open(authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+                  if (!popup) {
+                    // Popup blocked: with the return value discarded, a blocked
+                    // popup looked exactly like a successful one (nothing opens,
+                    // nothing is said, the user clicks again). Fall back to the
+                    // full-page flow instead. The callback already supports it:
+                    // with no window.opener it redirects to
+                    // /import?migration=connected&consentId=..., which
+                    // handleOAuthReturn consumes and resumes the wizard at the
+                    // preview step. Same treatment as SkatteverketConnectPanel.
+                    window.location.href = authUrl
+                  }
                 }}
               >
                 Logga in i {providerName}
@@ -1929,8 +1940,13 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         } else {
           // The pre-opened popup was blocked or closed; retrying here is a
           // long shot (the activation may be gone) but strictly better than
-          // dropping the flow.
-          window.open(data.authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+          // dropping the flow. If the retry is blocked too, take the same
+          // full-page fallback as the first-connect button rather than leaving
+          // "Återanslut" looking like it worked.
+          const retry = window.open(data.authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+          if (!retry) {
+            window.location.href = data.authUrl
+          }
         }
         setAuthUrl(data.authUrl)
       } else {

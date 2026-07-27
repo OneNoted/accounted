@@ -1824,7 +1824,15 @@ export default function TransactionsPage() {
       )
       const json = await res.json()
       if (!res.ok) {
-        throw new Error(json.error || 'Bokföring misslyckades')
+        // Map the parsed body plus the status, never `new Error(json.error)`:
+        // the Error constructor stringifies a non-string body field, and the
+        // mapper would discard the route's own Swedish reason.
+        toast({
+          title: 'Kunde inte bokföra',
+          description: getErrorMessage(json, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
       }
       toast({
         title: 'Utkast skapat',

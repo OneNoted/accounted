@@ -24,6 +24,24 @@ vi.mock('@/lib/core/bookkeeping/period-service', async () => {
   }
 })
 
+// create_transaction and create_invoice now resolve a Riksbanken rate for any
+// non-SEK row (and refuse when there is none), so the foreign-currency cases
+// below must not reach the real API. FX behaviour itself is covered in
+// staged-fx-rates.test.ts.
+vi.mock('@/lib/currency/riksbanken', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/currency/riksbanken')>(
+    '@/lib/currency/riksbanken'
+  )
+  return {
+    ...actual,
+    fetchExchangeRate: vi.fn(async (currency: string) => ({
+      currency,
+      rate: 10.5,
+      date: '2026-05-01',
+    })),
+  }
+})
+
 vi.mock('@/lib/import/sie-parser', () => ({
   parseSIEFile: vi.fn(),
   calculateFileHash: vi.fn(async () => 'mock-hash'),

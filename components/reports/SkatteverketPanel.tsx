@@ -82,10 +82,16 @@ interface SkatteverketPanelProps {
   fiscalYearEnd?: { year: number; month: number }
   hasData: boolean
   /**
-   * True when the local pre-flight checks (VatChecksCard, section 1 of the
-   * page) found ERRORs. Blocks validate/submit: SKV only validates internal
-   * arithmetic, so a locally broken declaration would pass their checks and
-   * still be materially wrong.
+   * True when the momsdeklaration's filing gate is closed. Blocks
+   * validate/submit: SKV only validates internal arithmetic, so a locally
+   * broken declaration would pass their checks and still be materially wrong.
+   *
+   * The panel deliberately owns NO gate logic of its own. The value is
+   * `isFilingBlocked(checks)` (`lib/reports/vat-filing-gate.ts`) computed once
+   * in VatDeclarationView over the exact same check array that feeds the
+   * "Kontroll av underlaget" banner and the stegen counters, so this button
+   * can never be enabled while that section claims (or hides) a problem.
+   * Never re-derive it here from a narrower source.
    */
   localBlocked: boolean
 }

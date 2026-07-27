@@ -379,6 +379,110 @@ describe('generateARLedger', () => {
     expect(report.unpaid_count).toBe(0)
   })
 
+  it('keeps a customer whose open invoices are all unconvertible FX', async () => {
+    // Every open invoice lacks an exchange_rate, so nothing reached the aging
+    // buckets and the customer's SEK total is 0. That 0 means "unknown", not
+    // "settled": the rows are counted in unconverted_fx_count, so they have to
+    // be reachable somewhere. Dropping the customer made the PDF/XLSX/web view
+    // claim N invoices lack a rate while showing none of them.
+    results = [
+      {
+        data: [
+          {
+            id: 'inv-1',
+            customer_id: 'cust-fx',
+            customer: { id: 'cust-fx', name: 'Foreign Only AB' },
+            invoice_number: 'F300',
+            invoice_date: '2024-05-01',
+            due_date: '2024-06-01',
+            total: 800,
+            paid_amount: 0,
+            currency: 'EUR',
+            exchange_rate: null,
+            status: 'overdue',
+          },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.unconverted_fx_count).toBe(1)
+    expect(report.entries).toHaveLength(1)
+
+    const entry = report.entries[0]
+    expect(entry.customer_name).toBe('Foreign Only AB')
+    // Excluded from the SEK totals, but visible.
+    expect(entry.total_outstanding).toBe(0)
+    expect(entry.invoices).toHaveLength(1)
+    expect(entry.invoices[0].outstanding).toBe(800)
+    expect(entry.invoices[0].currency).toBe('EUR')
+    expect(entry.invoices[0].outstanding_sek).toBeNull()
+
+    // The unconvertible invoice is still an open item.
+    expect(report.total_outstanding).toBe(0)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('separates "nets to zero" from "all unconvertible" in the same report', async () => {
+    // Two customers both end at total_outstanding 0 for opposite reasons.
+    // The settled one must stay suppressed; the unconvertible one must not.
+    results = [
+      {
+        data: [
+          // Customer A: invoice + credit note, genuinely settled.
+          {
+            id: 'inv-1',
+            customer_id: 'cust-net',
+            customer: { id: 'cust-net', name: 'Netted AB' },
+            invoice_number: '2026001',
+            invoice_date: '2026-05-05',
+            due_date: '2026-06-05',
+            total: 2000,
+            paid_amount: 0,
+            currency: 'SEK',
+            status: 'credited',
+          },
+          {
+            id: 'inv-2',
+            customer_id: 'cust-net',
+            customer: { id: 'cust-net', name: 'Netted AB' },
+            invoice_number: 'KR-2026001',
+            invoice_date: '2026-05-05',
+            due_date: '2026-05-05',
+            total: -2000,
+            paid_amount: 0,
+            currency: 'SEK',
+            status: 'sent',
+            credited_invoice_id: 'inv-1',
+          },
+          // Customer B: one open USD invoice, no rate.
+          {
+            id: 'inv-3',
+            customer_id: 'cust-fx',
+            customer: { id: 'cust-fx', name: 'Foreign Only AB' },
+            invoice_number: 'F400',
+            invoice_date: '2026-05-05',
+            due_date: '2026-06-05',
+            total: 1500,
+            paid_amount: 0,
+            currency: 'USD',
+            exchange_rate: null,
+            status: 'sent',
+          },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-05-05')
+
+    expect(report.entries.map((e) => e.customer_name)).toEqual(['Foreign Only AB'])
+    expect(report.unconverted_fx_count).toBe(1)
+    expect(report.total_outstanding).toBe(0)
+  })
+
   it('keeps a credit note outstanding when it offsets an already-paid invoice', async () => {
     // Original was paid in full, then credited: we owe the customer the refund.
     results = [

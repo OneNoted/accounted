@@ -10,8 +10,57 @@ import { Loader2, Building2, AlertCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
+import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 
 const branding = getBranding()
+
+/**
+ * How long the pre-auth invite cookie lives, in seconds.
+ *
+ * This hop has to survive an email round-trip: an invitee who clicks "create
+ * account" at 17:00 confirms the signup mail the next morning, and only then
+ * lands back on a surface that can redeem the token. A one-hour cookie made
+ * that acceptance impossible while the invitation itself was still `pending`
+ * in the database, with no way for the invitee to recover: the cookie is the
+ * only copy the browser holds.
+ *
+ * The value is the invite TTL, `INVITE_TTL_DAYS` in lib/auth/invite-tokens.ts,
+ * which is what actually bounds the token: `getInviteExpiry()` stamps
+ * `company_invitations.expires_at` 7 days out at issue time and POST
+ * /api/team/accept rejects anything past it with 410. `INVITE_TTL_DAYS` is a
+ * module-private const in a server-only module (it imports Node's `crypto`),
+ * so the number is restated here rather than imported;
+ * app/invite/[token]/__tests__/invite-cookie.test.ts reads the real TTL back
+ * out of `getInviteExpiry()` and fails if the two drift.
+ *
+ * Widening the cookie does not widen authority. Every acceptance attempt is
+ * re-authorized server-side by `requireAuth()` plus an email equality check
+ * against the invitation, and the `status` transition is single-use, so a
+ * surviving cookie confers nothing on its own. If the invitation expires
+ * before the cookie does (the invitee sat on the mail for six days), the next
+ * attempt gets a 410, which `consumeInviteCookie()` classifies as `spent` and
+ * clears. Never set this beyond the invite TTL: a cookie outliving the
+ * server-side bound would be lifetime the server does not honour.
+ */
+const INVITE_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+/**
+ * The single construction site for the invite cookie. Three hops write it
+ * (register, login, sign-out-and-retry) and each used to carry its own copy of
+ * the string. They happened to still agree, but three literals is how a
+ * lifetime drifts; one builder is what makes the max-age and the flags
+ * provably identical across all three.
+ *
+ * Flags are unchanged from the original: path-scoped to the whole site so any
+ * auth surface can read it, `samesite=lax` so it survives the top-level
+ * navigation back from the confirmation mail without riding along on
+ * cross-site subrequests, and `secure` whenever the page is on https. It is
+ * deliberately not `httponly`: it is written from `document.cookie` and read
+ * back by client-side auth surfaces.
+ */
+function buildInviteCookie(token: string, secureFlag: string): string {
+  return `${INVITE_COOKIE_NAME}=${token}; path=/; max-age=${INVITE_COOKIE_MAX_AGE_SECONDS}; samesite=lax${secureFlag}`
+}
 
 interface InviteInfo {
   type: 'company'
@@ -80,13 +129,13 @@ export default function InvitePage() {
 
   const handleAccept = () => {
     // Store invite token in cookie before redirecting to register
-    document.cookie = `gnubok-invite-token=${token}; path=/; max-age=3600; samesite=lax${secureCookieFlag}`
+    document.cookie = buildInviteCookie(token, secureCookieFlag)
     router.push(`/register?invite=${encodeURIComponent(token)}`)
   }
 
   const handleAcceptExistingUser = () => {
     // Store invite token in cookie before redirecting to login
-    document.cookie = `gnubok-invite-token=${token}; path=/; max-age=3600; samesite=lax${secureCookieFlag}`
+    document.cookie = buildInviteCookie(token, secureCookieFlag)
     router.push('/login')
   }
 
@@ -138,7 +187,7 @@ export default function InvitePage() {
     const supabase = createClient()
     await supabase.auth.signOut()
     // Keep the invite cookie alive so the next login/register picks it up.
-    document.cookie = `gnubok-invite-token=${token}; path=/; max-age=3600; samesite=lax${secureCookieFlag}`
+    document.cookie = buildInviteCookie(token, secureCookieFlag)
     if (invite?.alreadyHasAccount) {
       router.push('/login')
     } else {

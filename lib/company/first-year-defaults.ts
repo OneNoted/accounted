@@ -22,9 +22,10 @@ export function parseStartMonthDay(value: string | null | undefined): number | n
 /**
  * Derive the first-year defaults from TIC's `registrationDate`.
  * A company is treated as "first year" when registered less than 12 months
- * ago: fits BFL's 6-18 month opening-period window comfortably. Returns
- * both the toggle state and a seeded `first_year_start` (always the 1st of
- * the registration month, the format the date inputs expect).
+ * ago: comfortably inside BFL's 18-month cap on a first räkenskapsår, which
+ * has no minimum length. Returns both the toggle state and a seeded
+ * `first_year_start` (always the 1st of the registration month, the format
+ * the date inputs expect).
  *
  * `now` exists for tests; production callers omit it.
  */

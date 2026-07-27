@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { formatRedovisare } from '@/lib/skatteverket/format'
-import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
+import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -41,7 +41,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         // client offer an already-added employee and get a confusing 409.
         supabase
           .from('salary_run_employees')
-          .select('*, employee:employees(id, first_name, last_name, personnummer, personnummer_last4, employment_type, default_dimensions), line_items:salary_line_items(*)')
+          .select('*, employee:employees(id, first_name, last_name, personnummer, employment_type, default_dimensions), line_items:salary_line_items(*)')
           .eq('salary_run_id', id)
           .order('created_at'),
         // Skatteverket arbetsgivare ID for AGI submission.
@@ -156,12 +156,11 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         previous_run: previousRun,
         corrected_by_run_id: correctedByRunId,
         payslip_deliveries_summary: deliveriesSummary,
+        // maskEmployeeForResponse drops the ciphertext and personnummer_last4
+        // from every embedded employee, exposing only `personnummer_masked`.
         employees: (employees || []).map(emp => ({
           ...emp,
-          employee: emp.employee ? {
-            ...emp.employee,
-            personnummer: maskPersonnummer(decryptPersonnummer(emp.employee.personnummer)),
-          } : null,
+          employee: emp.employee ? maskEmployeeForResponse(emp.employee) : null,
         })),
       },
     })

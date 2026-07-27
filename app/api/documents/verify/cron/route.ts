@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
+import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
@@ -55,9 +56,19 @@ export const GET = withCronContext('cron.documents_verify', async (_request, ctx
   let missingObjects = 0
 
   const summary = await ctx.forEach('document', documents, async (doc, itemCtx) => {
-    const { data: fileData, error: downloadError } = await supabase.storage
-      .from('documents')
-      .download(doc.storage_path)
+    // Dual-layout download: the batch is snapshotted up front, and a
+    // concurrent Phase B backfill (scripts/backfill-document-storage-paths.ts)
+    // can re-home an object from the legacy uploader-scoped key to the
+    // company-scoped key (and later remove the source) mid-batch, leaving
+    // doc.storage_path stale. Trusting the stale pointer here wrote a
+    // PERMANENT false DOCUMENT_OBJECT_MISSING INTEGRITY_FAILURE row into the
+    // immutable audit log for a healthy document. The helper tries the
+    // stored pointer first, then the alternate layout.
+    const { blob: fileData, error: downloadError } = await downloadDocumentObject(
+      supabase,
+      doc.storage_path,
+      doc.company_id
+    )
 
     if (downloadError || !fileData) {
       // The storage object is unreadable: surface it as an incident in the

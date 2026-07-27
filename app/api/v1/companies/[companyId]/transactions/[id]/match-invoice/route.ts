@@ -5,10 +5,13 @@
  * full flow:
  *   1. Storno any conflicting auto-categorization JE.
  *   2. Create the payment journal entry (resolved bank account debit / 1510
- *      credit under accrual; cash-method path delegates to
+ *      credit under accrual, built by the shared
+ *      buildInvoicePaymentClearingLines helper; cash-method path delegates to
  *      createInvoiceCashEntry). The debited account is resolved from this
  *      transaction's own cash_account_id via resolveSettlementAccount, never
  *      hardcoded to 1930 (mirrors the fix on the supplier-invoice side).
+ *      Cross-currency settlement uses the same Riksbanken spot-rate path as
+ *      the dashboard route so both doors post the same verifikat.
  *   3. Re-attach the invoice PDF to the new payment JE (BFL 7 kap underlag).
  *   4. Update invoice status (paid / partially_paid) with optimistic lock.
  *   5. Insert invoice_payments row; link transaction to invoice.
@@ -25,12 +28,13 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
-import {
-  createInvoicePaymentJournalEntry,
-  createInvoiceCashEntry,
-} from '@/lib/bookkeeping/invoice-entries'
+import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
+import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -38,7 +42,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
-import type { EntityType, Invoice, Transaction } from '@/types'
+import type { Currency, EntityType, Invoice, Transaction } from '@/types'
 
 const MatchInvoiceResponse = z.object({
   success: z.boolean(),
@@ -196,6 +200,103 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Cross-currency settlement. Byte-for-byte the dashboard route's block
+    // (app/api/transactions/[id]/match-invoice/route.ts): same guard, same
+    // helpers, same order, so the same action through either door produces the
+    // same ledger. Before this, v1 had no FX path at all: it fed the raw
+    // transactions.amount straight into createInvoicePaymentJournalEntry, which
+    // re-read it as if it were already in the INVOICE's currency and multiplied
+    // by the invoice's booking rate, and then stored that SEK magnitude on
+    // invoice_payments under the invoice's foreign currency code.
+    //
+    // A bank row is stored in ITS OWN currency: transactions.amount is
+    // denominated in transactions.currency, and the SEK value lives either in
+    // amount_sek (pre-computed at ingest) or is derivable from exchange_rate.
+    // Every journal entry line is SEK, so a foreign row whose SEK value cannot
+    // be established must not be booked or allocated at all: substituting the
+    // raw foreign number would settle a 500 USD receipt as 500 SEK, a tenth of
+    // the real payment. Rows in exactly that shape exist: when the Riksbanken
+    // lookup fails at ingest the transaction is written with neither field
+    // (lib/transactions/ingest.ts). Refuse loudly, the same way the
+    // match_batch_allocate RPC refuses with BATCH_FX_RATE_MISSING.
+    const txIsForeign = !!transaction.currency && transaction.currency !== 'SEK'
+    if (
+      txIsForeign &&
+      transaction.amount_sek == null &&
+      !(transaction.exchange_rate != null && transaction.exchange_rate > 0)
+    ) {
+      return v1ErrorResponseFromCode('MATCH_INVOICE_TX_FX_RATE_MISSING', txLog, {
+        requestId: ctx.requestId,
+        details: {
+          transaction_currency: transaction.currency,
+          transaction_date: transaction.date,
+        },
+      })
+    }
+    // Actual SEK that hit the bank, resolved through the same helper
+    // buildInvoicePaymentClearingLines uses for the bank leg (amount_sek first,
+    // then amount * exchange_rate). SEK rows return Math.abs(amount) unchanged.
+    const txAbsSek =
+      Math.round(
+        resolveSekAmount(
+          Math.abs(transaction.amount),
+          transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
+          transaction.currency,
+          transaction.exchange_rate,
+        ) * 100,
+      ) / 100
+
+    type FxConversion =
+      | { required: false }
+      | {
+          required: true
+          rate: number
+          rate_date: string
+          paidInInvoiceCurrency: number
+          // Provenance of the rate actually used (BFL 5 kap 6-7§; ML 8 kap
+          // 21-23§): 'manual' = caller-supplied, 'riksbanken' = spot rate on
+          // the payment date.
+          source: 'manual' | 'riksbanken'
+        }
+
+    let fx: FxConversion = { required: false }
+    if (transaction.currency !== invoice.currency) {
+      const manualRate =
+        typeof parsed.data.manual_exchange_rate === 'number' &&
+        parsed.data.manual_exchange_rate > 0
+          ? parsed.data.manual_exchange_rate
+          : null
+      let rate = manualRate
+      let rateDate = transaction.date
+      if (rate == null) {
+        const rateInfo = await fetchExchangeRate(
+          invoice.currency as Currency,
+          new Date(transaction.date),
+        )
+        if (rateInfo && rateInfo.rate > 0) {
+          rate = rateInfo.rate
+          rateDate = rateInfo.date
+        }
+      }
+      if (rate == null || rate <= 0) {
+        return v1ErrorResponseFromCode('MATCH_INVOICE_FX_RATE_UNAVAILABLE', txLog, {
+          requestId: ctx.requestId,
+          details: {
+            transaction_currency: transaction.currency,
+            invoice_currency: invoice.currency,
+            payment_date: transaction.date,
+          },
+        })
+      }
+      fx = {
+        required: true,
+        rate,
+        rate_date: rateDate,
+        paidInInvoiceCurrency: Math.round((txAbsSek / rate) * 10000) / 10000,
+        source: manualRate != null ? 'manual' : 'riksbanken',
+      }
+    }
+
     // Hard-duplicate guard: status leak: the invoice still says
     // 'sent'/'overdue' but already has a payment voucher attached. Mirror
     // of the internal route's defensive check.
@@ -231,6 +332,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         transactionId: txId,
         transactionDate: transaction.date,
         transactionAmount: transaction.amount,
+        // `amount` is in `currency`; the 19xx legs the detector compares it
+        // against are always SEK. Selected above via select('*').
+        transactionCurrency: transaction.currency ?? null,
+        transactionAmountSek: transaction.amount_sek ?? null,
+        transactionExchangeRate: transaction.exchange_rate ?? null,
       })
       if (!force) {
         if (candidate) {
@@ -276,14 +382,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    const paidAmount = transaction.amount
+    // paidAmount is denominated in INVOICE currency: that is the unit of
+    // invoices.paid_amount / remaining_amount and of invoice_payments.amount.
+    // Same-currency → the raw tx amount; cross-currency → the spot-rate
+    // conversion computed above. Feeding a SEK figure in here for a foreign
+    // invoice corrupts the column units (and the stored payment row's
+    // currency label).
+    const paidAmount = fx.required ? fx.paidInInvoiceCurrency : transaction.amount
 
     // Overshoot guard + paid/remaining math: shared with the dashboard and
     // agent (commit) paths via planInvoicePayment. Without this, the public API
     // silently overpaid an invoice (recording paid_amount > total, over-crediting
     // AR). Runs BEFORE the storno + strict-mode JE creation, so a rejected match
-    // touches no state.
-    const payment = planInvoicePayment(invoice, paidAmount)
+    // touches no state. Pure-SEK settlements absorb sub-krona öresavrundning
+    // (booked to 3740 by buildInvoicePaymentClearingLines) so a whole-krona
+    // payment settles in full, exactly as on the dashboard route.
+    const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
+    const payment = planInvoicePayment(invoice, paidAmount, {
+      absorbOreRounding: pureSek,
+    })
     if (!payment.ok) {
       return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
         requestId: ctx.requestId,
@@ -435,21 +552,78 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         )
         journalEntryId = je?.id ?? null
       } else {
-        const je = await createInvoicePaymentJournalEntry(
+        // Clearing entry against 1510, built by the SAME shared helper the
+        // dashboard route and its preview use, so all three produce byte-
+        // identical lines: bank leg = the actual SEK that hit the account,
+        // 1510 credited at the invoice's booking rate, and a 3960/7960 FX-diff
+        // line (or a 3740 öresavrundning line on pure SEK) making the verifikat
+        // balance per BFL 5 kap 4-5§.
+        const fiscalPeriodId = await findFiscalPeriod(
           ctx.supabase,
           ctx.companyId!,
-          ctx.userId,
-          invoice as Invoice,
           transaction.date,
-          undefined,
-          invoice.customer?.name,
-          paidAmount,
+        )
+        if (!fiscalPeriodId) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+            requestId: ctx.requestId,
+            details: { payment_date: transaction.date },
+          })
+        }
+        const desc = invoice.customer?.name
+          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+          : `Inbetalning kundfaktura ${invoice.invoice_number}`
+        const { lines: clearingLines } = buildInvoicePaymentClearingLines(
+          {
+            amount: transaction.amount,
+            amount_sek: transaction.amount_sek ?? null,
+            currency: transaction.currency,
+            exchange_rate: transaction.exchange_rate ?? null,
+          },
+          {
+            currency: invoice.currency,
+            exchange_rate: invoice.exchange_rate ?? null,
+            remaining_amount: invoice.remaining_amount ?? null,
+            total: invoice.total,
+            paid_amount: invoice.paid_amount ?? null,
+          },
+          desc,
+          fx.required ? fx.paidInInvoiceCurrency : undefined,
           paymentAccount,
         )
+        // Re-propagate the invoice's default dimension bag onto every leg,
+        // including the FX result lines, so a project's kursvinst/kursförlust
+        // stays inside the project P&L. createInvoicePaymentJournalEntry did
+        // this for v1 before; keeping it means the switch to the shared
+        // line-builder is not a silent regression for dimension users. Copied
+        // per line: a shared object would let one line's mutation leak.
+        const defaultDimensions = coerceDimensionsBag(
+          (invoice as { default_dimensions?: unknown }).default_dimensions,
+        )
+        if (defaultDimensions) {
+          for (const line of clearingLines) line.dimensions = { ...defaultDimensions }
+        }
+        const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: transaction.date,
+          description: desc,
+          source_type: 'invoice_paid',
+          source_id: invoice.id,
+          lines: clearingLines,
+        })
         journalEntryId = je?.id ?? null
       }
     } catch (err) {
       if (err instanceof AccountsNotInChartError) {
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
+      // buildInvoicePaymentClearingLines refuses a foreign invoice with no
+      // booking rate rather than valuing the 1510 credit at a fabricated one.
+      // Surface the registered 400 ("komplettera fakturans växelkurs") instead
+      // of the generic INVOICE_PAID_BOOK_FAILED, so the caller learns which
+      // field to fill in. Dispatch on `code` (not instanceof) for the same
+      // reason as the supplier route: the class's module is vi.mock'ed away in
+      // route tests, and the string literal can't degrade into a catch-all.
+      if ((err as { code?: unknown })?.code === 'MATCH_INVOICE_BOOKING_RATE_MISSING') {
         return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
       }
       txLog.error('match-invoice: payment JE creation failed: aborting before state mutation', err as Error)
@@ -519,11 +693,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // kontantmetoden partials: never-booked invoices. When the invoice was
     // booked under accrual, the clearing entry handles the partial cleanly
     // and the note would be misleading.
-    const paymentNotes =
+    const cashMethodNote =
       !invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid
         ? 'Kontantmetoden: intäkt bokförs vid slutbetalning'
         : null
 
+    // Provenance for a caller-supplied FX rate. A Riksbanken spot rate is
+    // self-documenting (rate + date are reproducible); a rate passed in the
+    // request body overrides the ML 8 kap 21-23§ obligation and must leave a
+    // trail on the payment row (BFL 5 kap 6-7§).
+    const manualRateNote =
+      fx.required && fx.source === 'manual'
+        ? `Manuell valutakurs ${fx.rate} ${invoice.currency}/SEK (betalningsdatum ${transaction.date})`
+        : null
+
+    const paymentNotes = [cashMethodNote, manualRateNote].filter(Boolean).join(' · ') || null
+
+    // amount and currency must agree: the row stores the payment in INVOICE
+    // currency (the column's unit), never a SEK magnitude wearing the invoice's
+    // foreign currency code. exchange_rate is the rate ACTUALLY USED for this
+    // payment (Riksbanken or the caller's override on the payment date, per
+    // ML 8 kap 21-23§), falling back to the invoice's booking rate only when no
+    // conversion was needed.
     const { error: paymentInsertErr } = await ctx.supabase
       .from('invoice_payments')
       .insert({
@@ -533,7 +724,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         payment_date: transaction.date,
         amount: paidAmount,
         currency: invoice.currency,
-        exchange_rate: invoice.exchange_rate,
+        exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
         journal_entry_id: journalEntryId,
         transaction_id: txId,
         notes: paymentNotes,
@@ -580,10 +771,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       invoiceId: invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',
+      // rate_source / exchange_rate live inside new_state so a caller-supplied
+      // rate on a money path stays distinguishable from an automatic
+      // Riksbanken lookup in the audit trail. Same shape as the dashboard
+      // route; same-currency matches carry rate_source: null.
       newState: {
         status: newStatus,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
+        rate_source: fx.required ? fx.source : null,
+        exchange_rate: fx.required ? fx.rate : null,
       },
     })
 

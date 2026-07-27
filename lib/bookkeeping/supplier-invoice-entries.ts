@@ -27,6 +27,62 @@ import type {
 const log = createLogger('supplier-invoice-entries')
 
 /**
+ * Stable code for the "foreign-currency supplier invoice without a rate"
+ * refusal. Registered in lib/errors/structured-errors.ts so REST routes, the
+ * MCP server and getErrorMessage() all translate it the same way.
+ */
+export const SI_FX_RATE_MISSING = 'SI_FX_RATE_MISSING' as const
+
+/**
+ * Raised when a booking path is asked to translate a foreign-currency supplier
+ * invoice that has no usable exchange rate.
+ *
+ * resolveSekAmount() answers that case by returning the RAW foreign amount (a
+ * legacy "assume SEK" fallback that is tolerable in read-only code but not
+ * when posting a verifikat): a 1 000 EUR invoice would post as 1 000 SEK, and
+ * because every leg is scaled by the same wrong factor the entry still
+ * balances, so no DB trigger fires and nothing errors. Under omvänd
+ * skattskyldighet that silently books 250,00 kr of fiktiv moms on 2614/2645
+ * instead of 2 875,00 kr at 11,50 SEK/EUR, understating both ruta 20 (or 21)
+ * and ruta 30 of the momsdeklaration by the same amount: an oriktig uppgift
+ * exposed to skattetillägg under SFL 49 kap 4 §.
+ *
+ * The in-house precedent for failing loudly instead is the
+ * `match_batch_allocate` RPC, which hard-fails with BATCH_FX_RATE_MISSING, and
+ * lib/reports/supplier-ledger.ts, which skips any FX invoice lacking a rate
+ * rather than faking a 1:1 conversion.
+ */
+export class SupplierInvoiceFxRateMissingError extends Error {
+  readonly code = SI_FX_RATE_MISSING
+  constructor(public readonly currency: string) {
+    super(
+      `Supplier invoice is in ${currency} but has no exchange rate on file; refusing to post it as if 1 ${currency} = 1 SEK.`
+    )
+    this.name = 'SupplierInvoiceFxRateMissingError'
+  }
+}
+
+/**
+ * Convert an invoice-currency amount to SEK for a journal entry line.
+ *
+ * SEK invoices short-circuit exactly as before, and so does any invoice with a
+ * legitimately supplied positive rate: the only new behaviour is the refusal
+ * above when a foreign invoice reaches a booking path with no rate at all.
+ * Every conversion in this file goes through here so no leg (expense, moms,
+ * fiktiv moms, basbelopp, 2440) can be posted at a fabricated 1:1 rate.
+ */
+function toSekOrThrow(
+  amount: number,
+  currency: string,
+  exchangeRate: number | null | undefined
+): number {
+  if (currency && currency !== 'SEK' && !(exchangeRate != null && exchangeRate > 0)) {
+    throw new SupplierInvoiceFxRateMissingError(currency)
+  }
+  return resolveSekAmount(amount, null, currency, exchangeRate)
+}
+
+/**
  * Build a BFL-compliant verifikation description with event type, counterparty, and suffix.
  * Falls back to prefix + invoiceNumber + suffix if name is not provided (backward compat).
  */
@@ -116,7 +172,7 @@ export async function createSupplierInvoiceRegistrationEntry(
   const expenseBuckets = groupExpenseBuckets(
     items,
     (item) => resolveBookingAccount('expense', item, item.account_number),
-    (item) => resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate),
+    (item) => toSekOrThrow(item.line_total, invoice.currency, invoice.exchange_rate),
     defaultDimensions
   )
 
@@ -382,7 +438,7 @@ export async function createSupplierInvoiceCashEntry(
   const expenseBuckets = groupExpenseBuckets(
     items,
     (item) => item.account_number,
-    (item) => resolveSekAmount(item.line_total, null, invoice.currency, effectiveRate),
+    (item) => toSekOrThrow(item.line_total, invoice.currency, effectiveRate),
     defaultDimensions
   )
 
@@ -530,7 +586,7 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
   const expenseBuckets = groupExpenseBuckets(
     items,
     (item) => item.account_number,
-    (item) => resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate),
+    (item) => toSekOrThrow(item.line_total, invoice.currency, invoice.exchange_rate),
     defaultDimensions
   )
   for (const bucket of expenseBuckets) {
@@ -618,7 +674,7 @@ export async function createSupplierCreditNoteEntry(
   const expenseBuckets = groupExpenseBuckets(
     items,
     (item) => resolveBookingAccount('expense', item, item.account_number),
-    (item) => Math.abs(resolveSekAmount(item.line_total, null, creditNote.currency, creditNote.exchange_rate)),
+    (item) => Math.abs(toSekOrThrow(item.line_total, creditNote.currency, creditNote.exchange_rate)),
     defaultDimensions
   )
 
@@ -782,7 +838,7 @@ function groupVatByRate(
       ? Math.round((item.line_total ?? 0) * rate * 100) / 100
       : 0
     const sourceVat = storedVat > 0 ? storedVat : computedVat
-    let vatSek = resolveSekAmount(sourceVat, null, currency, exchangeRate)
+    let vatSek = toSekOrThrow(sourceVat, currency, exchangeRate)
     if (useAbsoluteValues) vatSek = Math.abs(vatSek)
     vatByRate.set(rate, (vatByRate.get(rate) || 0) + vatSek)
   }
@@ -809,7 +865,7 @@ function groupBaseByRate(
   const baseByRate = new Map<number, number>()
   for (const item of items) {
     const rate = resolveReverseChargeRate(item)
-    let baseSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
+    let baseSek = toSekOrThrow(item.line_total, currency, exchangeRate)
     if (useAbsoluteValues) baseSek = Math.abs(baseSek)
     baseByRate.set(rate, (baseByRate.get(rate) || 0) + baseSek)
   }
@@ -832,7 +888,7 @@ function groupNonBasisBaseByRate(
   for (const item of items) {
     if (isReverseChargeBasisAccount(item.account_number)) continue
     const rate = resolveReverseChargeRate(item)
-    let itemSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
+    let itemSek = toSekOrThrow(item.line_total, currency, exchangeRate)
     if (useAbsoluteValues) itemSek = Math.abs(itemSek)
     baseByRate.set(rate, (baseByRate.get(rate) || 0) + itemSek)
   }

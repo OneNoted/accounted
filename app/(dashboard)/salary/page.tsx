@@ -14,7 +14,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import type { Employee, SalaryRun } from '@/types'
+import type { EmployeeMasked, SalaryRun } from '@/types'
 
 const STATUS_LABEL_KEYS: Record<string, string> = {
   draft: 'status_draft',
@@ -46,7 +46,7 @@ const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'war
  */
 export default function SalaryPage() {
   const [runs, setRuns] = useState<SalaryRun[]>([])
-  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employees, setEmployees] = useState<EmployeeMasked[]>([])
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const { canWrite } = useCanWrite()

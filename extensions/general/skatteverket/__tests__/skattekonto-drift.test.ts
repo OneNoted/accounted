@@ -27,6 +27,23 @@ function fakeCtx(overrides: {
   } as unknown as Parameters<typeof computeSkattekontoDrift>[0]
 }
 
+/**
+ * Enqueue the two pages the 1630 sum reads through the two-step entry-lines
+ * fetch (lib/bookkeeping/entry-lines.ts): the parent entries first, then the
+ * bare lines keyed by journal_entry_id. Only the amounts are read downstream,
+ * so a single synthetic parent per line set is enough.
+ */
+function enqueueGlLines(
+  enqueue: (result: { data?: unknown; error?: unknown }) => void,
+  rows: Array<{ debit_amount: number; credit_amount: number }>,
+) {
+  enqueue({ data: rows.length > 0 ? [{ id: 'entry-1' }] : [] })
+  if (rows.length === 0) return
+  enqueue({
+    data: rows.map((r, i) => ({ id: `line-${i}`, journal_entry_id: 'entry-1', ...r })),
+  })
+}
+
 describe('computeSkattekontoDrift', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -44,9 +61,7 @@ describe('computeSkattekontoDrift', () => {
   it('computes drift = saldoSkatteverket - GL 1630 sum (positive when SKV ahead)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // GL 1630 query: 5000 SEK debit
-    enqueue({
-      data: [{ debit_amount: 5000, credit_amount: 0 }],
-    })
+    enqueueGlLines(enqueue, [{ debit_amount: 5000, credit_amount: 0 }])
     // Unbooked rows query
     enqueue({ data: [] })
 
@@ -74,9 +89,37 @@ describe('computeSkattekontoDrift', () => {
     expect(drift!.tolerance).toBe(1)
   })
 
+  it('returns null (skips the drift pass) when the GL 1630 read fails', async () => {
+    // A transient read failure must NOT be treated as glSum1630 = 0: with a
+    // cached SKV saldo of 5500 that would compute drift = 5500 and (throttled)
+    // email a false "Skattekontot stämmer inte med bokföringen".
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The entry-lines fetch errors -> fetchAllRows throws -> sumGl1630 fails.
+    enqueue({ error: { message: 'connection reset by peer' } })
+
+    const ctx = fakeCtx({
+      supabase,
+      settings: {
+        get: vi.fn().mockImplementation((key: string) => {
+          if (key === 'skattekonto_balance_snapshot') {
+            return Promise.resolve({
+              saldo: { saldoSkatteverket: 5500, saldoKronofogden: 0 },
+              fetchedAt: new Date('2026-06-12T04:00:00Z').getTime(),
+            })
+          }
+          return Promise.resolve(null)
+        }),
+        set: vi.fn(),
+      },
+    })
+
+    const drift = await computeSkattekontoDrift(ctx)
+    expect(drift).toBeNull()
+  })
+
   it('honors a per-company override of the tolerance', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0 }] })
+    enqueueGlLines(enqueue, [{ debit_amount: 1000, credit_amount: 0 }])
     enqueue({ data: [] })
 
     const ctx = fakeCtx({

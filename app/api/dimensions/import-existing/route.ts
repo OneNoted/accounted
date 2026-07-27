@@ -16,7 +16,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -42,16 +42,19 @@ export const POST = withRouteContext(
 
     try {
       // 1. Collect every {dim_no: code} pair used on this company's lines.
-      //    Inner-join scoping: journal_entry_lines has no company_id column.
-      const lines = await fetchAllRows<LineRow>(({ from, to }) =>
-        supabase
-          .from('journal_entry_lines')
-          .select('id, dimensions, journal_entries!inner(company_id)')
-          .eq('journal_entries.company_id', companyId)
-          .neq('dimensions', '{}')
-          .order('id', { ascending: true })
-          .range(from, to),
-      )
+      //    journal_entry_lines has no company_id column, so the scope comes
+      //    from the parent entries. Driving the query from that side
+      //    (lib/bookkeeping/entry-lines.ts) instead of a
+      //    `journal_entries!inner(company_id)` embed keeps PostgREST from
+      //    compiling a correlated LATERAL join that walks every tenant's
+      //    lines. The parent is not read here, so it is not reattached.
+      const lines = await fetchEntryLines<LineRow>({
+        supabase,
+        lineColumns: 'id, dimensions',
+        filterEntries: (q: EntryLinesQuery) => q.eq('company_id', companyId),
+        filterLines: (q: EntryLinesQuery) => q.neq('dimensions', '{}'),
+        attachEntriesAs: null,
+      })
 
       const codesByDimNo = new Map<number, Set<string>>()
       for (const line of lines) {

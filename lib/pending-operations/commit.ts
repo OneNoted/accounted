@@ -16,8 +16,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
-import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import {
+  resolveSupplierInvoiceExchangeRate,
+  supplierInvoiceSekAmounts,
+} from '@/lib/currency/supplier-invoice-rate'
+import { roundOre } from '@/lib/money'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
 import {
@@ -99,6 +104,23 @@ import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pend
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
+import {
+  CreateRecurringScheduleParamsSchema,
+  UpdateRecurringScheduleParamsSchema,
+} from '@/lib/pending-operations/schemas/recurring-schedule'
+import {
+  computeInitialRunDate,
+  computeNextRunDate,
+  getStockholmDateHour,
+} from '@/lib/invoices/recurring-schedule-service'
+import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
+import {
+  buildInvoiceWriteData,
+  type InvoiceWriteInput,
+  type InvoiceWriteItemInput,
+} from '@/lib/invoices/build-invoice-write'
+import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
@@ -118,6 +140,7 @@ import type {
   PendingOperation,
   CompanySettings,
   InvoiceItem,
+  InvoiceDocumentType,
   AccountingMethod,
   CreditNote,
   CreateJournalEntryLineInput,
@@ -428,7 +451,7 @@ async function commitUpdateCompanySettings(
     .from('company_settings')
     .update(validated.changes)
     .eq('company_id', companyId)
-    .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference')
+    .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
     .single()
 
   if (error) {
@@ -450,6 +473,296 @@ async function commitUpdateCompanySettings(
       iban: data.iban ?? null,
       bic: data.bic ?? null,
       contact_person: data.default_our_reference ?? null,
+      email: data.email ?? null,
+      phone: data.phone ?? null,
+      website: data.website ?? null,
+      invoice_email_texts: data.invoice_email_texts ?? null,
+    },
+  }
+}
+
+async function commitCreateRecurringSchedule(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  // Re-validate at the commit boundary with the shared schema so a tampered
+  // pending_operations row is rejected with the same rules the staging tool
+  // and the cookie-session POST route enforce.
+  let validated
+  try {
+    validated = CreateRecurringScheduleParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return {
+        error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`,
+        status: 400,
+      }
+    }
+    throw err
+  }
+
+  const { data: customer, error: customerError } = await supabase
+    .from('customers')
+    .select('id, email')
+    .eq('id', validated.customer_id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (customerError) return { error: customerError.message, status: 500 }
+  if (!customer) return { error: 'Customer not found', status: 404 }
+
+  // auto_send without a customer email would silently degrade to a monthly
+  // draft + warning at cron time. Reject at commit exactly like the route.
+  if (validated.auto_send && !customer.email) {
+    return {
+      error: 'Customer has no email address: automatic sending requires one',
+      status: 400,
+    }
+  }
+
+  const nextRunDate = computeInitialRunDate(
+    new Date(),
+    validated.day_of_month,
+    validated.start_date,
+  )
+
+  const { data: schedule, error: insertError } = await supabase
+    .from('recurring_invoice_schedules')
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      customer_id: validated.customer_id,
+      name: validated.name,
+      day_of_month: validated.day_of_month,
+      send_hour: validated.send_hour,
+      payment_terms_days: validated.payment_terms_days,
+      currency: validated.currency,
+      your_reference: validated.your_reference ?? null,
+      our_reference: validated.our_reference ?? null,
+      notes: validated.notes ?? null,
+      auto_send: validated.auto_send,
+      next_run_date: nextRunDate,
+      status: 'active',
+    })
+    .select()
+    .single()
+
+  if (insertError || !schedule) {
+    return { error: insertError?.message ?? 'Failed to insert recurring schedule', status: 500 }
+  }
+
+  const itemRows = validated.items.map((item, idx) => ({
+    schedule_id: schedule.id,
+    sort_order: idx,
+    description: item.description,
+    quantity: item.quantity,
+    unit: item.unit,
+    unit_price: item.unit_price,
+    vat_rate: item.vat_rate ?? null,
+  }))
+
+  const { error: itemsError } = await supabase
+    .from('recurring_invoice_schedule_items')
+    .insert(itemRows)
+
+  if (itemsError) {
+    // Roll back the parent so a half-created schedule doesn't ship: an
+    // item-less schedule makes every cron run throw "schedule has no items"
+    // and silently skip billing dates.
+    await supabase
+      .from('recurring_invoice_schedules')
+      .delete()
+      .eq('id', schedule.id)
+      .eq('company_id', companyId)
+    return { error: itemsError.message, status: 500 }
+  }
+
+  return {
+    data: {
+      recurring_schedule_id: schedule.id,
+      name: validated.name,
+      customer_id: validated.customer_id,
+      day_of_month: validated.day_of_month,
+      send_hour: validated.send_hour,
+      currency: validated.currency,
+      auto_send: validated.auto_send,
+      status: 'active',
+      next_run_date: nextRunDate,
+      item_count: itemRows.length,
+    },
+  }
+}
+
+async function commitUpdateRecurringSchedule(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = UpdateRecurringScheduleParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return {
+        error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`,
+        status: 400,
+      }
+    }
+    throw err
+  }
+
+  const { schedule_id: scheduleId, changes } = validated
+  const { items, ...fieldChanges } = changes
+
+  const { data: existing, error: existingError } = await supabase
+    .from('recurring_invoice_schedules')
+    .select('id, status, auto_send, customer_id, day_of_month, next_run_date')
+    .eq('id', scheduleId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (existingError) return { error: existingError.message, status: 500 }
+  if (!existing) return { error: 'Recurring schedule not found', status: 404 }
+
+  // Turning auto_send on (or moving the schedule to another customer) needs
+  // the target customer checked: email when auto_send is effectively on
+  // (mirrors the PATCH route), and company membership always (this executor
+  // runs on a service-role client with no RLS, so a cross-tenant customer_id
+  // would otherwise pass the FK).
+  if (changes.customer_id !== undefined || changes.auto_send === true) {
+    const effectiveAutoSend = changes.auto_send ?? existing.auto_send
+    const { data: customer, error: customerError } = await supabase
+      .from('customers')
+      .select('id, email')
+      .eq('id', changes.customer_id ?? existing.customer_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (customerError) return { error: customerError.message, status: 500 }
+    if (!customer) return { error: 'Customer not found', status: 404 }
+    if (effectiveAutoSend && !customer.email) {
+      return {
+        error: 'Customer has no email address: automatic sending requires one',
+        status: 400,
+      }
+    }
+  }
+
+  const updateRow: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(fieldChanges)) {
+    if (v !== undefined) updateRow[k] = v
+  }
+
+  // Recompute next_run_date when the schedule is reactivated from a stale
+  // date or its day-of-month changed: mirror of the PATCH route. Always the
+  // next STRICTLY-future occurrence, never today, so an approval cannot
+  // trigger a same-hour surprise send. Editing other fields leaves
+  // next_run_date alone so an unrelated edit never skips an imminent send.
+  if (changes.status === 'active' || changes.day_of_month !== undefined) {
+    const reactivating = changes.status === 'active'
+    const dayChanged =
+      changes.day_of_month !== undefined && changes.day_of_month !== existing.day_of_month
+    const effectiveDay = changes.day_of_month ?? existing.day_of_month
+    const { date: todayStockholm } = getStockholmDateHour(new Date())
+    const stockholmToday = new Date(`${todayStockholm}T00:00:00Z`)
+
+    const staleOnReactivate = reactivating && existing.next_run_date <= todayStockholm
+    if (staleOnReactivate || dayChanged) {
+      const rolled = computeInitialRunDate(stockholmToday, effectiveDay)
+      updateRow.next_run_date =
+        rolled === todayStockholm
+          ? computeNextRunDate(stockholmToday, effectiveDay)
+          : rolled
+    }
+
+    // A conscious reactivation invalidates any lingering warning.
+    if (reactivating) {
+      updateRow.last_run_warning = null
+    }
+  }
+
+  if (Object.keys(updateRow).length > 0) {
+    const { error: updateError } = await supabase
+      .from('recurring_invoice_schedules')
+      .update(updateRow)
+      .eq('id', scheduleId)
+      .eq('company_id', companyId)
+
+    if (updateError) return { error: updateError.message, status: 500 }
+  }
+
+  let itemsReplaced = false
+  if (items) {
+    // Provided = replace all; omitted = keep existing (the schema contract).
+    // Snapshot first so a failed insert can restore the previous lines: an
+    // item-less schedule makes every cron run throw "schedule has no items"
+    // and silently skip billing dates.
+    const { data: previousItems } = await supabase
+      .from('recurring_invoice_schedule_items')
+      .select('sort_order, description, quantity, unit, unit_price, vat_rate')
+      .eq('schedule_id', scheduleId)
+
+    await supabase
+      .from('recurring_invoice_schedule_items')
+      .delete()
+      .eq('schedule_id', scheduleId)
+
+    const itemRows = items.map((item, idx) => ({
+      schedule_id: scheduleId,
+      sort_order: idx,
+      description: item.description,
+      quantity: item.quantity,
+      unit: item.unit,
+      unit_price: item.unit_price,
+      vat_rate: item.vat_rate ?? null,
+    }))
+
+    const { error: itemsError } = await supabase
+      .from('recurring_invoice_schedule_items')
+      .insert(itemRows)
+
+    if (itemsError) {
+      // Restore the snapshot so the schedule stays valid for the cron.
+      if (previousItems && previousItems.length > 0) {
+        const restoreRows = previousItems.map((row) => ({
+          schedule_id: scheduleId,
+          sort_order: row.sort_order,
+          description: row.description,
+          quantity: row.quantity,
+          unit: row.unit,
+          unit_price: row.unit_price,
+          vat_rate: row.vat_rate,
+        }))
+        const { error: restoreError } = await supabase
+          .from('recurring_invoice_schedule_items')
+          .insert(restoreRows)
+        if (restoreError) {
+          log.error(
+            'failed to restore schedule items after failed replace: schedule may be left empty',
+            restoreError,
+            { scheduleId },
+          )
+        }
+      }
+      return { error: itemsError.message, status: 500 }
+    }
+    itemsReplaced = true
+  }
+
+  return {
+    data: {
+      recurring_schedule_id: scheduleId,
+      status: changes.status ?? existing.status,
+      updated_fields: Object.keys(updateRow),
+      items_replaced: itemsReplaced,
+      ...(itemsReplaced && items ? { item_count: items.length } : {}),
+      ...(updateRow.next_run_date !== undefined
+        ? { next_run_date: updateRow.next_run_date }
+        : {}),
     },
   }
 }
@@ -990,6 +1303,65 @@ async function commitCreateTransaction(
     return { error: 'ledger_account must be a BAS 19xx cash account', status: 400 }
   }
 
+  // A foreign-currency row must carry its SEK translation from the moment it
+  // lands. The categorization path resolves a line amount through the LENIENT
+  // resolveSekAmount() (lib/bookkeeping/currency-utils.ts), which falls back to
+  // the RAW foreign number when amount_sek and exchange_rate are both empty. A
+  // staged 1500 USD row therefore debited 1500 kr while buildCurrencyMetadata()
+  // stamped the same line `currency: USD, amount_in_currency: 1500`: one line
+  // asserting two different amounts. Nothing catches it, because every leg is
+  // scaled by the same wrong factor so the verifikation still balances and no
+  // trigger fires. Under ML 8 kap 21-23 § the beskattningsunderlag must be
+  // translated at a published kurs, so the understatement lands straight in
+  // rutorna 05/10 or 48 of the momsdeklaration.
+  //
+  // Rate is fetched for the row's OWN date (not "today"), with the supabase
+  // client passed so `exchange_rates` acts as the read-through cache and as the
+  // last-cached-observation fallback when Riksbanken 429s. Identical call shape
+  // to lib/transactions/ingest.ts, which is the reference for this path.
+  //
+  // Resolved BEFORE ensureManualCashAccount below so a refusal leaves no
+  // half-created kassakonto behind (same ordering rationale as the arrival
+  // number in app/api/supplier-invoices/route.ts).
+  let amountSek: number | null = null
+  let exchangeRate: number | null = null
+  let exchangeRateDate: string | null = null
+
+  if (currency !== 'SEK') {
+    const rateDate = new Date(date)
+    let rateInfo: Awaited<ReturnType<typeof fetchExchangeRate>> = null
+    if (!Number.isNaN(rateDate.getTime())) {
+      try {
+        rateInfo = await fetchExchangeRate(currency, rateDate, supabase)
+      } catch {
+        // fetchExchangeRate swallows its own network errors and reports null; a
+        // throw can only come from a mock or a future refactor. Treat it as
+        // "no rate", never as a reason to invent one.
+        rateInfo = null
+      }
+    }
+    if (!rateInfo || !Number.isFinite(rateInfo.rate) || rateInfo.rate <= 0) {
+      // Refuse rather than insert with NULL. ingest.ts may store NULL because
+      // it is a bulk bank feed where one unreachable rate must not abort the
+      // batch, and its rows stay repairable via
+      // /api/transactions/[id]/refresh-exchange-rate. Here there is exactly one
+      // row, the approver is present, and storing NULL only relocates the
+      // failure to the categorization step, which does NOT refuse: it silently
+      // books 1:1. So the commit boundary is the last place the contradiction
+      // can still be surfaced to a human.
+      return {
+        error:
+          `Transaktionen är i ${currency} men ingen växelkurs kunde hämtas för ${date}. ` +
+          `Utan kurs skulle raden bokföras som om 1 ${currency} = 1 SEK. ` +
+          'Försök igen när kursen finns publicerad, eller registrera beloppet i kronor.',
+        status: 400,
+      }
+    }
+    exchangeRate = rateInfo.rate
+    exchangeRateDate = rateInfo.date ?? null
+    amountSek = roundOre(amount * exchangeRate)
+  }
+
   // Bind the row to a manual kassakonto when a ledger account is given, so
   // reconciliation and voucher matching resolve the real account instead of
   // falling back to 1930 (issue #1016). Find-or-create; the row's currency
@@ -1011,6 +1383,11 @@ async function commitCreateTransaction(
       description: description.trim(),
       amount,
       currency,
+      // NULL for a SEK row: the column means "SEK translation of a foreign
+      // amount", and amount already IS kronor. Mirrors ingest.ts.
+      amount_sek: amountSek,
+      exchange_rate: exchangeRate,
+      exchange_rate_date: exchangeRateDate,
       import_source: 'mcp',
     })
     .select('id')
@@ -1060,8 +1437,14 @@ async function commitCreateInvoice(
   }
 
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
-  const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
-  const allowedRates = new Set(availableRates.map((r) => r.rate))
+  // Gate on the PERMITTED set, not the picker default, exactly like
+  // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
+  // (hotel/restaurang 12%, persontransport and event admission 6%,
+  // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
+  // foreign business customer. The default is still 0% (vatRules.rate is the
+  // fallback below), so a Swedish rate only lands here when staged explicitly.
+  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+  const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // VAT registration gate (mirrors app/api/invoices/route.ts). A
   // non-momsregistrerad company books no output VAT: force every line to 0%
@@ -1100,23 +1483,65 @@ async function commitCreateInvoice(
 
   const total = subtotal + vatAmount
   const currency = ((params.currency as string) || 'SEK') as Currency
+  const invoiceDate = (params.invoice_date as string) || new Date().toISOString().split('T')[0]
 
+  // Sales-side twin of the supplier-invoice currency policy
+  // (lib/currency/supplier-invoice-rate.ts). Three defects lived here:
+  //
+  //  1. `fetchExchangeRate(currency)` passed NO date, so a back-dated invoice
+  //     was translated at TODAY'S kurs. ML 8 kap 21-23 § anchors the
+  //     beskattningsunderlag on the taxable event, and the registration
+  //     verifikat is posted on invoice_date, so the money and the verifikat
+  //     must be anchored on the same day. The staged params carry no
+  //     delivery_date, so invoice_date IS that event here (the web path,
+  //     lib/invoices/build-invoice-write.ts, prefers delivery_date when the
+  //     form supplied one).
+  //  2. No supabase client, so the shared `exchange_rates` cache was neither
+  //     read nor used as the last-cached-observation fallback when Riksbanken
+  //     rate-limits. One transient 429 left the invoice permanently unconverted.
+  //  3. A null result fell through in silence and stored exchange_rate = NULL,
+  //     which resolveSekAmount() then books 1:1: 1000 EUR posts 1000 kr to 3001
+  //     and 250 kr to 2611 instead of 11 500 and 2 875, understating ruta 05
+  //     and ruta 10 by the whole FX difference.
   let exchangeRate: number | null = null
   let exchangeRateDate: string | null = null
-  let subtotalSek: number | null = null
-  let vatAmountSek: number | null = null
-  let totalSek: number | null = null
+  // Multiplier to SEK. 1 for a SEK invoice, so the *_sek columns equal their
+  // invoice-currency counterparts instead of staying NULL: an ordinary Swedish
+  // invoice legitimately has no exchange_rate, and the old
+  // `if (currency !== 'SEK')` guard therefore left total_sek NULL on every one
+  // of them. Same fix, same reason, as supplierInvoiceSekAmounts().
+  let sekRate = 1
 
   if (currency !== 'SEK') {
-    const rateData = await fetchExchangeRate(currency)
-    if (rateData) {
-      exchangeRate = rateData.rate
-      exchangeRateDate = rateData.date
-      subtotalSek = convertToSEK(subtotal, exchangeRate)
-      vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-      totalSek = convertToSEK(total, exchangeRate)
+    const rateDate = new Date(invoiceDate)
+    let rateData: Awaited<ReturnType<typeof fetchExchangeRate>> = null
+    if (!Number.isNaN(rateDate.getTime())) {
+      try {
+        rateData = await fetchExchangeRate(currency, rateDate, supabase)
+      } catch {
+        rateData = null
+      }
     }
+    if (!rateData || !Number.isFinite(rateData.rate) || rateData.rate <= 0) {
+      // Refuse at the approval boundary. Storing NULL only relocates the
+      // failure: createInvoiceJournalEntry() already refuses such an invoice
+      // with INVOICE_FX_RATE_MISSING, by which point the invoice row (and its
+      // F-series number, once sent) exists and the approver has moved on.
+      return {
+        error:
+          getErrorEntry('INVOICE_FX_RATE_MISSING')?.message_sv ??
+          'Fakturan är i utländsk valuta men saknar växelkurs. Ange fakturans växelkurs innan den bokförs.',
+        status: 400,
+      }
+    }
+    exchangeRate = rateData.rate
+    exchangeRateDate = rateData.date ?? null
+    sekRate = rateData.rate
   }
+
+  const subtotalSek = roundOre(subtotal * sekRate)
+  const vatAmountSek = roundOre(vatAmount * sekRate)
+  const totalSek = roundOre(total * sekRate)
 
   const uniqueRates = new Set(billableItems.map((item) => item.vat_rate ?? vatRules.rate))
   const isMixedRate = uniqueRates.size > 1
@@ -1141,7 +1566,7 @@ async function commitCreateInvoice(
       company_id: companyId,
       customer_id: customerId,
       invoice_number: null,
-      invoice_date: (params.invoice_date as string) || new Date().toISOString().split('T')[0],
+      invoice_date: invoiceDate,
       due_date: (params.due_date as string) || null,
       currency,
       exchange_rate: exchangeRate,
@@ -1233,6 +1658,194 @@ async function commitCreateInvoice(
   return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number } }
 }
 
+/**
+ * Commit a staged update_invoice: rewrite a DRAFT invoice in place (header
+ * fields and/or a FULL REPLACE of its line items).
+ *
+ * Staging is not a lock: the invoice can be sent, paid, or credited between
+ * staging and approval, so the shared editable-draft predicate
+ * (isEditableInvoiceDraft) is re-checked HERE, and the row update carries a
+ * .eq('status','draft') guard so a concurrent send turns into a 0-row update
+ * instead of rewriting a now-issued invoice.
+ *
+ * Totals and VAT are recomputed by buildInvoiceWriteData: the exact builder
+ * the cookie PATCH route (app/api/invoices/[id]) and the v1 REST routes use,
+ * so VAT gating, accrual guards, ROT/RUT compute, and currency conversion
+ * cannot drift. When the staged changes carry no items, the existing rows are
+ * fed back through the builder so a header-only edit (e.g. a new invoice_date
+ * on a foreign-currency draft) still recomputes the SEK legs consistently.
+ */
+async function commitUpdateInvoice(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  // Re-validate staged params at the commit boundary (defense in depth: a
+  // hand-crafted pending_operations row must not reach the write below).
+  let validated
+  try {
+    validated = UpdateInvoiceParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return {
+        error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`,
+        status: 400,
+      }
+    }
+    throw err
+  }
+
+  const { invoice_id: invoiceId, changes } = validated
+
+  const { data: existing, error: fetchError } = await supabase
+    .from('invoices')
+    .select(
+      'id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, customer_id, document_type, invoice_date, due_date, delivery_date, currency, your_reference, our_reference, notes, payment_link_url, payment_link_auto, ore_rounding, default_dimensions, deduction_personnummer_encrypted, deduction_personnummer_last4',
+    )
+    .eq('id', invoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (fetchError) return { error: fetchError.message, status: 500 }
+  if (!existing) return { error: 'Invoice not found: it may have been deleted.', status: 404 }
+
+  if (!isEditableInvoiceDraft(existing)) {
+    return {
+      error: `Fakturan är inte längre ett redigerbart utkast (status: ${existing.status}). Skickade eller bokförda fakturor rättas med kreditfaktura.`,
+      status: 409,
+    }
+  }
+
+  // The customer is structural on a draft edit (never changed here): resolve
+  // the EXISTING customer for VAT rules.
+  const { data: customer, error: customerError } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('id', existing.customer_id)
+    .eq('company_id', companyId)
+    .single()
+
+  if (customerError || !customer) {
+    return { error: 'Customer not found: they may have been deleted.', status: 404 }
+  }
+
+  // Effective line set: FULL REPLACE when staged, otherwise the current rows
+  // fed back through the builder unchanged.
+  let itemsInput: InvoiceWriteItemInput[]
+  if (changes.items) {
+    itemsInput = changes.items as InvoiceWriteItemInput[]
+  } else {
+    const { data: itemRows, error: itemsFetchError } = await supabase
+      .from('invoice_items')
+      .select(
+        'line_type, description, quantity, unit, unit_price, vat_rate, article_id, revenue_account, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+      )
+      .eq('invoice_id', invoiceId)
+      .order('sort_order', { ascending: true })
+    if (itemsFetchError) return { error: itemsFetchError.message, status: 500 }
+    itemsInput = (itemRows ?? []) as InvoiceWriteItemInput[]
+  }
+  if (itemsInput.length === 0) {
+    return { error: 'Fakturan saknar rader: minst en rad krävs.', status: 400 }
+  }
+
+  // ROT/RUT claim info lives per line, not on the header: derive the
+  // invoice-level inputs the builder's presence checks expect from the first
+  // deduction line (per-line values win in the item mapping regardless).
+  const firstDeduction = itemsInput.find((item) => item.deduction_type)
+
+  const input: InvoiceWriteInput = {
+    customer_id: existing.customer_id,
+    invoice_date: changes.invoice_date ?? existing.invoice_date,
+    due_date: changes.due_date ?? existing.due_date,
+    delivery_date:
+      changes.delivery_date !== undefined ? changes.delivery_date : existing.delivery_date,
+    currency: existing.currency as Currency,
+    your_reference: changes.your_reference ?? existing.your_reference ?? undefined,
+    our_reference: changes.our_reference ?? existing.our_reference ?? undefined,
+    notes: changes.notes ?? existing.notes ?? undefined,
+    // Not editable through this operation: fed back so the builder echoes the
+    // stored values instead of clearing them.
+    payment_link_url: existing.payment_link_url ?? undefined,
+    payment_link_auto: existing.payment_link_auto ?? undefined,
+    ore_rounding: existing.ore_rounding ?? undefined,
+    deduction_housing_designation: firstDeduction?.housing_designation ?? undefined,
+    deduction_apartment_number: firstDeduction?.apartment_number ?? undefined,
+    deduction_brf_org_number: firstDeduction?.brf_org_number ?? undefined,
+    default_dimensions:
+      changes.default_dimensions ??
+      ((existing.default_dimensions as Record<string, string> | null) ?? {}),
+    items: itemsInput,
+  }
+
+  const build = await buildInvoiceWriteData({
+    supabase,
+    companyId,
+    customer: customer as Customer,
+    documentType: (existing.document_type || 'invoice') as InvoiceDocumentType,
+    input,
+    // The stored personnummer exists only as ciphertext: an edit that carries
+    // deduction lines but no plaintext keeps the stored value.
+    existingPersonnummer: existing.deduction_personnummer_encrypted
+      ? {
+          encrypted: existing.deduction_personnummer_encrypted,
+          last4: existing.deduction_personnummer_last4 ?? null,
+        }
+      : null,
+  })
+  if (!build.ok) {
+    if ('dbError' in build) {
+      const message = (build.dbError as { message?: string } | null)?.message
+      return { error: message ?? 'Database error', status: 500 }
+    }
+    const entry = getErrorEntry(build.code)
+    return {
+      error: entry?.message_sv ?? build.code,
+      status: entry?.httpStatus ?? 400,
+      data: build.details as Record<string, unknown> | undefined,
+    }
+  }
+
+  // invoice_number and status are intentionally NOT in build.invoiceFields:
+  // editing never (re)allocates a number nor changes lifecycle state.
+  const { data: updated, error: updateError } = await supabase
+    .from('invoices')
+    .update({ ...build.invoiceFields, updated_at: new Date().toISOString() })
+    .eq('id', invoiceId)
+    .eq('company_id', companyId)
+    .eq('status', 'draft')
+    .select('id')
+
+  if (updateError) return { error: updateError.message, status: 500 }
+  if (!updated || updated.length === 0) {
+    return {
+      error: 'Fakturan är inte längre ett utkast: den har skickats eller bokförts efter att ändringen förbereddes.',
+      status: 409,
+    }
+  }
+
+  const replaced = await replaceInvoiceItems(supabase, invoiceId, build.items)
+  if (!replaced.ok) {
+    return {
+      error: `Fakturaraderna kunde inte skrivas om (${replaced.stage}): ${replaced.error.message}`,
+      status: 500,
+    }
+  }
+
+  return {
+    data: {
+      invoice_id: invoiceId,
+      invoice_number: existing.invoice_number ?? null,
+      subtotal: build.invoiceFields.subtotal,
+      vat_amount: build.invoiceFields.vat_amount,
+      total: build.invoiceFields.total,
+      item_count: build.items.length,
+      items_replaced: Boolean(changes.items),
+    },
+  }
+}
+
 async function commitMarkInvoicePaid(
   supabase: SupabaseClient,
   userId: string,
@@ -1273,7 +1886,16 @@ async function commitMarkInvoicePaid(
       try {
         candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
           companyId,
-          invoice: { invoice_number: invoice.invoice_number, customer_name: customerName },
+          invoice: {
+            invoice_number: invoice.invoice_number,
+            customer_name: customerName,
+            currency: invoice.currency ?? null,
+            total: invoice.total ?? null,
+            total_sek: invoice.total_sek ?? null,
+            exchange_rate: invoice.exchange_rate ?? null,
+          },
+          // remaining_amount is stored in the invoice currency; the lookup
+          // converts it before banding kronor bank rows.
           paymentAmount: remainingAmount,
           paymentDate,
         })
@@ -1305,7 +1927,14 @@ async function commitMarkInvoicePaid(
           (invoice as { remaining_amount?: number }).remaining_amount ?? invoice.total
         const dismissed = await findDuplicatePaymentCandidatesForInvoice(supabase, {
           companyId,
-          invoice: { invoice_number: invoice.invoice_number, customer_name: customerName },
+          invoice: {
+            invoice_number: invoice.invoice_number,
+            customer_name: customerName,
+            currency: invoice.currency ?? null,
+            total: invoice.total ?? null,
+            total_sek: invoice.total_sek ?? null,
+            exchange_rate: invoice.exchange_rate ?? null,
+          },
           paymentAmount: remainingAmount,
           paymentDate,
         })
@@ -2682,6 +3311,40 @@ async function commitCreateSupplierInvoiceFromInbox(
 
   if (supplierErr || !supplier) return { error: 'Supplier not found', status: 404 }
 
+  // Fourth and last supplier-invoice write path to adopt the shared resolver
+  // (POST /api/supplier-invoices, POST /api/v1/.../supplier-invoices and the
+  // inbox convert route went first). It took `params.exchange_rate` verbatim
+  // with no fetch, so an inbox conversion whose staging-time lookup failed
+  // (the MCP tool stages `exchange_rate: null` + `exchange_rate_source:
+  // 'lookup_failed'` in that case) persisted a foreign invoice with
+  // exchange_rate = NULL. createSupplierInvoiceRegistrationEntry then refuses
+  // it with SI_FX_RATE_MISSING further down, after the ankomstnummer has
+  // already been burnt, and a NULL rate that does reach a lenient reader
+  // understates the fiktiv moms on 2614/2645, i.e. rutorna 20-24 + 30-32.
+  //
+  // Sharing the resolver is what keeps the four paths in agreement: the
+  // currency policy, the SEK arithmetic and the refusal are defined once. A
+  // caller-supplied positive rate is still trusted verbatim, which is what
+  // makes the approved preview number the number written; only a missing rate
+  // triggers the Riksbanken fetch, anchored on invoice_date with the supabase
+  // client passed so `exchange_rates` serves as the read-through cache.
+  //
+  // Resolved BEFORE get_next_arrival_number so a refusal never burns an
+  // ankomstnummer: same ordering as app/api/supplier-invoices/route.ts.
+  const fx = await resolveSupplierInvoiceExchangeRate(supabase, {
+    currency,
+    invoiceDate,
+    suppliedRate: exchangeRate,
+  })
+  if (!fx.ok) {
+    return {
+      error:
+        getErrorEntry('SI_FX_RATE_MISSING')?.message_sv ??
+        'Leverantörsfakturan är i utländsk valuta men saknar växelkurs. Ange fakturans växelkurs innan den bokförs.',
+      status: 400,
+    }
+  }
+
   const { data: arrivalNum, error: arrivalErr } = await supabase
     .rpc('get_next_arrival_number', { p_company_id: companyId })
 
@@ -2693,9 +3356,20 @@ async function commitCreateSupplierInvoiceFromInbox(
   const subtotalRounded = Math.round(subtotal * 100) / 100
   const vatAmountRounded = Math.round(vatAmount * 100) / 100
   const totalRounded = Math.round(total * 100) / 100
-  const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
-  const vatAmountSek = exchangeRate ? Math.round(vatAmount * exchangeRate * 100) / 100 : null
-  const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
+  // Fed the already-rounded figures so a SEK invoice (rate 1) gets
+  // total_sek === total to the öre instead of the two roundings disagreeing on
+  // an exact-half value. The old `exchangeRate ? … : null` guard left all three
+  // SEK columns NULL on every ordinary Swedish invoice, which is what blanked
+  // the SEK-reporting readers (the KPI "Största leverantörer" panel among them).
+  const {
+    subtotal_sek: subtotalSek,
+    vat_amount_sek: vatAmountSek,
+    total_sek: totalSek,
+  } = supplierInvoiceSekAmounts(fx.rate, {
+    subtotal: subtotalRounded,
+    vatAmount: vatAmountRounded,
+    total: totalRounded,
+  })
 
   const { data: invoice, error: invoiceErr } = await supabase
     .from('supplier_invoices')
@@ -2708,8 +3382,11 @@ async function commitCreateSupplierInvoiceFromInbox(
       invoice_date: invoiceDate,
       due_date: dueDate,
       status: 'registered',
-      currency,
-      exchange_rate: exchangeRate,
+      currency: fx.rate.currency,
+      exchange_rate: fx.rate.exchangeRate,
+      // Which day's kurs the SEK amounts were translated at: the audit trail
+      // that makes them verifiable under BFL 5 kap.
+      exchange_rate_date: fx.rate.exchangeRateDate,
       vat_treatment: vatTreatment,
       reverse_charge: reverseCharge,
       paid_with_private_funds: false,
@@ -4647,6 +5324,15 @@ async function commitPendingOperationInner(
         break
       case 'update_customer':
         result = await commitUpdateCustomer(supabase, companyId, pendingOp.params)
+        break
+      case 'update_invoice':
+        result = await commitUpdateInvoice(supabase, companyId, pendingOp.params)
+        break
+      case 'create_recurring_schedule':
+        result = await commitCreateRecurringSchedule(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'update_recurring_schedule':
+        result = await commitUpdateRecurringSchedule(supabase, companyId, pendingOp.params)
         break
       case 'update_company_settings':
         result = await commitUpdateCompanySettings(supabase, companyId, pendingOp.params)

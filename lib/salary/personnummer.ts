@@ -82,8 +82,21 @@ export function extractLast4(personnummer: string): string {
 }
 
 /**
- * Validate a Swedish personnummer (12-digit format: YYYYMMDDNNNN).
- * Checks format + Luhn checksum on last 10 digits.
+ * Validate a Swedish personnummer or samordningsnummer (12-digit format:
+ * YYYYMMDDNNNN). Checks format + Luhn checksum on last 10 digits.
+ *
+ * A samordningsnummer is the identity number Skatteverket assigns to a person
+ * who has no personnummer. It has the same shape, except the day field carries
+ * an added 60, so the printed day is 61-91 instead of 1-31. Skatteverket files
+ * these under FK215 in the arbetsgivardeklaration exactly like a personnummer,
+ * and our own AGI generator accepts them (see IDENTITET_PATTERN in
+ * lib/salary/agi/xml-generator.ts, which spells out "samordningsnummer where
+ * day = actual_day + 60"). Rejecting them here meant the system could file an
+ * AGI for someone it refused to register as an employee.
+ *
+ * The Luhn check digit is computed over the printed digits, the +60 day
+ * included: a samordningsnummer has no underlying non-offset form to compute it
+ * from. So the checksum below is deliberately untouched by the offset.
  */
 export function validatePersonnummer(personnummer: string): { valid: boolean; error?: string } {
   const digits = personnummer.replace(/\D/g, '')
@@ -102,7 +115,13 @@ export function validatePersonnummer(personnummer: string): { valid: boolean; er
   if (month < 1 || month > 12) {
     return { valid: false, error: 'Ogiltig månad' }
   }
-  if (day < 1 || day > 31) {
+  // Strip the samordningsnummer offset before range-checking the day, so both
+  // forms collapse to a real 1-31 calendar day. This accepts 1-31 (personnummer)
+  // and 61-91 (samordningsnummer) while still rejecting 32-60 and 92-99, which
+  // are neither: 32-60 is an out-of-range day that has not been offset, and
+  // 92-99 offsets back to day 32-39.
+  const birthDay = day > 60 ? day - 60 : day
+  if (birthDay < 1 || birthDay > 31) {
     return { valid: false, error: 'Ogiltig dag' }
   }
 
@@ -133,14 +152,22 @@ function luhnCheck(digits: string): boolean {
 }
 
 /**
- * Extract birth date from a 12-digit personnummer.
+ * Extract birth date from a 12-digit personnummer or samordningsnummer.
+ *
+ * A samordningsnummer prints the day offset by 60 (61-91). The offset is a
+ * numbering convention, not a calendar fact, so the returned `day` is always
+ * the real 1-31 calendar day: consumers doing date math (calculateAge's
+ * birthday comparison, or anything constructing a Date) would otherwise be
+ * off by 60 days. The Luhn checksum is computed over the printed, offset
+ * digits and is untouched by this normalization (see validatePersonnummer).
  */
 export function extractBirthDate(personnummer: string): { year: number; month: number; day: number } {
   const digits = personnummer.replace(/\D/g, '')
+  const printedDay = parseInt(digits.slice(6, 8))
   return {
     year: parseInt(digits.slice(0, 4)),
     month: parseInt(digits.slice(4, 6)),
-    day: parseInt(digits.slice(6, 8)),
+    day: printedDay > 60 ? printedDay - 60 : printedDay,
   }
 }
 
@@ -187,4 +214,34 @@ export function maskPersonnummer(personnummer: string): string {
 export function formatPersonnummer(personnummer: string): string {
   const digits = personnummer.replace(/\D/g, '')
   return `${digits.slice(0, 8)}-${digits.slice(8)}`
+}
+
+/**
+ * Shape a raw `employees` row (or an embedded employee object) for a JSON
+ * response: drop every personnummer-derived column and expose the display
+ * form under `personnummer_masked`.
+ *
+ * Two columns must go, not one:
+ *   - `personnummer` (the AES-256-GCM ciphertext), and
+ *   - `personnummer_last4`: the mask is 'YYYYMMDD-XXXX', so a response that
+ *     carries the mask AND the last four digits hands the client the full
+ *     personnummer by simple concatenation, defeating the mask entirely.
+ *     No UI reads employees.personnummer_last4; it exists for the DB-side
+ *     uniqueness constraint and Skatteverket-bound documents (payslips, AGI,
+ *     KU), which render server-side.
+ *
+ * The mask goes out under `personnummer_masked`, never under the writable
+ * `personnummer` key: these payloads feed edit forms, and a mask returned
+ * under the write key could be posted straight back into the encrypt path.
+ * v1, the MCP tools and lib/salary/employee-commands.ts use the `_masked`
+ * suffix for the same reason.
+ */
+export function maskEmployeeForResponse(
+  employee: Record<string, unknown>
+): Record<string, unknown> {
+  const { personnummer, personnummer_last4: _last4, ...rest } = employee
+  return {
+    ...rest,
+    personnummer_masked: maskPersonnummer(decryptPersonnummer(personnummer as string)),
+  }
 }

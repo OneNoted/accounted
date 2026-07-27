@@ -172,7 +172,17 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
         body: JSON.stringify({ dry_run: false, account_numbers: [...selected] }),
       })
       const body = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(body?.error)
+      if (!res.ok) {
+        // `new Error(body.error)` collapses the canonical envelope
+        // `{ error: { code, message } }` to "[object Object]" and loses the
+        // route's own reason (an account still referenced by a posted entry
+        // is refused with a specific message). Map the body plus the status.
+        toast({
+          title: getUserErrorMessage(body, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
       const deleted: string[] = body?.data?.deleted ?? []
       const skipped: string[] = [
         ...(body?.data?.skipped ?? []),

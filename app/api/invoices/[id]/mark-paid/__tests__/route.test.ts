@@ -705,4 +705,228 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
+
+  // ------------------------------------------------------------------
+  // Foreign-currency unit handling.
+  // total / paid_amount / remaining_amount are stored in the INVOICE currency;
+  // custom lines are journal lines and therefore SEK. Everything below pins
+  // the conversion between the two.
+  // ------------------------------------------------------------------
+
+  it('converts a SEK custom-line payment to invoice currency before touching the ledger (EUR, partial)', async () => {
+    // 1 000 EUR invoice at 11,4967 SEK/EUR. The customer pays 5 748,35 kr,
+    // which is exactly 500 EUR: a genuine partial payment. Without the
+    // conversion the guard compared 5 748,35 (SEK) against 1 000 (EUR), read
+    // the partial as a full settlement and ran the duplicate-payment guard on
+    // it: a matching bank row would then 409 a perfectly valid partial.
+    const customer = makeCustomer()
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      currency: 'EUR',
+      exchange_rate: 11.4967,
+      total: 1000,
+      remaining_amount: 1000,
+      customer,
+    })
+
+    enqueue({ data: invoice, error: null })
+    // No duplicate-guard probes enqueued: 500 EUR < 1 000 EUR remaining, so the
+    // guard is skipped entirely.
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
+
+    mockFindFiscalPeriod.mockResolvedValue('fp-1')
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-eur-partial' })
+    const paidHandler = vi.fn()
+    eventBus.on('invoice.paid', paidHandler)
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1930', debit_amount: 5748.35, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 5748.35 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      status: string
+      paid_amount: number
+      remaining_amount: number
+      journal_entry_id: string
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.status).toBe('partially_paid')
+    // Both in EUR, never 5 748,35 and never a negative remainder.
+    expect(body.paid_amount).toBe(500)
+    expect(body.remaining_amount).toBe(500)
+    expect(body.journal_entry_id).toBe('je-eur-partial')
+    // The load-bearing assertion for the guard fix: the guard compares in
+    // invoice currency now, so a 500 EUR payment on a 1 000 EUR remaining is a
+    // partial and the transactions scan never runs. Comparing the raw SEK
+    // 5 748,35 against 1 000 read it as a full settlement and probed.
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('transactions')
+    // The event carries the invoice-currency amount, matching the ledger.
+    expect(paidHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentAmount: 500 }),
+    )
+  })
+
+  it('still runs the duplicate guard when the converted SEK lines settle a EUR invoice in full', async () => {
+    // The complement of the test above: 11 496,70 kr at 11,4967 is exactly the
+    // 1 000 EUR remaining, so this IS a full settlement and the advisory must
+    // still fire. Converting for the comparison must not disable the guard on
+    // foreign-currency invoices.
+    const customer = makeCustomer()
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      currency: 'EUR',
+      exchange_rate: 11.4967,
+      total: 1000,
+      remaining_amount: 1000,
+      customer,
+    })
+
+    enqueue({ data: invoice, error: null })
+    // merchant_name ILIKE probe: the bank row is in kronor, because the
+    // candidate lookup scans transactions.amount, which is SEK.
+    enqueue({
+      data: [
+        {
+          id: 'tx-eur',
+          date: '2026-05-10',
+          amount: 11496.7,
+          description: 'Inbetalning Test AB',
+          merchant_name: 'Test AB',
+          reference: null,
+        },
+      ],
+      error: null,
+    })
+    // description ILIKE probe: no additional match.
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1930', debit_amount: 11496.7, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 11496.7 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { candidates: Array<{ id: string }> } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_PAID_LIKELY_DUPLICATE')
+    expect(body.error.details.candidates[0].id).toBe('tx-eur')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING when a EUR invoice carries no exchange rate', async () => {
+    // 11 496,70 kr against a 1 000 EUR invoice with no rate on file. Defaulting
+    // the rate to 1 would read the payment as 11 496,70 EUR.
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      currency: 'EUR',
+      exchange_rate: null,
+      total: 1000,
+      remaining_amount: 1000,
+    })
+
+    enqueue({ data: invoice, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1930', debit_amount: 11496.7, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 11496.7 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: unknown } }>(response)
+
+    expect(status).toBe(400)
+    // Same code the bank-match path throws for the same condition
+    // (lib/bookkeeping/invoice-payment-lines.ts).
+    expect(body.error.code).toBe('MATCH_INVOICE_BOOKING_RATE_MISSING')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a sub-remaining SEK payment on a rate-less EUR invoice instead of booking kronor as euro', async () => {
+    // The silent-corruption direction: 500 kr against a 1 000 EUR invoice sits
+    // below the invoice-currency remaining, so no overpayment guard catches it.
+    // With a rate-1 fallback it recorded 500 EUR paid and left 500 EUR
+    // remaining, when the customer had really paid ~43 EUR.
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      currency: 'EUR',
+      exchange_rate: null,
+      total: 1000,
+      remaining_amount: 1000,
+    })
+
+    enqueue({ data: invoice, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1930', debit_amount: 500, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_INVOICE_BOOKING_RATE_MISSING')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('leaves a rate-less EUR invoice payable when no custom lines are supplied', async () => {
+    // The default path pays remaining_amount, which is already in invoice
+    // currency: no conversion happens, so no rate is required.
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      currency: 'EUR',
+      exchange_rate: null,
+      total: 1000,
+      remaining_amount: 1000,
+    })
+
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
+
+    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-eur-full' })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      status: string
+      paid_amount: number
+      remaining_amount: number
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.status).toBe('paid')
+    expect(body.paid_amount).toBe(1000)
+    expect(body.remaining_amount).toBe(0)
+  })
 })

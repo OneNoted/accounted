@@ -21,6 +21,37 @@ interface ValidationOptions {
   operation?: string
 }
 
+/** How many field issues the human-readable `error` summary names before truncating. */
+const SUMMARY_ISSUE_LIMIT = 3
+
+/**
+ * Build the human-readable `error` string for a Zod validation failure.
+ *
+ * `errors[]` keeps the full machine-readable detail, but plenty of clients read
+ * only `error`. A constant there ('Validation failed') either reached the user
+ * as English boilerplate in a Swedish UI, or got swallowed by
+ * `getErrorMessage()`'s generic "Något gick fel" fallback because the constant
+ * matches nothing it knows. The 'Valideringsfel' lead-in is load-bearing: it is
+ * what makes `getErrorMessage()` recognize the sentence as an already-Swedish
+ * user message and pass it through verbatim, so clients that forward
+ * `body.error` alone still show the actionable field message.
+ *
+ * `type: 'validation_error'` remains the machine-readable discriminator; nothing
+ * should branch on this prose.
+ */
+function summarizeIssues(errors: Array<{ field: string; message: string }>): string {
+  const shown = errors
+    .slice(0, SUMMARY_ISSUE_LIMIT)
+    .map((issue) => (issue.field ? `${issue.field}: ${issue.message}` : issue.message))
+    .filter((text) => text.trim() !== '')
+
+  if (shown.length === 0) return 'Valideringsfel: kontrollera fälten och försök igen.'
+
+  const hidden = errors.length - SUMMARY_ISSUE_LIMIT
+  const more = hidden > 0 ? ` (+${hidden} till)` : ''
+  return `Valideringsfel: ${shown.join('. ')}${more}`
+}
+
 function logIssues(
   options: ValidationOptions | undefined,
   kind: 'body' | 'query' | 'json',
@@ -86,7 +117,7 @@ export async function validateBody<T>(
       success: false,
       response: NextResponse.json(
         {
-          error: 'Validation failed',
+          error: summarizeIssues(errors),
           type: 'validation_error',
           errors,
         },

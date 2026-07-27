@@ -26,7 +26,7 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
-import { GET } from '../route'
+import { GET, POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
@@ -77,8 +77,8 @@ describe('GET /api/salary/employees', () => {
   it('does not 500 on a mixed plaintext + encrypted roster; masks both', async () => {
     authed(
       supabaseWithRows([
-        { id: 'e1', last_name: 'A', personnummer: PLAINTEXT_PNR },
-        { id: 'e2', last_name: 'B', personnummer: ENCRYPTED_PNR },
+        { id: 'e1', last_name: 'A', personnummer: PLAINTEXT_PNR, personnummer_last4: '0000' },
+        { id: 'e2', last_name: 'B', personnummer: ENCRYPTED_PNR, personnummer_last4: '0000' },
       ]),
     )
 
@@ -86,10 +86,93 @@ describe('GET /api/salary/employees', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     // Both rows masked birthdate-visible, last-4 hidden.
-    expect(body.data[0].personnummer).toBe('19000101-XXXX')
-    expect(body.data[1].personnummer).toBe('19020304-XXXX')
+    expect(body.data[0].personnummer_masked).toBe('19000101-XXXX')
+    expect(body.data[1].personnummer_masked).toBe('19020304-XXXX')
     // Neither the plaintext nor the stored ciphertext may leak.
     expect(JSON.stringify(body)).not.toContain(PLAINTEXT_PNR)
     expect(JSON.stringify(body)).not.toContain(ENCRYPTED_PNR)
+  })
+
+  it('never returns the mask under the writable `personnummer` key', async () => {
+    // The roster feeds edit forms. If the mask came back as `personnummer`, a
+    // client that reads a row and writes it back would post 'ÅÅÅÅMMDD-XXXX'
+    // into the encrypt path. The masked value lives under `personnummer_masked`
+    // so the read key and the write key can never be confused.
+    authed(supabaseWithRows([{ id: 'e1', last_name: 'A', personnummer: ENCRYPTED_PNR }]))
+
+    const res = await GET(req(), params)
+    const body = await res.json()
+    expect(body.data[0].personnummer).toBeUndefined()
+    expect('personnummer' in body.data[0]).toBe(false)
+    expect(body.data[0].personnummer_masked).toBe('19020304-XXXX')
+  })
+
+  it('strips personnummer_last4 so the mask cannot be reassembled', async () => {
+    // The mask is YYYYMMDD-XXXX. A response carrying the mask AND the last
+    // four digits hands the client the full personnummer by concatenation, so
+    // personnummer_last4 must never ride along with the roster rows.
+    authed(
+      supabaseWithRows([
+        { id: 'e1', last_name: 'A', personnummer: ENCRYPTED_PNR, personnummer_last4: '0000' },
+      ]),
+    )
+
+    const res = await GET(req(), params)
+    const body = await res.json()
+    expect(body.data[0]).not.toHaveProperty('personnummer_last4')
+    expect(body.data[0]).not.toHaveProperty('personnummer')
+    expect(body.data[0].personnummer_masked).toBe('19020304-XXXX')
+  })
+})
+
+describe('POST /api/salary/employees', () => {
+  // Luhn-valid synthetic personnummer (checksum verified in personnummer.test.ts).
+  const NEW_PNR = '199001019802'
+
+  function supabaseWithInsert(returned: Record<string, unknown>) {
+    const single = vi.fn(() => Promise.resolve({ data: returned, error: null }))
+    const select = vi.fn(() => ({ single }))
+    const insert = vi.fn(() => ({ select }))
+    return { supabase: { from: vi.fn(() => ({ insert })) }, insert }
+  }
+
+  it('create response carries the mask only: no ciphertext, no last4', async () => {
+    const inserted = {
+      id: 'emp-new',
+      company_id: 'company-1',
+      first_name: 'Test',
+      last_name: 'Testsson',
+      personnummer: encryptPersonnummer(NEW_PNR),
+      personnummer_last4: '9802',
+      employment_type: 'employee',
+    }
+    const { supabase } = supabaseWithInsert(inserted)
+    authed(supabase)
+
+    const res = await POST(
+      new Request('https://x.test/api/salary/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: 'Test',
+          last_name: 'Testsson',
+          personnummer: NEW_PNR,
+          employment_start: '2026-01-01',
+          monthly_salary: 30000,
+          tax_table_number: 34,
+          tax_municipality: 'Stockholm',
+        }),
+      }),
+      params,
+    )
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.personnummer_masked).toBe('19900101-XXXX')
+    expect(body.data).not.toHaveProperty('personnummer')
+    expect(body.data).not.toHaveProperty('personnummer_last4')
+    // Neither the full personnummer nor its suffix may appear anywhere in the
+    // serialized response: mask + last4 would reassemble the identity.
+    expect(JSON.stringify(body)).not.toContain(NEW_PNR)
+    expect(JSON.stringify(body)).not.toContain('9802')
   })
 })

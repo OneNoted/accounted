@@ -465,6 +465,150 @@ describe('gnubok_set_employee_opening_balances', () => {
       ),
     ).rejects.toThrow(/Invalid opening balances/)
   })
+
+  // The tool advertises idempotentHint: true and only requires employee_id +
+  // cutover_date, but every omitted field carries a Zod .default(). Without a
+  // merge, correcting one YTD figure silently zeroes the other eight columns:
+  // the semesterlöneskuld on 2920/2940 and the sparade dagar carried across
+  // years are real balances, not blanks to be re-derived.
+  const STORED_ROW = {
+    employee_id: EMPLOYEE_ID,
+    ytd_gross: 210000,
+    ytd_tax: 48000,
+    ytd_net: 162000,
+    vacation_paid_days_remaining: 12.5,
+    vacation_saved_days_by_year: { [`${CURRENT_YEAR - 1}`]: 5 },
+    opening_semester_liability: 42000,
+    opening_semester_liability_avgifter: 13196.4,
+    karens_periods_adjustment: 1,
+  }
+
+  function mockWithStoredRow(stored: Record<string, unknown> | null) {
+    return makeCapturingSupabase({
+      employee_opening_balances: { data: stored ? [stored] : [] },
+      employees: {
+        data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
+      },
+      salary_run_employees: { data: [] },
+      pending_operations: { data: { id: 'op-6' }, error: null },
+    })
+  }
+
+  /** The items actually persisted to pending_operations.params. */
+  function stagedItems(mock: { inserts: Record<string, unknown[]> }) {
+    const insert = mock.inserts.pending_operations?.[0] as {
+      params: { items: Array<Record<string, unknown>> }
+    }
+    return insert.params.items
+  }
+
+  it('correcting one YTD figure leaves the other eight fields untouched', async () => {
+    const supabaseMock = mockWithStoredRow(STORED_ROW)
+
+    const result = (await setOpeningBalances.execute(
+      {
+        items: [
+          {
+            employee_id: EMPLOYEE_ID,
+            cutover_date: `${CURRENT_YEAR}-07-01`,
+            ytd_gross: 215000,
+          },
+        ],
+      },
+      'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const [item] = stagedItems(supabaseMock)
+    expect(item.ytd_gross).toBe(215000)
+    expect(item.ytd_tax).toBe(48000)
+    expect(item.ytd_net).toBe(162000)
+    expect(item.vacation_paid_days_remaining).toBe(12.5)
+    expect(item.vacation_saved_days_by_year).toEqual({ [`${CURRENT_YEAR - 1}`]: 5 })
+    expect(item.opening_semester_liability).toBe(42000)
+    expect(item.opening_semester_liability_avgifter).toBe(13196.4)
+    expect(item.karens_periods_adjustment).toBe(1)
+
+    expect(result.preview.updated_rows).toBe(1)
+    expect(result.preview.new_rows).toBe(0)
+    expect(result.preview.fields_provided).toEqual(['ytd_gross'])
+  })
+
+  it('clears a field only when it is sent explicitly', async () => {
+    const supabaseMock = mockWithStoredRow(STORED_ROW)
+
+    await setOpeningBalances.execute(
+      {
+        items: [
+          {
+            employee_id: EMPLOYEE_ID,
+            cutover_date: `${CURRENT_YEAR}-07-01`,
+            karens_periods_adjustment: 0,
+            vacation_saved_days_by_year: {},
+          },
+        ],
+      },
+      'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+    )
+
+    const [item] = stagedItems(supabaseMock)
+    expect(item.karens_periods_adjustment).toBe(0)
+    expect(item.vacation_saved_days_by_year).toEqual({})
+    // Untouched neighbours survive the clear.
+    expect(item.opening_semester_liability).toBe(42000)
+    expect(item.ytd_gross).toBe(210000)
+  })
+
+  it('first-time cutover still lands on the schema defaults', async () => {
+    const supabaseMock = mockWithStoredRow(null)
+
+    const result = (await setOpeningBalances.execute(
+      {
+        items: [
+          {
+            employee_id: EMPLOYEE_ID,
+            cutover_date: `${CURRENT_YEAR}-07-01`,
+            ytd_gross: 210000,
+            ytd_tax: 48000,
+          },
+        ],
+      },
+      'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const [item] = stagedItems(supabaseMock)
+    expect(item.ytd_gross).toBe(210000)
+    expect(item.ytd_tax).toBe(48000)
+    expect(item.ytd_net).toBe(0)
+    expect(item.vacation_paid_days_remaining).toBe(0)
+    expect(item.vacation_saved_days_by_year).toEqual({})
+    expect(item.opening_semester_liability).toBe(0)
+    expect(item.karens_periods_adjustment).toBe(0)
+    expect(result.preview.new_rows).toBe(1)
+    expect(result.preview.updated_rows).toBe(0)
+  })
+
+  it('validates the MERGED state, not the sparse patch', async () => {
+    // Stored ytd_gross is 210000; lowering it below the stored ytd_tax must
+    // fail rather than quietly persisting tax > gross.
+    const supabaseMock = mockWithStoredRow(STORED_ROW)
+
+    await expect(
+      setOpeningBalances.execute(
+        {
+          items: [
+            {
+              employee_id: EMPLOYEE_ID,
+              cutover_date: `${CURRENT_YEAR}-07-01`,
+              ytd_gross: 1000,
+            },
+          ],
+        },
+        'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/ytd_tax/)
+  })
 })
 
 describe('gnubok_close_vacation_year', () => {

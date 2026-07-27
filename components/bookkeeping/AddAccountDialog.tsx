@@ -93,8 +93,15 @@ export function AddAccountDialog({
       })
 
       if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || 'Kunde inte skapa kontot')
+        // Map the response itself, not `new Error(data.error)`: the route
+        // answers thrown errors with the canonical envelope
+        // `{ error: { code, message } }`, and the Error constructor would
+        // stringify that object to "[object Object]", throwing away the
+        // route's own Swedish reason. Passing the parsed body plus the status
+        // resolves all three shapes (envelope, bare string, no body).
+        const body = await response.json().catch(() => null)
+        setError(getUserErrorMessage(body, { statusCode: response.status }))
+        return
       }
 
       const { data: createdAccount } = await response.json() as { data: BASAccount }

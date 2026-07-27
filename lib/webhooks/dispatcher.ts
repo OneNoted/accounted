@@ -165,7 +165,7 @@ export async function dispatchDueDeliveries(args: {
         log.warn('delivery dead', { ...logCtx, reason: outcome.reason, responseStatus: outcome.responseStatus })
         summary.dead++
         if (outcome.disableWebhook) {
-          await disableWebhook(args.supabase, webhook.id, outcome.reason)
+          await disableWebhook(args.supabase, webhook.id, webhook.company_id, outcome.reason)
           log.warn('webhook auto-disabled', { ...logCtx, reason: outcome.reason })
         }
         break
@@ -349,15 +349,27 @@ async function markDead(
 async function disableWebhook(
   supabase: SupabaseClient,
   webhookId: string,
+  companyId: string,
   reason: string,
 ): Promise<void> {
   // Snapshot before the disable so the audit entry can record the prior
   // state. Service-role read; bypasses RLS.
-  const { data: prior } = await supabase
+  //
+  // `webhooks` has NO user_id column: the legacy automation_webhooks table
+  // never had one and webhooks_v2 (20260515170000) didn't add one. Tenancy
+  // lives on company_id (NOT NULL) and the only actor attribution is
+  // created_by_api_key_id. Selecting a phantom column makes PostgREST fail
+  // the ENTIRE read (42703), which previously left `prior` null and the
+  // audit row unscoped, so the read error is checked and logged here rather
+  // than silently degrading to a null snapshot.
+  const { data: prior, error: priorErr } = await supabase
     .from('webhooks')
-    .select('user_id, company_id, name, active, disabled_at, disabled_reason')
+    .select('company_id, name, active, disabled_at, disabled_reason')
     .eq('id', webhookId)
     .maybeSingle()
+  if (priorErr) {
+    log.warn('webhook prior-state snapshot failed', { webhookId, code: priorErr.code })
+  }
 
   const { error } = await supabase
     .from('webhooks')
@@ -373,21 +385,26 @@ async function disableWebhook(
   }
 
   // V16 security event log. Auto-disable is a privileged action taken by
-  // the dispatcher (not a human caller), so actor_id is null. The
-  // audit_log entry is written UNCONDITIONALLY (even when prior is null
-  // or prior.user_id is null) because the SECURITY_EVENT must produce
-  // a durable record (A.8.15 / V16.1.1 / CC7.2). The audit_log.user_id
-  // column is nullable post-multi-tenant-refactor (20260330130000), so
-  // a system-initiated event can legitimately write user_id=NULL. Such
-  // rows are invisible under the user-scoped SELECT policy but remain
-  // queryable under service-role review, which is appropriate for
-  // system-initiated events.
+  // the dispatcher cron itself, not by a human caller or a credential:
+  // user_id and actor_id stay null and the attribution is carried by
+  // actor_type/actor_label instead ('system' is in the
+  // audit_log_actor_type_check allowlist; same vocabulary the
+  // commit_journal_entry audit row uses, migration 20260619120000).
+  //
+  // company_id comes from the webhook row the dispatch loop already
+  // loaded and tenancy-checked against the delivery: the audit row keeps
+  // its company scope even when the prior-state snapshot read fails, so
+  // it stays visible to the per-company audit trail (getAuditLog filters
+  // on company_id).
+  //
+  // The entry is written UNCONDITIONALLY (even when prior is null)
+  // because the SECURITY_EVENT must produce a durable record
+  // (A.8.15 / V16.1.1 / CC7.2).
   //
   // The reason discriminates between the three auto-disable paths
   // (http_410_gone / redirect_blocked / url_unsafe:<class>) so SIEM
   // tooling can alert on systematic patterns.
   const p = prior as {
-    user_id: string | null
     company_id: string | null
     name: string
     active: boolean
@@ -396,12 +413,14 @@ async function disableWebhook(
   } | null
 
   const { error: auditErr } = await supabase.from('audit_log').insert({
-    user_id: p?.user_id ?? null,
-    company_id: p?.company_id ?? null,
+    user_id: null,
+    company_id: companyId,
     action: 'SECURITY_EVENT',
     table_name: 'webhooks',
     record_id: webhookId,
     actor_id: null,
+    actor_type: 'system',
+    actor_label: 'webhook-dispatcher',
     description: p
       ? `Webhook auto-disabled by dispatcher: ${reason} (was "${p.name}")`
       : `Webhook auto-disabled by dispatcher: ${reason} (prior snapshot unavailable)`,
@@ -411,11 +430,20 @@ async function disableWebhook(
     new_state: { active: false, disabled_reason: reason, disabled_at: new Date().toISOString() },
   })
   if (auditErr) {
-    log.warn('audit_log insert failed for webhook auto-disable', {
-      webhookId,
-      reason,
-      code: auditErr.code,
-    })
+    // Escalated from warn to error on purpose. Webhook registrations are
+    // NOT statutory räkenskapsinformation (BFL/BFNAR do not reach them:
+    // see the classification in migration 20260515170000), so a dropped
+    // row here is an operational audit-integrity gap, not a legal one,
+    // and the dispatch cycle must not abort over it. But warn is
+    // suppressed in prod-adjacent noise filters and never reaches the
+    // observability sink, which made this a silent gap; error always
+    // forwards (lib/logger.ts) so the missing SECURITY_EVENT is alertable
+    // (CC7.2).
+    log.error(
+      'audit_log insert failed for webhook auto-disable',
+      new Error(auditErr.message ?? 'audit_log insert failed'),
+      { webhookId, companyId, reason, code: auditErr.code },
+    )
   }
 }
 

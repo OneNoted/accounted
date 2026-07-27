@@ -466,6 +466,34 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'Could not retrieve an exchange rate from Riksbanken for the payment date. Provide the rate manually from your bank statement (manual_exchange_rate field).',
   },
+  MATCH_INVOICE_BOOKING_RATE_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan är utställd i utländsk valuta men saknar växelkurs. Utan kursen går det inte att räkna fram kursvinst eller kursförlust. Komplettera fakturans växelkurs (exchange_rate) och försök igen.',
+    message_en:
+      'The foreign-currency invoice has no usable booking exchange rate on file (invoice.exchange_rate is missing, zero, or out of range), so the FX gain/loss (BAS 3960/7960) on settlement cannot be computed. Same guard as BATCH_FX_RATE_MISSING in match_batch_allocate.',
+    remediation: {
+      description:
+        'Set invoice.exchange_rate to the rate the receivable (1510) was booked at, then retry the match. On an invoice that is not yet booked, POST /api/invoices/{id}/refresh-exchange-rate fetches the taxable-event rate from Riksbanken and fills it in. On an already-booked invoice that endpoint refuses (INVOICE_FX_REFRESH_BOOKED): the SEK amounts are in a verifikat and only storno or inline rättelse may change them.',
+    },
+  },
+  // The BANK ROW itself has no SEK value: transactions.currency is foreign and
+  // both amount_sek and exchange_rate are empty (the shape a row gets when
+  // Riksbanken was unreachable at ingest, see lib/transactions/ingest.ts).
+  // Journal entry lines are always SEK, so the raw foreign number must never
+  // stand in for one: a 500 USD receipt would be allocated as 500 SEK. Same
+  // refusal as the match_batch_allocate RPC's BATCH_FX_RATE_MISSING.
+  MATCH_INVOICE_TX_FX_RATE_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Banktransaktionen är i utländsk valuta men saknar både SEK-belopp och växelkurs. Komplettera transaktionens växelkurs innan du matchar: utan den kan beloppet inte räknas om till kronor.',
+    message_en:
+      'The bank transaction is in a foreign currency but has neither a SEK amount nor an exchange rate on file. Set the transaction exchange rate before matching; without it the amount cannot be translated to SEK.',
+    remediation: {
+      description:
+        'Set amount_sek (or exchange_rate) on the transaction for its value date, then retry the match.',
+    },
+  },
   MATCH_INVOICE_ALREADY_PAID: {
     httpStatus: 409,
     message_sv: 'Fakturan har redan slutbetalats av en annan förfrågan.',
@@ -877,6 +905,23 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan kunde inte bokföras.',
     message_en: 'Failed to book the invoice.',
   },
+  // Raised by lib/bookkeeping/invoice-entries.ts when a foreign-currency
+  // customer invoice reaches a booking path with no exchange rate. Items carry
+  // no per-item SEK column, so the rate is the only honest source; booking 1:1
+  // would still balance (the 1510 debit is derived from the credits) while
+  // understating ruta 05 and ruta 10 of the momsdeklaration. Sales-side twin of
+  // SI_FX_RATE_MISSING.
+  INVOICE_FX_RATE_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan är i utländsk valuta men saknar växelkurs. Ange fakturans växelkurs innan den bokförs: utan kurs kan beloppen inte räknas om till kronor och momsen blir fel.',
+    message_en:
+      'The invoice is in a foreign currency but has no exchange rate on file. Set the invoice exchange rate before booking; without it the amounts cannot be translated to SEK and the output VAT would be understated.',
+    remediation: {
+      description:
+        'Set exchange_rate on the invoice (the rate at the taxable-event date) and retry. On an unbooked invoice, POST /api/invoices/{id}/refresh-exchange-rate fetches it from Riksbanken.',
+    },
+  },
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
     message_sv:
@@ -1015,6 +1060,46 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan kunde inte hittas.',
     message_en: 'Invoice not found.',
   },
+  // POST /api/invoices/{id}/refresh-exchange-rate: the repair path for a
+  // foreign-currency invoice whose SEK conversion is missing or was stamped
+  // from the wrong day's rate. It works on sent invoices (PATCH does not), but
+  // stops at the verifikat.
+  INVOICE_FX_REFRESH_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan är redan bokförd, så växelkursen kan inte räknas om här. Beloppen i kronor sitter i verifikatet och får bara ändras genom rättelse: makulera med storno och bokför om, eller rätta verifikatet inifrån (BFL 5 kap. 5 §).',
+    message_en:
+      'The invoice already has a verifikat, so its SEK conversion cannot be re-rated here. The SEK amounts are posted entries and may only be changed through one of the two sanctioned rättelse tracks (BFL 5 kap 5 §): storno + correcting entry, or the inline rättelse RPCs on an open unlocked period.',
+    remediation: {
+      description:
+        'Reverse the invoice verifikat (gnubok_reverse_journal_entry) and rebook it with the correct rate, or correct it inline via gnubok_correct_entry while the period is still open and unlocked. Never update invoice.exchange_rate behind a posted entry.',
+      tool: 'gnubok_reverse_journal_entry',
+    },
+  },
+  INVOICE_FX_REFRESH_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsperioden för fakturadatumet är låst eller stängd, så växelkursen kan inte uppdateras. Öppna perioden eller rätta med storno i en öppen period.',
+    message_en:
+      'The fiscal period covering the invoice date is locked or closed, so the exchange rate cannot be updated. details.period_status carries the verdict; lookup_failed: true means the lock state could not be read and the request was refused fail-closed.',
+    remediation: {
+      description:
+        'Unlock the period via gnubok_unlock_period (only if the status is "locked", not "closed"), then retry. Past a close, the correction belongs in an open period as a storno.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
+  INVOICE_FX_REFRESH_RATE_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte hämta växelkursen från Riksbanken för leverans-/fakturadatumet. Fakturan är oförändrad: en gissad kurs får inte bokföras. Försök igen om en stund.',
+    message_en:
+      'No Riksbanken observation could be retrieved for the taxable-event date (delivery_date, falling back to invoice_date) and no cached rate was available either. The invoice was left unchanged rather than converted at an invented rate.',
+    retryable: true,
+    remediation: {
+      description:
+        'Retry once Riksbanken responds. The permitted rate sources are the Nasdaq OMX mid-rate published by Riksbanken or the latest ECB rate (ML 8 kap 21-23 §); never substitute an estimate.',
+    },
+  },
   INVOICE_FINALIZE_NOT_DRAFT: {
     httpStatus: 409,
     message_sv: 'Endast onumrerade utkast kan skapas. Fakturan har redan ett nummer eller är inte ett utkast.',
@@ -1109,6 +1194,21 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Leverantörsfakturan kunde inte bokföras.',
     message_en: 'Failed to book the supplier invoice.',
   },
+  // Raised by lib/bookkeeping/supplier-invoice-entries.ts when a
+  // foreign-currency invoice reaches a booking path with no exchange rate.
+  // Booking it 1:1 would balance but understate the fiktiv moms on 2614/2645
+  // and therefore rutorna 20-24 + 30-32 of the momsdeklaration.
+  SI_FX_RATE_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Leverantörsfakturan är i utländsk valuta men saknar växelkurs. Ange fakturans växelkurs innan den bokförs: utan kurs kan beloppen inte räknas om till kronor och momsen blir fel.',
+    message_en:
+      'The supplier invoice is in a foreign currency but has no exchange rate on file. Set the invoice exchange rate before booking; without it the amounts cannot be translated to SEK and the reverse-charge VAT would be understated.',
+    remediation: {
+      description:
+        'Set exchange_rate on the supplier invoice (the rate at the invoice date) and retry the booking.',
+    },
+  },
   PO_THREE_WAY_MATCH_FAILED: {
     httpStatus: 422,
     message_sv:
@@ -1165,20 +1265,15 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ett stängt räkenskapsår kan inte låsas upp.',
     message_en: 'A closed fiscal year cannot be unlocked.',
   },
-  // Forward-chaining a new räkenskapsår is blocked while a prior period is
-  // still fully open (not locked, not closed, not covered by the company-wide
-  // lock-through date). BFL 6 kap allows löpande bokföring of the new year in
-  // parallel with bokslut, but the prior year must at least be locked so
-  // nothing is back-posted into a year you've moved on from. The blocking
-  // periods (id + name + dates) are attached to the response `details` so the
-  // UI can offer to lock them inline. See app/api/bookkeeping/fiscal-periods.
-  PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS: {
-    httpStatus: 409,
-    message_sv:
-      'Du måste låsa föregående räkenskapsår innan du kan skapa ett nytt.',
-    message_en:
-      'Cannot create a new fiscal year while a prior period is still open; lock it first.',
-  },
+  // Retired 2026-07-26: PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS. Creating the
+  // next räkenskapsår while a prior one is still fully open is no longer an
+  // error at all: BFL 5 kap 2 § forces the new year's affärshändelser to be
+  // booked within weeks (which needs a räkenskapsår covering them) while BFL
+  // 6 kap gives the prior year six months to be finished, so running both in
+  // parallel is the mandated state, not an edge case. The detection now rides
+  // along as a non-blocking `warnings: [{ code: 'PRIOR_FISCAL_YEAR_STILL_OPEN',
+  // message }]` on the 200 (app/api/bookkeeping/fiscal-periods), which needs no
+  // registry entry: warnings are not thrown errors. Do not re-add this code.
 }
 
 const YEAR_END: Record<string, StructuredErrorEntry> = {
@@ -1240,6 +1335,18 @@ const FX: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Valutaomvärderingen misslyckades.',
     message_en: 'Currency revaluation failed.',
+  },
+  FX_CLOSING_RATE_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv:
+      'Ingen valutakurs från Riksbanken finns för balansdagen. Valutaomvärderingen har inte bokförts: en uppskattad kurs får inte bokföras mot 3960/7960 (ÅRL 4 kap. 13 §). Försök igen när kursen är publicerad.',
+    message_en:
+      'No Riksbanken observation is available for the closing date. The revaluation was refused rather than posted from an estimated rate; details.missingRates lists each currency and date.',
+    retryable: true,
+    remediation: {
+      description:
+        'Retry once Riksbanken has published the closing-date rate, or run the revaluation for a closing date that has a published observation.',
+    },
   },
 }
 
@@ -1413,6 +1520,11 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'SIE-importen kunde inte ersättas.',
     message_en: 'Failed to replace SIE import.',
+  },
+  SIE_REPLACE_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast ägare eller administratörer kan ersätta en SIE-import.',
+    message_en: 'Only company owners and admins can replace an SIE import.',
   },
   SIE_UNDO_FAILED: {
     httpStatus: 400,
@@ -2552,6 +2664,10 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
       'Fakturan i annan valuta saknar växelkurs. Komplettera fakturans exchange_rate innan du fördelar.',
     message_en:
       'The foreign-currency invoice has no exchange rate on file. Complete invoice.exchange_rate before allocating.',
+    remediation: {
+      description:
+        'POST /api/invoices/{id}/refresh-exchange-rate fetches the taxable-event rate from Riksbanken and fills in exchange_rate plus the *_sek columns, then retry the allocation. It refuses with INVOICE_FX_REFRESH_BOOKED once the invoice has a verifikat: from there the correction is a storno or an inline rättelse, never an update behind the posted entry.',
+    },
   },
   BATCH_FX_DEVIATION_TOO_LARGE: {
     httpStatus: 400,
@@ -2633,6 +2749,13 @@ const BULK_BOOK: Record<string, StructuredErrorEntry> = {
       'Samlingsbokföring stödjer endast transaktioner i samma valuta. Välj transaktioner i en valuta åt gången.',
     message_en:
       'Bulk booking supports only single-currency batches. Select transactions in one currency at a time.',
+  },
+  BULK_BOOK_FOREIGN_CURRENCY: {
+    httpStatus: 400,
+    message_sv:
+      'Samlingsbokföring stödjer endast transaktioner i SEK. Bokför transaktioner i utländsk valuta enskilt, så att beloppet räknas om till kronor med rätt växelkurs.',
+    message_en:
+      'Bulk booking supports only SEK transactions. Book foreign-currency transactions individually so the amount is converted to kronor at the correct exchange rate.',
   },
   BULK_BOOK_INVALID_PAYLOAD: {
     httpStatus: 400,

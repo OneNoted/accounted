@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   validateVoucherForSupplierInvoiceLink,
   linkSupplierInvoiceToVoucher,
+  findMatchingVouchersForSupplierInvoice,
 } from '../supplier-voucher-matching'
 import {
   makeSupplierInvoice,
@@ -440,5 +441,284 @@ describe('linkSupplierInvoiceToVoucher', () => {
     }
     // Event NOT emitted when re-fetch found nothing
     expect(emitSpy).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================================
+// findMatchingVouchersForSupplierInvoice: candidate search
+// ============================================================
+
+describe('findMatchingVouchersForSupplierInvoice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  /**
+   * Enqueue the two pages the two-step entry-lines fetch reads
+   * (lib/bookkeeping/entry-lines.ts): the parent entries first, then the bare
+   * lines keyed by journal_entry_id. Fixtures stay embed-shaped; the helper
+   * reattaches the parent under `journal_entries`, which is exactly what the
+   * old `journal_entries!inner(...)` embed produced.
+   */
+  function enqueueApLines(
+    enqueue: (result: { data?: unknown; error?: unknown }) => void,
+    rows: Array<{
+      id: string
+      account_number: string
+      debit_amount: number
+      currency: string | null
+      entry: {
+        id: string
+        voucher_series: string
+        voucher_number: number
+        entry_date: string
+        description: string
+        status: string
+        source_type: string | null
+        fiscal_period_id: string
+      }
+    }>,
+  ) {
+    const entries = [...new Map(rows.map((r) => [r.entry.id, r.entry])).values()]
+    enqueue({ data: entries, error: null })
+    if (entries.length === 0) return
+    enqueue({
+      data: rows.map((r) => ({
+        id: r.id,
+        journal_entry_id: r.entry.id,
+        account_number: r.account_number,
+        debit_amount: r.debit_amount,
+        credit_amount: 0,
+        currency: r.currency,
+      })),
+      error: null,
+    })
+  }
+
+  /**
+   * Record the column list handed to `.select()` per table.
+   *
+   * The queued mock's proxy chain accepts any column string and still returns
+   * the enqueued rows, so a phantom column passes every mocked assertion while
+   * PostgREST answers 42703 in production. `fiscal_periods.status` was exactly
+   * that: the lock lookup returned null and the advisory flag never fired.
+   * Asserting the select string is the only guard available at this layer.
+   */
+  function recordSelects(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) {
+    const selects: Array<{ table: string; columns: string }> = []
+    const inner = supabase.from
+    supabase.from = vi.fn((table: string) => {
+      const chain = inner(table) as object
+      return new Proxy(chain, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver)
+          if (prop !== 'select') return value
+          return (...args: unknown[]) => {
+            selects.push({ table, columns: String(args[0] ?? '') })
+            return (value as (...a: unknown[]) => unknown)(...args)
+          }
+        },
+      })
+    }) as typeof supabase.from
+    return selects
+  }
+
+  const entryFixture = (over: Partial<{ id: string; description: string; entry_date: string; source_type: string | null }> = {}) => ({
+    id: over.id ?? 'je-ap-1',
+    voucher_series: 'A',
+    voucher_number: 42,
+    entry_date: over.entry_date ?? '2026-03-10',
+    description: over.description ?? 'Betalning leverantor',
+    status: 'posted',
+    source_type: over.source_type ?? 'bank_transaction',
+    fiscal_period_id: 'period-1',
+  })
+
+  const invoice = () =>
+    makeSupplierInvoice({
+      id: 'si-find-1',
+      total: 1000,
+      paid_amount: 0,
+      remaining_amount: 1000,
+      currency: 'SEK',
+      due_date: '2026-03-12',
+      supplier_invoice_number: 'F-9001',
+    })
+
+  it('returns a scored candidate built from the reattached parent entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueApLines(enqueue, [
+      {
+        id: 'line-1',
+        account_number: '2440',
+        debit_amount: 1000,
+        currency: 'SEK',
+        entry: entryFixture({ description: 'Betalning faktura F-9001' }),
+      },
+    ])
+    enqueue({ data: [], error: null }) // supplier_invoice_payments links
+    // fiscal_periods: real shape, open period (not closed, never locked)
+    enqueue({ data: [{ id: 'period-1', is_closed: false, locked_at: null }], error: null })
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    // The entry side is queried first: no query starts on journal_entry_lines
+    // with the tenant scope buried in an embed.
+    const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(tables[0]).toBe('journal_entries')
+    expect(tables[1]).toBe('journal_entry_lines')
+
+    expect(result).toHaveLength(1)
+    expect(result[0].journal_entry_id).toBe('je-ap-1')
+    expect(result[0].voucher_series).toBe('A')
+    expect(result[0].voucher_number).toBe(42)
+    expect(result[0].entry_date).toBe('2026-03-10')
+    expect(result[0].ap_debit_amount).toBe(1000)
+    expect(result[0].ap_line_currency).toBe('SEK')
+    expect(result[0].period_locked).toBe(false)
+  })
+
+  it('sums several 244x debits on the same samlingsverifikat into one candidate', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueApLines(enqueue, [
+      { id: 'line-1', account_number: '2440', debit_amount: 600, currency: 'SEK', entry: entryFixture() },
+      { id: 'line-2', account_number: '2441', debit_amount: 400, currency: 'SEK', entry: entryFixture() },
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: [{ id: 'period-1', is_closed: false, locked_at: '2026-04-01T00:00:00Z' }],
+      error: null,
+    })
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0].ap_debit_amount).toBe(1000)
+    expect(result[0].period_locked).toBe(true)
+  })
+
+  it('drops storno and opening_balance vouchers', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueApLines(enqueue, [
+      {
+        id: 'line-1',
+        account_number: '2440',
+        debit_amount: 1000,
+        currency: 'SEK',
+        entry: entryFixture({ id: 'je-storno', source_type: 'storno' }),
+      },
+    ])
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    expect(result).toEqual([])
+  })
+
+  it('reads the fiscal_periods columns that actually exist (is_closed, locked_at)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const selects = recordSelects(supabase)
+    enqueueApLines(enqueue, [
+      {
+        id: 'line-1',
+        account_number: '2440',
+        debit_amount: 1000,
+        currency: 'SEK',
+        entry: entryFixture(),
+      },
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'period-1', is_closed: false, locked_at: null }], error: null })
+
+    await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    const periodSelect = selects.find((s) => s.table === 'fiscal_periods')
+    expect(periodSelect).toBeDefined()
+    const columns = (periodSelect?.columns ?? '').split(',').map((c) => c.trim())
+    expect(columns).toContain('id')
+    expect(columns).toContain('is_closed')
+    expect(columns).toContain('locked_at')
+    // fiscal_periods has no `status` column: asking for it is a 42703.
+    expect(columns).not.toContain('status')
+  })
+
+  it('flags a candidate whose period is closed (is_closed)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueApLines(enqueue, [
+      {
+        id: 'line-1',
+        account_number: '2440',
+        debit_amount: 1000,
+        currency: 'SEK',
+        entry: entryFixture(),
+      },
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'period-1', is_closed: true, locked_at: null }], error: null })
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0].period_locked).toBe(true)
+  })
+
+  it('does not claim the period is open when the lock lookup fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueApLines(enqueue, [
+      {
+        id: 'line-1',
+        account_number: '2440',
+        debit_amount: 1000,
+        currency: 'SEK',
+        entry: entryFixture(),
+      },
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: null, error: { message: 'column does not exist' } })
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    // The candidate still surfaces (linking mutates no journal entry), but the
+    // advisory flag stays conservative instead of promising an open period.
+    expect(result).toHaveLength(1)
+    expect(result[0].period_locked).toBe(true)
+  })
+
+  it('returns [] without a line query when no entry matches the window', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [], error: null }) // entry page, empty
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    expect(result).toEqual([])
+    const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(tables).not.toContain('journal_entry_lines')
   })
 })

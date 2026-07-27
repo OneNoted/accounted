@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { z } from 'zod'
 import { validateBody, validateQuery } from '../validate'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 // ============================================================
 // Helpers
@@ -74,10 +75,90 @@ describe('validateBody', () => {
     if (!result.success) {
       const body = await result.response.json()
       expect(result.response.status).toBe(400)
-      expect(body.error).toBe('Validation failed')
+      // Inverted on purpose: the old assertion pinned the constant
+      // 'Validation failed', which is exactly the bug. `error` now carries the
+      // actionable field message so clients that read only `error` show
+      // something useful; `errors[]` keeps the full machine-readable detail and
+      // `type` stays the discriminator.
+      expect(body.error).not.toBe('Validation failed')
+      expect(body.error).toMatch(/^Valideringsfel: /)
+      expect(body.error).toContain('name')
+      expect(body.error).toContain('age')
       expect(body.type).toBe('validation_error')
       expect(body.errors).toBeInstanceOf(Array)
       expect(body.errors.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('summarizes at most three issues and counts the rest', async () => {
+    const WideSchema = z.object({
+      a: z.string(),
+      b: z.string(),
+      c: z.string(),
+      d: z.string(),
+      e: z.string(),
+    })
+    const request = createJsonRequest({})
+    const result = await validateBody(request, WideSchema)
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const body = await result.response.json()
+      expect(body.errors).toHaveLength(5)
+      expect(body.error).toContain('(+2 till)')
+      // Only the first three are named in the prose.
+      expect(body.error).not.toContain('d:')
+      expect(body.error).not.toContain('e:')
+    }
+  })
+
+  it('surfaces the actionable Swedish sentence to a client that reads only body.error', async () => {
+    // Reproduces the failing UI path: pages like arsredovisning/page.tsx and
+    // assets/[id]/dispose/page.tsx forward `body.error` (a string) into
+    // getErrorMessage, which collapsed the constant into "Något gick fel."
+    const SwedishSchema = z.object({
+      period_start: z.string({ message: 'Ange periodens startdatum' }),
+    })
+    const request = await validateBody(createJsonRequest({}), SwedishSchema)
+
+    expect(request.success).toBe(false)
+    if (!request.success) {
+      const body = await request.response.json()
+
+      const shown = getErrorMessage(body.error, { statusCode: 400 })
+      expect(shown).toBe(body.error)
+      expect(shown).toContain('Ange periodens startdatum')
+      expect(shown).not.toBe('Något gick fel. Försök igen.')
+
+      // Clients that forward the whole body keep the existing errors[] path.
+      expect(getErrorMessage(body, { statusCode: 400 })).toContain(
+        'Ange periodens startdatum',
+      )
+    }
+  })
+
+  it('keeps the machine-readable discriminator and per-field detail intact', async () => {
+    const request = createJsonRequest({ name: '', age: -5 })
+    const result = await validateBody(request, TestSchema)
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const body = await result.response.json()
+      // A machine consumer branches on `type` / `errors[].code`, never on prose.
+      // Both are pinned to concrete values here: asserting only `typeof` would
+      // keep passing if the codes turned into empty strings.
+      expect(body.type).toBe('validation_error')
+      for (const issue of body.errors as Array<Record<string, unknown>>) {
+        expect(typeof issue.field).toBe('string')
+        expect(typeof issue.message).toBe('string')
+        expect(typeof issue.code).toBe('string')
+      }
+      // Field-keyed lookup, the way a client maps issues onto form inputs.
+      const byField = new Map(
+        (body.errors as Array<{ field: string; code: string }>).map((e) => [e.field, e.code]),
+      )
+      expect(byField.get('name')).toBe('too_small')
+      expect(byField.get('age')).toBe('too_small')
     }
   })
 

@@ -33,6 +33,19 @@ import { POST } from '../import-existing/route'
 const request = () => createMockRequest('/api/dimensions/import-existing', { method: 'POST' })
 const noParams = { params: Promise.resolve({}) }
 
+/**
+ * Enqueue the two pages the scan reads through the two-step entry-lines fetch
+ * (lib/bookkeeping/entry-lines.ts): the company's parent entries first, then
+ * the lines keyed by journal_entry_id. The route never reads the parent, so a
+ * single synthetic entry per line set is enough.
+ */
+function enqueueLines(rows: Array<{ id: string; dimensions: Record<string, string> }>) {
+  enqueue({ data: rows.length > 0 ? [{ id: 'entry-1' }] : [] })
+  // No entries means the helper never queries the lines at all.
+  if (rows.length === 0) return
+  enqueue({ data: rows.map((r) => ({ ...r, journal_entry_id: 'entry-1' })) })
+}
+
 describe('POST /api/dimensions/import-existing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -52,7 +65,7 @@ describe('POST /api/dimensions/import-existing', () => {
 
   it('returns { created: 0 } when no line carries dimensions', async () => {
     enqueue({ data: null }) // ensure RPC
-    enqueue({ data: [] })   // journal_entry_lines scan
+    enqueueLines([]) // journal_entry_lines scan
 
     const response = await POST(request(), noParams)
     const { status, body } = await parseJsonResponse<{ created: number }>(response)
@@ -64,13 +77,12 @@ describe('POST /api/dimensions/import-existing', () => {
   it('creates inactive placeholder values for codes missing from the registry', async () => {
     enqueue({ data: null }) // ensure RPC
     // Lines: KS01 (dim 1) appears twice, P001 (dim 6) once, BUTIK already registered.
-    enqueue({
-      data: [
-        { id: 'l1', dimensions: { '1': 'KS01' } },
-        { id: 'l2', dimensions: { '1': 'KS01', '6': 'P001' } },
-        { id: 'l3', dimensions: { '1': 'BUTIK' } },
-      ],
-    })
+    enqueueLines([
+      { id: 'l1', dimensions: { '1': 'KS01' } },
+      { id: 'l2', dimensions: { '1': 'KS01', '6': 'P001' } },
+      { id: 'l3', dimensions: { '1': 'BUTIK' } },
+
+    ])
     // Registry dims 1 & 6 exist (system dims).
     enqueue({
       data: [
@@ -94,14 +106,13 @@ describe('POST /api/dimensions/import-existing', () => {
     enqueue({ data: null }) // ensure RPC
     // 'KS"01"' and 'KS{01}' both sanitize to KS01 (one candidate); a 50-char
     // code is capped at 40; '"{}"' sanitizes to empty and is dropped entirely.
-    enqueue({
-      data: [
-        { id: 'l1', dimensions: { '1': 'KS"01"' } },
-        { id: 'l2', dimensions: { '1': 'KS{01}' } },
-        { id: 'l3', dimensions: { '1': 'X'.repeat(50) } },
-        { id: 'l4', dimensions: { '1': '"{}"' } },
-      ],
-    })
+    enqueueLines([
+      { id: 'l1', dimensions: { '1': 'KS"01"' } },
+      { id: 'l2', dimensions: { '1': 'KS{01}' } },
+      { id: 'l3', dimensions: { '1': 'X'.repeat(50) } },
+      { id: 'l4', dimensions: { '1': '"{}"' } },
+
+    ])
     enqueue({ data: [{ id: 'dim-1', sie_dim_no: 1 }] }) // registry dims
     enqueue({ data: [] }) // no existing values
     // Upsert returns the two surviving sanitized codes (KS01 + the capped one).
@@ -116,12 +127,11 @@ describe('POST /api/dimensions/import-existing', () => {
 
   it('tolerates duplicates in the batch: created counts only the rows the upsert returned', async () => {
     enqueue({ data: null }) // ensure RPC
-    enqueue({
-      data: [
-        { id: 'l1', dimensions: { '1': 'KS01' } },
-        { id: 'l2', dimensions: { '1': 'KS02' } },
-      ],
-    })
+    enqueueLines([
+      { id: 'l1', dimensions: { '1': 'KS01' } },
+      { id: 'l2', dimensions: { '1': 'KS02' } },
+
+    ])
     enqueue({ data: [{ id: 'dim-1', sie_dim_no: 1 }] }) // registry dims
     enqueue({ data: [] }) // existing-values snapshot missed a raced KS02
     // ignoreDuplicates upsert skips the conflicting row instead of aborting
@@ -137,7 +147,7 @@ describe('POST /api/dimensions/import-existing', () => {
 
   it('creates a registry dimension for an unregistered dim number found on lines', async () => {
     enqueue({ data: null }) // ensure RPC
-    enqueue({ data: [{ id: 'l1', dimensions: { '7': 'AVD-A' } }] }) // lines
+    enqueueLines([{ id: 'l1', dimensions: { '7': 'AVD-A' } }]) // lines
     // Registry only has the system dims: dim 7 is missing.
     enqueue({
       data: [
@@ -161,7 +171,7 @@ describe('POST /api/dimensions/import-existing', () => {
 
   it('returns 500 DIMENSION_IMPORT_FAILED when the scan blows up', async () => {
     enqueue({ data: null }) // ensure RPC
-    enqueue({ error: { message: 'relation missing' } }) // fetchAllRows throws
+    enqueue({ error: { message: 'relation missing' } }) // entry page throws
 
     const response = await POST(request(), noParams)
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)

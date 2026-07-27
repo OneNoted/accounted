@@ -23,6 +23,9 @@ import {
   calculateExpenseRatio,
   calculateAvgPaymentDays,
   calculateVatLiability,
+  aggregateTopSuppliers,
+  fetchTopSupplierInvoices,
+  type KpiSupplierInvoiceRow,
 } from '@/lib/reports/kpi'
 import { mergeWithDefaults } from '@/lib/reports/kpi-definitions'
 import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
@@ -79,14 +82,10 @@ export const GET = withRouteContext('report.kpi', async (request, { supabase, co
       .eq('company_id', companyId)
       .eq('status', 'paid')
       .not('paid_at', 'is', null)
+  // Paginated: awaiting the bare query capped the rows at PostgREST's 1000
+  // default and silently corrupted the supplier totals for large companies.
   const topSuppliersQuery = () =>
-    supabase
-      .from('supplier_invoices')
-      .select('supplier_id, total_sek, total, supplier:suppliers(id, name)')
-      .eq('company_id', companyId)
-      .gte('invoice_date', period.period_start)
-      .lte('invoice_date', period.period_end)
-      .neq('status', 'credited')
+    fetchTopSupplierInvoices(supabase, companyId, period.period_start, period.period_end)
 
   let prefsValue: unknown
   let incomeStatement: IncomeStatementReport
@@ -252,40 +251,17 @@ export const GET = withRouteContext('report.kpi', async (request, { supabase, co
     .sort((a, b) => b.total - a.total)
     .slice(0, 5)
 
-  // Top suppliers by spend within the fiscal period. Sum total_sek to avoid
-  // mixing currencies. Drop FX invoices without a SEK conversion (total_sek
-  // null): they would otherwise inflate a supplier's total with raw
-  // foreign-currency amounts.
-  type SupplierInvoiceRow = {
-    supplier_id: string | null
-    total_sek: number | null
-    total: number | null
-    supplier: { id: string; name: string } | { id: string; name: string }[] | null
-  }
+  // Top suppliers by spend within the fiscal period, in SEK. The per-row SEK
+  // resolution and the FX exclusion count both live in aggregateTopSuppliers,
+  // which the xlsx export calls with the same query, so the two reports cannot
+  // disagree about the same company.
   if (topSuppliersResult.error) {
     // Surface the failure rather than silently rendering an empty chart that
     // matches the legitimate "no supplier invoices" empty state.
     console.error('[kpi] topSuppliersResult error:', topSuppliersResult.error)
   }
-  const supplierTotals = new Map<string, { name: string; total: number }>()
-  for (const row of (topSuppliersResult.data ?? []) as SupplierInvoiceRow[]) {
-    if (!row.supplier_id) continue
-    const supplier = Array.isArray(row.supplier) ? row.supplier[0] : row.supplier
-    if (!supplier?.name) continue
-    const amount = row.total_sek ?? null
-    if (amount == null) continue
-    const existing = supplierTotals.get(row.supplier_id)
-    if (existing) existing.total += amount
-    else supplierTotals.set(row.supplier_id, { name: supplier.name, total: amount })
-  }
-  const topSuppliers = Array.from(supplierTotals.entries())
-    .map(([supplier_id, v]) => ({
-      supplier_id,
-      supplier_name: v.name,
-      total: Math.round(v.total * 100) / 100,
-    }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 7)
+  const { suppliers: topSuppliers, unconvertedFxCount: topSuppliersUnconvertedFxCount } =
+    aggregateTopSuppliers((topSuppliersResult.data ?? []) as KpiSupplierInvoiceRow[])
 
   const report: KPIReport = {
     netResult: incomeStatement.net_result,
@@ -309,6 +285,7 @@ export const GET = withRouteContext('report.kpi', async (request, { supabase, co
     },
     topExpenseAccounts,
     topSuppliers,
+    topSuppliersUnconvertedFxCount,
   }
 
   return NextResponse.json({ data: report })

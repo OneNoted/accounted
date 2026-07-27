@@ -70,7 +70,11 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Validation failed')
+    // Inverted from `toBe('Validation failed')`: the constant was the bug.
+    // `error` now names the offending field so a UI reading only `error` is
+    // actionable.
+    expect(body.error).toMatch(/^Valideringsfel: /)
+    expect(body.error).toContain('lines')
   })
 
   it('returns 400 when lines array is empty', async () => {
@@ -82,7 +86,8 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Validation failed')
+    expect(body.error).toMatch(/^Valideringsfel: /)
+    expect(body.error).toContain('At least two lines are required for double-entry')
   })
 
   it('returns reversal and corrected entries on success', async () => {
@@ -155,7 +160,8 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Validation failed')
+    expect(body.error).toMatch(/^Valideringsfel: /)
+    expect(body.error).toContain('description')
     expect(mockCorrectEntry).not.toHaveBeenCalled()
   })
 

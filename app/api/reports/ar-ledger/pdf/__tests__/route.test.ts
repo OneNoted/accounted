@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { isValidElement } from 'react'
 import { NextResponse } from 'next/server'
 
 const mockSupabase = {
@@ -36,8 +37,40 @@ vi.mock('@/lib/reports/ar-ledger', () => ({
 import { GET } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
+import { renderToBuffer } from '@react-pdf/renderer'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+/**
+ * The template renders for real (only renderToBuffer is stubbed), so the
+ * document handed to it can be walked for its text. Joining the leaves with ''
+ * reproduces the text of any single <Text>.
+ */
+function renderedText(node: unknown): string {
+  const out: string[] = []
+  const walk = (n: unknown): void => {
+    if (n === null || n === undefined || typeof n === 'boolean') return
+    if (typeof n === 'string' || typeof n === 'number') {
+      out.push(String(n))
+      return
+    }
+    if (Array.isArray(n)) {
+      n.forEach(walk)
+      return
+    }
+    if (isValidElement(n)) {
+      walk((n.props as { children?: unknown }).children)
+    }
+  }
+  walk(node)
+  // Intl's sv-SE group separator is a non-breaking space; normalise every
+  // space-like character so the assertions below can use ordinary spaces.
+  return out.join('').replace(/\s/g, ' ')
+}
+
+function renderedDocumentText(): string {
+  return renderedText(vi.mocked(renderToBuffer).mock.calls[0][0])
+}
 
 function companySettingsQuery(data: unknown) {
   return {
@@ -80,6 +113,71 @@ function makeLedger() {
     total_overdue: 1000,
     unpaid_count: 1,
     unconverted_fx_count: 0,
+  }
+}
+
+/**
+ * One SEK invoice plus one EUR invoice with a rate, plus one USD invoice with
+ * no rate (outstanding_sek null, so it is missing from the aging buckets).
+ * The aging totals are SEK: 1 000 + 11 475.
+ */
+function makeFxLedger() {
+  return {
+    entries: [
+      {
+        customer_id: 'cust-1',
+        customer_name: 'Acme AB',
+        invoices: [
+          {
+            invoice_id: 'inv-1',
+            invoice_number: 'F001',
+            invoice_date: '2026-05-01',
+            due_date: '2026-06-01',
+            total: 1000,
+            paid_amount: 0,
+            outstanding: 1000,
+            outstanding_sek: 1000,
+            days_overdue: 14,
+            currency: 'SEK',
+          },
+          {
+            invoice_id: 'inv-2',
+            invoice_number: 'F002',
+            invoice_date: '2026-05-02',
+            due_date: '2026-06-02',
+            total: 1000,
+            paid_amount: 0,
+            outstanding: 1000,
+            outstanding_sek: 11475,
+            days_overdue: 13,
+            currency: 'EUR',
+          },
+          {
+            invoice_id: 'inv-3',
+            invoice_number: 'F003',
+            invoice_date: '2026-05-03',
+            due_date: '2026-06-03',
+            total: 500,
+            paid_amount: 0,
+            outstanding: 500,
+            outstanding_sek: null,
+            days_overdue: 12,
+            currency: 'USD',
+          },
+        ],
+        current: 0,
+        days_1_30: 12475,
+        days_31_60: 0,
+        days_61_90: 0,
+        days_90_plus: 0,
+        total_outstanding: 12475,
+      },
+    ],
+    total_outstanding: 12475,
+    total_current: 0,
+    total_overdue: 12475,
+    unpaid_count: 3,
+    unconverted_fx_count: 1,
   }
 }
 
@@ -148,5 +246,40 @@ describe('GET /api/reports/ar-ledger/pdf', () => {
 
     const res = await GET(makeRequest('?as_of_date=2026-06-30'), { params: Promise.resolve({}) } as never)
     expect(res.status).toBe(500)
+  })
+
+  it('forwards outstanding_sek so the PDF carries the SEK bridge column', async () => {
+    vi.mocked(generateARLedger).mockResolvedValue(makeFxLedger() as never)
+
+    const res = await GET(makeRequest('?as_of_date=2026-06-30'), { params: Promise.resolve({}) } as never)
+    expect(res.status).toBe(200)
+
+    const text = renderedDocumentText()
+    // The bridge column the XLSX export has ("Utestående (SEK)") now exists here too.
+    expect(text).toContain('Utest. SEK')
+    expect(text).toContain('11 475,00')
+    // ...and the two units on the page are named rather than left implicit.
+    expect(text).toContain('Åldersfördelning per kund (SEK)')
+    expect(text).toContain('Fakturor (fakturans valuta)')
+  })
+
+  it('marks an unconvertible FX invoice instead of dropping it from the PDF', async () => {
+    vi.mocked(generateARLedger).mockResolvedValue(makeFxLedger() as never)
+
+    await GET(makeRequest('?as_of_date=2026-06-30'), { params: Promise.resolve({}) } as never)
+
+    const text = renderedDocumentText()
+    expect(text).toContain('F003')
+    expect(text).toContain('saknas')
+    expect(text).toContain('1 faktura i utländsk valuta saknar växelkurs')
+  })
+
+  it('leaves a SEK-only PDF without the bridge column', async () => {
+    const res = await GET(makeRequest('?as_of_date=2026-06-30'), { params: Promise.resolve({}) } as never)
+    expect(res.status).toBe(200)
+
+    const text = renderedDocumentText()
+    expect(text).not.toContain('Utest. SEK')
+    expect(text).toContain('Fakturor (SEK)')
   })
 })

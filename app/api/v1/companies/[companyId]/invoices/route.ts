@@ -1,8 +1,8 @@
 /**
  * /api/v1/companies/{companyId}/invoices: list + create invoice endpoints.
  *
- * GET: list with filters (status, customer_id, document_type, currency).
- *        Cursor pagination on (invoice_date DESC, id DESC).
+ * GET: list with filters (status, customer_id, document_type, currency,
+ *        invoice_date range). Cursor pagination on (created_at DESC, id ASC).
  * POST: create draft invoice. Idempotent (mandatory Idempotency-Key).
  *        Dry-runnable (?dry_run=true returns the validated would-be
  *        invoice + items with computed VAT totals; no DB writes).
@@ -141,7 +141,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices',
   summary: 'List invoices for a company.',
   description:
-    'Returns invoices in most-recent-first order. Includes the customer name inline; pass ?expand=customer for the full customer record, ?expand=items for line items.',
+    'Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registered first; the `invoice_date` column is the business date and is filterable via ?date_from / ?date_to but is not the sort key). Includes the customer name inline; pass ?expand=customer for the full customer record, ?expand=items for line items.',
   useWhen:
     'You need to enumerate invoices for a company: for AR reporting, payment matching, or building an invoice dashboard.',
   doNotUseFor:
@@ -150,6 +150,8 @@ registerEndpoint({
     'Draft invoices have invoice_number=null until they are sent.',
     'remaining_amount is the unpaid portion (total − paid_amount); use status=paid or remaining_amount=0 to filter for closed invoices.',
     'Credit notes appear with status=credited and a credited_invoice_id field on the detail endpoint.',
+    'Ordering is by created_at (registration time), not invoice_date. Backdated invoices therefore appear where they were created, not where their date falls: filter on ?date_from / ?date_to when you care about the business date.',
+    'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
   ],
   example: {
     response: {
@@ -212,12 +214,19 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       customer_id: z.string().uuid().optional(),
       document_type: InvoiceDocumentType.optional(),
       currency: z.string().regex(/^[A-Z]{3}$/, 'currency must be a 3-letter ISO-4217 code').optional(),
+      // invoice_date range. The sort key is created_at (see the ordering
+      // rationale below), so these filters are how a caller narrows by the
+      // business date.
+      date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date_from must be ISO YYYY-MM-DD').optional(),
+      date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date_to must be ISO YYYY-MM-DD').optional(),
     })
     const filtersResult = FiltersSchema.safeParse({
       status: url.searchParams.get('status') ?? undefined,
       customer_id: url.searchParams.get('customer_id') ?? undefined,
       document_type: url.searchParams.get('document_type') ?? undefined,
       currency: url.searchParams.get('currency') ?? undefined,
+      date_from: url.searchParams.get('date_from') ?? undefined,
+      date_to: url.searchParams.get('date_to') ?? undefined,
     })
     if (!filtersResult.success) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -241,24 +250,35 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const itemsSelect = expand.has('items') ? `, items:invoice_items(${INVOICE_ITEM_COLUMNS})` : ''
     const selectClause = `${INVOICE_SUMMARY_COLUMNS}, ${customerSelect}${itemsSelect}`
 
+    // Sort by (created_at DESC, id ASC). created_at is the stable cursor
+    // anchor: it's a real timestamp (passes ISO-8601 validation in
+    // decodeDefaultCursor), NOT NULL, and total-orderable once id breaks
+    // ties. Sorting by `invoice_date` directly broke the cursor: a Postgres
+    // `date` serializes as YYYY-MM-DD, the decoder rejected it, the keyset
+    // predicate was never applied, and every "next page" silently returned
+    // page 1 forever while still advertising a fresh next_cursor. The
+    // invoice date is still on every row and ?date_from / ?date_to filter
+    // on it. Same anchor as the transactions list.
     let query = ctx.supabase
       .from('invoices')
       .select(selectClause)
       .eq('company_id', ctx.companyId!)
-      .order('invoice_date', { ascending: false })
-      .order('id', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
       .limit(limit + 1)
 
     if (filters.status) query = query.eq('status', filters.status)
     if (filters.customer_id) query = query.eq('customer_id', filters.customer_id)
     if (filters.document_type) query = query.eq('document_type', filters.document_type)
     if (filters.currency) query = query.eq('currency', filters.currency)
+    if (filters.date_from) query = query.gte('invoice_date', filters.date_from)
+    if (filters.date_to) query = query.lte('invoice_date', filters.date_to)
 
     if (decoded) {
-      // Keyset on (invoice_date DESC, id DESC):
-      //   invoice_date < ts OR (invoice_date = ts AND id < cursor_id)
+      // Keyset on (created_at DESC, id ASC): created_at moves backward,
+      // id breaks ties within the same timestamp.
       query = query.or(
-        `invoice_date.lt.${decoded.ts},and(invoice_date.eq.${decoded.ts},id.lt.${decoded.id})`,
+        `created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
       )
     }
 
@@ -327,7 +347,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.invoice_date })
+      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
       : null
 
     return paginated(invoices, {

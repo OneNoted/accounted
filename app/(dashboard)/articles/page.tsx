@@ -279,6 +279,7 @@ function ArticlesPageInner() {
               <ArticleForm
                 onSubmit={handleCreateArticle}
                 isLoading={isCreating}
+                onCancel={() => setIsDialogOpen(false)}
               />
             </DialogContent>
           </Dialog>

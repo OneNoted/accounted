@@ -241,8 +241,16 @@ export default function ChartOfAccountsManager() {
         method: 'DELETE',
       })
       if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error || t('toast_delete_failed'))
+        // The route answers thrown errors with the canonical envelope
+        // `{ error: { code, message } }`. `new Error(data.error)` would
+        // stringify that object to "[object Object]" and the reason would be
+        // lost; hand getErrorMessage the parsed body plus the status instead.
+        const body = await res.json().catch(() => null)
+        toast({
+          title: getUserErrorMessage(body, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
       }
       toast({ title: t('toast_account_deleted'), description: `${account.account_number} ${account.account_name}` })
       await refreshAll()

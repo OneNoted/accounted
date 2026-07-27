@@ -1,6 +1,6 @@
 import type { Invoice, InvoiceItem } from '@/types'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
-import type { DeductionType } from './rot-rut-rules'
+import { deductionSekConverter, type DeductionType } from './rot-rut-rules'
 
 /**
  * Begäran om utbetalning: rot & rut (Skatteverkets husavdragstjänst).
@@ -17,7 +17,12 @@ import type { DeductionType } from './rot-rut-rules'
  * Hard schema facts honoured here:
  *   - Rot and rut can NEVER be mixed in one file (choice of RotBegaran |
  *     HushallBegaran). One file per deduction type.
- *   - All amounts are whole kronor (xs:long). PrisForArbete min 2.
+ *   - All amounts are whole kronor (xs:long). PrisForArbete min 2. Kronor is
+ *     the only unit the schema can express: there is no currency attribute
+ *     anywhere in Begaran.xsd. A foreign-currency invoice is therefore
+ *     translated to SEK with its booking rate BEFORE rounding, using the same
+ *     conversion the ledger used for the BAS 1513 debit; an invoice without a
+ *     usable rate is blocked rather than guessed at.
  *   - Kopare is a 12-digit personnummer.
  *   - NamnPaBegaran is 1-16 characters.
  *   - Element order inside an ärende is fixed: base fields, then (rot only)
@@ -77,6 +82,7 @@ export type RotRutBlockerCode =
   | 'MIXED_DEDUCTION_TYPES'
   | 'MISSING_PERSONNUMMER'
   | 'PERSONNUMMER_UNREADABLE'
+  | 'MISSING_EXCHANGE_RATE'
   | 'MISSING_WORK_TYPE'
   | 'INVALID_WORK_TYPE'
   | 'MISSING_HOURS'
@@ -102,7 +108,7 @@ export interface RotRutArende {
   invoice_number: string | null
   personnummer_last4: string
   betalnings_datum: string
-  /** Whole kronor, as emitted. */
+  /** Whole kronor (SEK), as emitted. Foreign invoices are converted first. */
   pris_for_arbete: number
   betalt_belopp: number
   begart_belopp: number
@@ -116,7 +122,11 @@ export interface BuildRotRutFileResult {
   blockers: RotRutBlocker[]
   /** Non-blocking notices (e.g. deadline passed). Swedish. */
   warnings: string[]
-  /** Sum of begart_belopp, whole kronor. */
+  /**
+   * Sum of begart_belopp, whole kronor. Safe to add up across ärenden
+   * because every begart_belopp is already SEK: `evaluateInvoiceForFile`
+   * blocks any invoice it cannot convert, so no foreign amount reaches here.
+   */
   requested_total: number
 }
 
@@ -268,14 +278,37 @@ export function evaluateInvoiceForFile(
     }
   }
 
-  // Amounts, whole kronor. PrisForArbete = arbetskostnad inkl moms for the
-  // flagged lines; BegartBelopp mirrors the deduction the invoice actually
-  // credited (1513); BetaltBelopp = what the buyer paid for the work.
+  // Amounts: whole kronor, in SEK.
+  //
+  // Begaran.xsd types every belopp as an integer (BeloppTYPE = xs:long;
+  // PrisForArbete has its own xs:long restriction with minInclusive 2) and
+  // carries no currency attribute at all. Invoice item amounts are in invoice
+  // currency, so a foreign invoice must be translated with its booking rate
+  // BEFORE rounding: the same per-amount conversion the ledger applied to the
+  // BAS 1513 debit. Emitting the raw foreign number would ask Skatteverket
+  // for 625 while the receivable stands at 7 125 kr, and 1513 could never
+  // clear. Without a usable rate we refuse rather than guess.
+  const toSek = deductionSekConverter({
+    currency: invoice.currency,
+    exchangeRate: invoice.exchange_rate,
+  })
+  if (!toSek) {
+    return block(
+      'MISSING_EXCHANGE_RATE',
+      `Fakturan är utställd i ${invoice.currency} men saknar växelkurs. Begäran om utbetalning anges alltid i hela kronor: komplettera fakturans växelkurs innan filen skapas.`,
+    )
+  }
+
+  // PrisForArbete = arbetskostnad inkl moms for the flagged lines;
+  // BegartBelopp mirrors the deduction the invoice actually credited (1513);
+  // BetaltBelopp = what the buyer paid for the work. Each amount converts on
+  // its own (öre-rounded) exactly like the ledger's per-item 1513 debit, then
+  // the sum rounds to whole kronor for the file.
   const prisForArbete = Math.round(
-    typeLines.reduce((sum, l) => sum + (l.line_total ?? 0) + (l.vat_amount ?? 0), 0),
+    typeLines.reduce((sum, l) => sum + toSek(l.line_total ?? 0) + toSek(l.vat_amount ?? 0), 0),
   )
   const begartBelopp = Math.round(
-    typeLines.reduce((sum, l) => sum + (l.deduction_amount ?? 0), 0),
+    typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0),
   )
   const betaltBelopp = prisForArbete - begartBelopp
   if (prisForArbete < 2) {

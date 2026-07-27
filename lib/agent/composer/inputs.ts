@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SourceSignals } from './schemas'
+import { loadActiveEmployeeCount } from './employee-facts'
 
 // Atom registry index row: the metadata-only shape the composer sees when
 // picking a loadout. We never send full atom bodies to the Opus call;
@@ -46,18 +47,25 @@ export async function loadCompanyTicSnapshot(
   }
 }
 
-// Known facts from `company_settings`: the onboarding form persists these
-// (moms_period, fiscal_year_start_month, f_skatt, employees, city). Composer
-// uses them as KNOWN inputs so it stops generating verification questions
-// about already-settled values.
+// Known facts from `company_settings`: the settings forms persist these
+// (moms_period, fiscal_year_start_month, f_skatt, employer facts, city).
+// Composer uses them as KNOWN inputs so it stops generating verification
+// questions about already-settled values.
+//
+// Employees are NOT in here as a headcount: this select used to name
+// `employee_count` and `has_employees`, neither of which exists on
+// company_settings, which made PostgREST reject the whole select (42703) and
+// left every field below null too. The employer facts that do exist are
+// `employer_registered` (nullable: null = never attested) and `pays_salaries`;
+// lib/agent/composer/employee-facts.ts turns them plus the live `employees`
+// count into the derived answer.
 export interface CompanySettingsForComposer {
   city: string | null
   moms_period: string | null
   fiscal_year_start_month: number | null
   f_skatt: boolean | null
   vat_registered: boolean | null
-  employee_count: number | null
-  has_employees: boolean | null
+  employer_registered: boolean | null
   pays_salaries: boolean | null
   accounting_method: string | null
 }
@@ -69,7 +77,7 @@ export async function loadCompanySettings(
   const { data } = await supabase
     .from('company_settings')
     .select(
-      'city, moms_period, fiscal_year_start_month, f_skatt, vat_registered, employee_count, has_employees, pays_salaries, accounting_method',
+      'city, moms_period, fiscal_year_start_month, f_skatt, vat_registered, employer_registered, pays_salaries, accounting_method',
     )
     .eq('company_id', companyId)
     .maybeSingle()
@@ -144,9 +152,162 @@ export async function loadUserDirectorship(
   return { confirmedDirector: isDirector }
 }
 
+// ---------------------------------------------------------------------------
+// Currency-aware magnitudes
+// ---------------------------------------------------------------------------
+//
+// `transactions.amount` is denominated in `transactions.currency`, not in SEK.
+// The SEK value of a foreign row lives in `amount_sek` (written at ingest) or
+// is derivable from `exchange_rate`; a foreign row carrying neither has no
+// known SEK value at all. Adding raw `amount` across rows and labelling the
+// total "kr" therefore invents a magnitude out of thin air.
+//
+// That matters more here than in an ordinary report: these summaries are the
+// input to the model that writes the company's standing agent instructions, so
+// a wrong magnitude is baked into durable instructions rather than misleading
+// one answer. Every rollup below therefore carries three things instead of one
+// number: the SEK total of the rows whose SEK value is actually known, the
+// native total per currency (covering every row), and the count of rows
+// deliberately left out of the SEK total.
+export interface CurrencyMagnitude {
+  // SEK total of the rows with a known SEK value. 0 when no row has one, so
+  // always read `rows_without_sek` before treating this as the magnitude.
+  //
+  // Named `abs_amount` (not `abs_amount_sek`) because `SourceSignals` persists
+  // this shape in `agent_profiles.source_signals`; renaming would silently
+  // change what older snapshots mean.
+  abs_amount: number
+  // Native totals per currency, covering EVERY row including the ones with no
+  // SEK equivalent. SEK first, then descending. Amounts in different
+  // currencies are never added together.
+  by_currency: { currency: string; abs_amount: number }[]
+  // Rows with a foreign amount and neither `amount_sek` nor a usable
+  // `exchange_rate`. These are NOT part of `abs_amount`.
+  rows_without_sek: number
+}
+
+interface AmountRow {
+  amount: number | string | null
+  currency?: string | null
+  amount_sek?: number | string | null
+  exchange_rate?: number | string | null
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function rowCurrency(row: AmountRow): string {
+  const raw = typeof row.currency === 'string' ? row.currency.trim().toUpperCase() : ''
+  return raw.length > 0 ? raw : 'SEK'
+}
+
+// SEK value of one row, or null when there genuinely is none. Mirrors the
+// resolution order used when booking (lib/bookkeeping/currency-utils.ts) but
+// deliberately drops its final fallback: that one returns the raw foreign
+// amount when no rate is stored, which for a summary reads as "500 EUR is
+// 500 kr". For this input a missing rate must read as unknown.
+function rowSekAmount(row: AmountRow): number | null {
+  const amount = toFiniteNumber(row.amount)
+  if (amount == null) return null
+  if (rowCurrency(row) === 'SEK') return Math.abs(amount)
+  const stored = toFiniteNumber(row.amount_sek)
+  if (stored != null) return Math.abs(stored)
+  const rate = toFiniteNumber(row.exchange_rate)
+  if (rate == null || rate <= 0) return null
+  return Math.abs(amount * rate)
+}
+
+interface MagnitudeBucket {
+  sek: number
+  native: Map<string, number>
+  rowsWithoutSek: number
+}
+
+function newMagnitudeBucket(): MagnitudeBucket {
+  return { sek: 0, native: new Map(), rowsWithoutSek: 0 }
+}
+
+// Folds one row into a bucket and returns its SEK value (null when unknown).
+// Rows with no usable `amount` at all are skipped rather than counted as a
+// currency gap: they are missing data, not a missing exchange rate.
+function addRowToMagnitude(bucket: MagnitudeBucket, row: AmountRow): number | null {
+  const amount = toFiniteNumber(row.amount)
+  if (amount == null) return null
+  const currency = rowCurrency(row)
+  bucket.native.set(currency, (bucket.native.get(currency) ?? 0) + Math.abs(amount))
+  const sek = rowSekAmount(row)
+  if (sek == null) {
+    bucket.rowsWithoutSek++
+  } else {
+    bucket.sek += sek
+  }
+  return sek
+}
+
+function finalizeMagnitude(bucket: MagnitudeBucket): CurrencyMagnitude {
+  const by_currency = Array.from(bucket.native.entries())
+    .map(([currency, abs_amount]) => ({
+      currency,
+      abs_amount: Math.round(abs_amount * 100) / 100,
+    }))
+    .sort((a, b) => {
+      if (a.currency === b.currency) return 0
+      if (a.currency === 'SEK') return -1
+      if (b.currency === 'SEK') return 1
+      return b.abs_amount - a.abs_amount
+    })
+  return {
+    abs_amount: Math.round(bucket.sek * 100) / 100,
+    by_currency,
+    rows_without_sek: bucket.rowsWithoutSek,
+  }
+}
+
+// True when the whole magnitude is plain SEK with nothing unresolved, i.e. the
+// only case where it may be rendered as a single "kr" figure.
+export function isSekOnlyMagnitude(m: CurrencyMagnitude): boolean {
+  return m.rows_without_sek === 0 && m.by_currency.every((c) => c.currency === 'SEK')
+}
+
+// Ranking key for magnitudes with no usable SEK total: the largest single
+// currency total. Ordering only, never rendered, so it never implies that
+// amounts in different currencies are comparable money.
+function largestNativeTotal(m: CurrencyMagnitude): number {
+  return m.by_currency.reduce((max, c) => (c.abs_amount > max ? c.abs_amount : max), 0)
+}
+
+// Splits a counterparty rollup into a SEK-ranked top list plus the ones whose
+// magnitude cannot be expressed in SEK and would otherwise vanish at the
+// slice (they rank as 0 kr). The second list is what keeps "no stored exchange
+// rate" visible instead of silently excluded.
+function rankCounterparties<T extends CurrencyMagnitude & { name: string }>(
+  rows: T[],
+  topLimit: number,
+  unconvertibleLimit: number,
+): { top: T[]; unconvertible: T[] } {
+  const ranked = [...rows].sort((a, b) => b.abs_amount - a.abs_amount)
+  const top = ranked.slice(0, topLimit)
+  const inTop = new Set(top.map((r) => r.name))
+  const unconvertible = ranked
+    .filter((r) => r.rows_without_sek > 0 && !inTop.has(r.name))
+    .sort((a, b) => largestNativeTotal(b) - largestNativeTotal(a))
+    .slice(0, unconvertibleLimit)
+  return { top, unconvertible }
+}
+
+interface CounterpartyMagnitude extends CurrencyMagnitude {
+  name: string
+}
+
 interface SieSummary {
   top_accounts: { account: string; abs_amount: number }[]
-  top_counterparties: { name: string; abs_amount: number }[]
+  top_counterparties: CounterpartyMagnitude[]
+  // Counterparties left out of the SEK ranking because no row carries a SEK
+  // equivalent. Rendered in their own labelled block so they stay visible.
+  unconvertible_counterparties: CounterpartyMagnitude[]
   year_count: number
 }
 
@@ -181,7 +342,9 @@ export async function loadSieSummary(
 
   // Top-20 account magnitudes across journal_entry_lines for the company.
   // Cheaper than aggregating SIE line-items directly because the lines have
-  // already landed in journal_entry_lines after import.
+  // already landed in journal_entry_lines after import. These are genuinely
+  // SEK: journal_entry_lines.debit/credit are the booked SEK amounts, with any
+  // foreign original kept separately in currency/amount_in_currency.
   const { data: lines, error: linesErr } = await supabase.rpc('agent_top_accounts_for_company', {
     p_company_id: companyId,
     p_limit: 20,
@@ -201,36 +364,42 @@ export async function loadSieSummary(
   // `transactions.description` is the raw text from the bank (not
   // normalized) so this is a noisy signal. The composer treats it as a hint
   // alongside TIC sniCodes, which carry the strong industry signal.
+  //
+  // currency/amount_sek/exchange_rate come along because `amount` alone does
+  // not say what unit it is in: see the CurrencyMagnitude note above.
   const { data: tx } = await supabase
     .from('transactions')
-    .select('description, amount')
+    .select('description, amount, currency, amount_sek, exchange_rate')
     .eq('company_id', companyId)
     .limit(2000)
 
-  const cpAgg = new Map<string, number>()
+  const cpAgg = new Map<string, MagnitudeBucket>()
   if (Array.isArray(tx)) {
-    for (const t of tx as { description: string | null; amount: number | string | null }[]) {
+    for (const t of tx as (AmountRow & { description: string | null })[]) {
       const name = normalizeCounterparty(t.description)
       if (!name) continue
-      const amt = Math.abs(Number(t.amount) || 0)
-      cpAgg.set(name, (cpAgg.get(name) ?? 0) + amt)
+      let bucket = cpAgg.get(name)
+      if (!bucket) {
+        bucket = newMagnitudeBucket()
+        cpAgg.set(name, bucket)
+      }
+      addRowToMagnitude(bucket, t)
     }
   }
-  const topCounterparties = Array.from(cpAgg.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([name, abs_amount]) => ({ name, abs_amount }))
+  const allCounterparties: CounterpartyMagnitude[] = Array.from(cpAgg.entries()).map(
+    ([name, bucket]) => ({ name, ...finalizeMagnitude(bucket) }),
+  )
+  const { top, unconvertible } = rankCounterparties(allCounterparties, 10, 5)
 
   return {
     top_accounts: topAccounts,
-    top_counterparties: topCounterparties,
+    top_counterparties: top,
+    unconvertible_counterparties: unconvertible,
     year_count: years.size,
   }
 }
 
-interface BankingCounterparty {
-  name: string
-  abs_amount: number
+interface BankingCounterparty extends CounterpartyMagnitude {
   // 'in'  → money coming in (income / refund / loan disbursement)
   // 'out' → money going out (cost / supplier payment / repayment)
   // 'mixed' → both directions present (rare: typically transfers or
@@ -246,7 +415,20 @@ interface BankingCounterparty {
 
 interface BankingSummary {
   top_counterparties: BankingCounterparty[]
+  // Counterparties whose amounts include rows with no stored SEK equivalent
+  // and that did not survive the SEK ranking. Kept so "we do not know what
+  // this is worth in kronor" stays visible instead of silently excluded.
+  unconvertible_counterparties: BankingCounterparty[]
+  // Average monthly SEK volume over the window, counting ONLY rows whose SEK
+  // value is known. null when no row has one: there is then no honest kr
+  // figure to state at all.
   monthly_volume: number | null
+  // Coverage behind `monthly_volume`. When rows_without_sek > 0 the figure is
+  // a floor, not the real volume, and the renderer has to say so.
+  volume_rows_with_sek: number
+  volume_rows_without_sek: number
+  // Every currency seen in the window, e.g. ['EUR', 'SEK'].
+  currencies: string[]
   unbooked_count: number
 }
 
@@ -263,9 +445,12 @@ export async function loadBankingSummary(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<BankingSummary | null> {
+  // currency/amount_sek/exchange_rate are part of the magnitude, not optional
+  // decoration: without them `amount` is a bare number with no unit, and the
+  // rollup below would sum EUR into a total labelled "kr".
   const { data, error } = await supabase
     .from('transactions')
-    .select('description, amount, date, journal_entry_id')
+    .select('description, amount, currency, amount_sek, exchange_rate, date, journal_entry_id')
     .eq('company_id', companyId)
     .gte('date', oneYearAgo())
     .order('date', { ascending: false })
@@ -273,51 +458,70 @@ export async function loadBankingSummary(
   if (error || !Array.isArray(data) || data.length === 0) return null
 
   interface Bucket {
-    absAmount: number
+    magnitude: MagnitudeBucket
     hasInflow: boolean
     hasOutflow: boolean
     hasUnbooked: boolean
   }
   const cpAgg = new Map<string, Bucket>()
-  let totalVolume = 0
+  const currencies = new Set<string>()
+  let sekVolume = 0
+  let volumeRowsWithSek = 0
+  let volumeRowsWithoutSek = 0
   let unbookedCount = 0
-  for (const t of data as {
+  for (const t of data as (AmountRow & {
     description: string | null
-    amount: number | string | null
     journal_entry_id: string | null
-  }[]) {
-    const signedAmt = Number(t.amount) || 0
-    const absAmt = Math.abs(signedAmt)
-    totalVolume += absAmt
+  })[]) {
     if (!t.journal_entry_id) unbookedCount++
+
+    const signedAmt = toFiniteNumber(t.amount)
+    if (signedAmt != null) {
+      currencies.add(rowCurrency(t))
+      const sek = rowSekAmount(t)
+      if (sek == null) {
+        volumeRowsWithoutSek++
+      } else {
+        sekVolume += sek
+        volumeRowsWithSek++
+      }
+    }
 
     const name = normalizeCounterparty(t.description)
     if (!name) continue
-    const prev = cpAgg.get(name) ?? {
-      absAmount: 0,
-      hasInflow: false,
-      hasOutflow: false,
-      hasUnbooked: false,
+    let bucket = cpAgg.get(name)
+    if (!bucket) {
+      bucket = {
+        magnitude: newMagnitudeBucket(),
+        hasInflow: false,
+        hasOutflow: false,
+        hasUnbooked: false,
+      }
+      cpAgg.set(name, bucket)
     }
-    prev.absAmount += absAmt
-    if (signedAmt > 0) prev.hasInflow = true
-    if (signedAmt < 0) prev.hasOutflow = true
-    if (!t.journal_entry_id) prev.hasUnbooked = true
-    cpAgg.set(name, prev)
+    addRowToMagnitude(bucket.magnitude, t)
+    // Direction reads off the sign, which is currency-independent.
+    if (signedAmt != null && signedAmt > 0) bucket.hasInflow = true
+    if (signedAmt != null && signedAmt < 0) bucket.hasOutflow = true
+    if (!t.journal_entry_id) bucket.hasUnbooked = true
   }
-  const top: BankingCounterparty[] = Array.from(cpAgg.entries())
-    .sort((a, b) => b[1].absAmount - a[1].absAmount)
-    .slice(0, 20)
-    .map(([name, b]) => ({
+  const allCounterparties: BankingCounterparty[] = Array.from(cpAgg.entries()).map(
+    ([name, b]) => ({
       name,
-      abs_amount: b.absAmount,
+      ...finalizeMagnitude(b.magnitude),
       direction: b.hasInflow && b.hasOutflow ? 'mixed' : b.hasInflow ? 'in' : 'out',
       has_unbooked: b.hasUnbooked,
-    }))
+    }),
+  )
+  const { top, unconvertible } = rankCounterparties(allCounterparties, 20, 10)
 
   return {
     top_counterparties: top,
-    monthly_volume: totalVolume > 0 ? Math.round(totalVolume / 12) : null,
+    unconvertible_counterparties: unconvertible,
+    monthly_volume: sekVolume > 0 ? Math.round(sekVolume / 12) : null,
+    volume_rows_with_sek: volumeRowsWithSek,
+    volume_rows_without_sek: volumeRowsWithoutSek,
+    currencies: Array.from(currencies).sort(),
     unbooked_count: unbookedCount,
   }
 }
@@ -350,6 +554,10 @@ export interface ComposerInputs {
   ticSnapshot: Record<string, unknown> | null
   ticFetchedAt: string | null
   companySettings: CompanySettingsForComposer | null
+  // Employees currently flagged active in the payroll module. null when the
+  // count could not be read, which must not be read as "nobody": see
+  // lib/agent/composer/employee-facts.ts.
+  activeEmployees: number | null
   sieSummary: SieSummary | null
   bankingSummary: BankingSummary | null
   atomIndex: AtomRegistryIndexRow[]
@@ -371,6 +579,7 @@ export async function gatherComposerInputs(
     sieSummary,
     bankingSummary,
     companySettings,
+    activeEmployees,
     directorship,
   ] = await Promise.all([
     loadCompanyTicSnapshot(supabase, companyId),
@@ -378,6 +587,7 @@ export async function gatherComposerInputs(
     loadSieSummary(supabase, companyId).catch(() => null),
     loadBankingSummary(supabase, companyId).catch(() => null),
     loadCompanySettings(supabase, companyId).catch(() => null),
+    loadActiveEmployeeCount(supabase, companyId).catch(() => null),
     loadUserDirectorship(supabase, companyId).catch(() => ({ confirmedDirector: false })),
   ])
 
@@ -388,6 +598,7 @@ export async function gatherComposerInputs(
     ticSnapshot: snapshot,
     ticFetchedAt: fetchedAt,
     companySettings,
+    activeEmployees,
     sieSummary,
     bankingSummary,
     atomIndex,

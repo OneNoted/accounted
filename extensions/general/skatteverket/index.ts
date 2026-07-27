@@ -112,7 +112,9 @@ const log = createLogger('skatteverket')
  *        SKATTEVERKET_SKATTEKONTO_API_BASE_URL=https://api.skatteverket.se/beskattning/skattekonto/v2
  *        SKATTEVERKET_OAUTH_BASE_URL=https://peroauth2.skatteverket.se/oauth2/v1/per
  *        (per-flow prod host, verified resolving; oauth2.skatteverket.se does not exist)
- *   8. Verify Sentry alerts on /api/extensions/ext/skatteverket/* 5xx.
+ *   8. Wire an observability provider (lib/observability has the sink but no
+ *      adapter is registered yet) and verify it alerts on
+ *      /api/extensions/ext/skatteverket/* 5xx.
  *   9. Verify 7-year retention of `agi_declarations.xml_content` +
  *      `kvittensnummer` (BFL 7 kap.).
  *  10. Run a single AGI end-to-end against test on a real client before

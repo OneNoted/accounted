@@ -450,6 +450,141 @@ describe('findMatchingVouchersForInvoice', () => {
 })
 
 // ============================================================
+// findMatchingVouchersForInvoice: the "låst period" advisory flag
+//
+// fiscal_periods has NO `status` column: open/locked/closed is derived from
+// is_closed + locked_at (same source the enforce_period_lock trigger uses).
+// Asking for a phantom column makes PostgREST error out, the lock list comes
+// back empty and every candidate is silently advertised as "open".
+// ============================================================
+
+type QueuedMockSupabase = ReturnType<typeof createQueuedMockSupabase>['supabase']
+type QueuedResult = { data?: unknown; error?: unknown }
+
+/**
+ * Record the exact column list handed to each `.select()`, per table. The
+ * queued mock resolves whatever was enqueued regardless of the columns asked
+ * for, so it happily swallows a column that does not exist in Postgres: a
+ * data-only assertion cannot catch a phantom column, the select string can.
+ */
+function recordSelects(supabase: QueuedMockSupabase) {
+  const selects: { table: string; columns: string }[] = []
+  const original = supabase.from.getMockImplementation() as (table: string) => object
+  supabase.from.mockImplementation((table: string) => {
+    const chain = original(table)
+    return new Proxy(chain, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver)
+        if (prop !== 'select' || typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          selects.push({ table, columns: String(args[0] ?? '') })
+          return (value as (...a: unknown[]) => unknown)(...args)
+        }
+      },
+    })
+  })
+  return selects
+}
+
+/** One accrual candidate (1510 credit 1000) in fiscal period `fp-1`. */
+function enqueueSingleAccrualCandidate(
+  enqueue: (r: QueuedResult) => void,
+  periodLookup: QueuedResult,
+) {
+  enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+  enqueue({
+    data: [
+      {
+        id: 'je-1',
+        voucher_series: 'A',
+        voucher_number: 7,
+        entry_date: '2026-05-01',
+        description: 'Betalning faktura F-1',
+        status: 'posted',
+        source_type: 'manual',
+        fiscal_period_id: 'fp-1',
+        company_id: 'company-1',
+        journal_entry_lines: [
+          {
+            id: 'l1',
+            account_number: '1510',
+            debit_amount: 0,
+            credit_amount: 1000,
+            currency: 'SEK',
+          },
+        ],
+      },
+    ],
+  })
+  enqueue({ data: [] }) // invoice_payments already-linked lookup
+  enqueue(periodLookup) // fiscal_periods lock lookup
+}
+
+function lockTestInvoice() {
+  return makeInvoice({
+    remaining_amount: 1000,
+    total: 1000,
+    currency: 'SEK',
+    due_date: '2026-05-01',
+    invoice_number: 'F-1',
+  })
+}
+
+describe('findMatchingVouchersForInvoice: period_locked flag', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('asks fiscal_periods for is_closed + locked_at, never a `status` column', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const selects = recordSelects(supabase)
+    enqueueSingleAccrualCandidate(enqueue, {
+      data: [{ id: 'fp-1', is_closed: false, locked_at: null }],
+    })
+    await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      lockTestInvoice() as never,
+    )
+    const periodSelect = selects.find((s) => s.table === 'fiscal_periods')
+    expect(periodSelect).toBeDefined()
+    expect(periodSelect?.columns).toBe('id, is_closed, locked_at')
+    expect(periodSelect?.columns).not.toContain('status')
+  })
+
+  it.each([
+    ['open', { id: 'fp-1', is_closed: false, locked_at: null }, false],
+    ['locked', { id: 'fp-1', is_closed: false, locked_at: '2026-06-30T10:00:00Z' }, true],
+    ['closed', { id: 'fp-1', is_closed: true, locked_at: '2026-06-30T10:00:00Z' }, true],
+  ])('flags a %s period as period_locked=%s', async (_label, period, expected) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueSingleAccrualCandidate(enqueue, { data: [period] })
+    const result = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      lockTestInvoice() as never,
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].period_locked).toBe(expected)
+  })
+
+  it('fails closed: a fiscal_periods lookup error does not advertise the period as open', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueSingleAccrualCandidate(enqueue, {
+      data: null,
+      error: { message: 'column fiscal_periods.status does not exist' },
+    })
+    const result = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      lockTestInvoice() as never,
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].period_locked).toBe(true)
+  })
+})
+
+// ============================================================
 // linkInvoiceToVoucher: outcome shape & event emission
 // ============================================================
 

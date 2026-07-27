@@ -7,6 +7,7 @@ async function insertInvoice(input: {
   userId: string
   companyId: string
   number: string
+  total?: number
   creditedInvoiceId?: string
   creationComplete?: boolean
 }): Promise<string> {
@@ -14,13 +15,14 @@ async function insertInvoice(input: {
   await getPool().query(
     `INSERT INTO public.invoices
        (id, user_id, company_id, invoice_number, invoice_date, due_date,
-        credited_invoice_id, creation_complete)
-     VALUES ($1, $2, $3, $4, '2026-07-15', '2026-07-15', $5, $6)`,
+        total, credited_invoice_id, creation_complete)
+     VALUES ($1, $2, $3, $4, '2026-07-15', '2026-07-15', $5, $6, $7)`,
     [
       id,
       input.userId,
       input.companyId,
       input.number,
+      input.total ?? 0,
       input.creditedInvoiceId ?? null,
       input.creationComplete ?? true,
     ],
@@ -29,14 +31,25 @@ async function insertInvoice(input: {
 }
 
 describe('credit note creation and posting guards', () => {
-  it('allows only one credit-note relationship per original and company', async () => {
+  // 20260726130000 replaced the one-credit-note-per-original UNIQUE index with an
+  // amount cap: partial credit notes are legal (ML 17 kap 22-23 SS), crediting
+  // beyond the original total is not. Full coverage of the new invariant lives in
+  // credit-note-amount-cap.pg.test.ts; this asserts the double-reversal case the
+  // old index existed to prevent is still blocked.
+  it('refuses a second full-value credit note for the same original', async () => {
     const { userId, companyId } = await seedCompany()
-    const originalId = await insertInvoice({ userId, companyId, number: `F-${randomUUID()}` })
+    const originalId = await insertInvoice({
+      userId,
+      companyId,
+      number: `F-${randomUUID()}`,
+      total: 12500,
+    })
 
     await insertInvoice({
       userId,
       companyId,
       number: `KR-${randomUUID()}`,
+      total: -12500,
       creditedInvoiceId: originalId,
     })
 
@@ -45,9 +58,10 @@ describe('credit note creation and posting guards', () => {
         userId,
         companyId,
         number: `KR-${randomUUID()}`,
+        total: -12500,
         creditedInvoiceId: originalId,
       }),
-    ).rejects.toThrow(/duplicate|unique/i)
+    ).rejects.toThrow(/exceeds the invoice total/i)
   })
 
   it('persists the completion marker and installs a unique posted-source guard', async () => {

@@ -105,6 +105,10 @@ export function buildArchiveReadme(params: ArchiveReadmeParams): string {
       'data/                Register som JSON: kunder, leverantörer, fakturor,',
       '                     anställda, löner, tillgångar, med mera. En fil per',
       '                     tabell, radernas fältnamn följer databasen.',
+      '                     Radfiler (t.ex. invoice_items.json) innehåller',
+      '                     dessutom moderpostens valuta, t.ex. invoice_currency',
+      '                     och invoice_exchange_rate, så att varje belopps',
+      '                     enhet framgår direkt i filen.',
       'revision/            behandlingshistorik.json (alla ändringar, BFL 5 kap',
       '                     11 §) och systemdokumentation.json (kontoplan,',
       '                     verifikationsserier, arkiveringsprinciper).'

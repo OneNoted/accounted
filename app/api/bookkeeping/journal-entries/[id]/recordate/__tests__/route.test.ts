@@ -67,7 +67,9 @@ describe('POST /api/bookkeeping/journal-entries/[id]/recordate', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Validation failed')
+    // Inverted from `toBe('Validation failed')`: the constant was the bug.
+    expect(body.error).toMatch(/^Valideringsfel: /)
+    expect(body.error).toContain('new_entry_date')
   })
 
   it('returns 400 when new_entry_date is not an ISO date', async () => {
@@ -79,7 +81,8 @@ describe('POST /api/bookkeeping/journal-entries/[id]/recordate', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Validation failed')
+    expect(body.error).toMatch(/^Valideringsfel: /)
+    expect(body.error).toContain('new_entry_date')
   })
 
   it('returns reversal and corrected entries on success', async () => {

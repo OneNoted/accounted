@@ -25,7 +25,10 @@ import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
 import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import type { AgiSubmissionState } from '@/lib/salary/agi-submission-state'
+import {
+  resolveRunAgiSubmission,
+  type AgiSubmissionState,
+} from '@/lib/salary/agi-submission-state'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface AGIPanelProps {
@@ -40,6 +43,11 @@ interface AGIPanelProps {
   /**
    * Per-period submission record, owned by the parent (via useAgiSubmission)
    * so the progress rail and hero can render the same state machine.
+   *
+   * Deliberately period-scoped, matching Skatteverket: the underlag, the
+   * granskningsunderlag lock and lasUpp all address a redovisningsperiod, not
+   * a run. What is run-scoped is the filing receipt, and the panel narrows the
+   * record itself (see `runSubmission` below) rather than asking the parent to.
    */
   submission: AgiSubmissionState | null
   /** Refetch the submission record after a state-changing action. */
@@ -162,11 +170,25 @@ export function AGIPanel(props: AGIPanelProps) {
   const prettyPeriod = `${period.slice(0, 4)}-${period.slice(4)}`
 
   // ── Derived filing state (needed by hooks, so derived before any return) ──
+  // Two scopes live side by side below, deliberately.
+  //
+  // PERIOD scope (`submission`): the in-flight machine. Skatteverket locks a
+  // redovisningsperiod, not a run, so when a corrected month holds two runs the
+  // second one must still see, and be able to unlock, the draft that blocks it.
   const subState = submission?.status
   const awaitingSigning = subState === 'awaiting_signing'
   const underlagSubmitted = subState === 'underlag_submitted'
   const underlagRejected = subState === 'underlag_rejected'
-  const isSigned = subState === 'signed' || !!agiSubmittedAt
+  // RUN scope (`runSubmission`): the filing receipt. A correction is a complete
+  // replacement declaration for the same period (same specifikationsnummer per
+  // employee) filed on its own, so it gets its OWN kvittens. Reading the period
+  // record raw here would render the correction as already filed and print the
+  // superseded declaration's kvittensnummer on it.
+  const runSubmission = resolveRunAgiSubmission(
+    { id: salaryRunId, agi_generated_at: agiGeneratedAt, agi_submitted_at: agiSubmittedAt },
+    submission,
+  )
+  const isSigned = runSubmission?.status === 'signed' || !!agiSubmittedAt
   // The submission state is keyed by PERIOD; AGI generation is keyed by RUN.
   // If the run's AGI was (re)generated AFTER this signing draft was created,
   // the locked underlag at Skatteverket reflects superseded figures and must
@@ -874,7 +896,7 @@ export function AGIPanel(props: AGIPanelProps) {
   const forcedAdvanced = draftIsStale || underlagRejected
   const advancedOpen = showAdvanced || forcedAdvanced
 
-  const signedAtRaw = submission?.signeradTid ?? agiSubmittedAt ?? null
+  const signedAtRaw = runSubmission?.signeradTid ?? agiSubmittedAt ?? null
   const signedAtText = signedAtRaw ? new Date(signedAtRaw).toLocaleString('sv-SE') : null
 
   const chainStepState = (step: ChainStep): 'done' | 'running' | 'failed' | 'upcoming' => {
@@ -917,9 +939,11 @@ export function AGIPanel(props: AGIPanelProps) {
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Filed: the terminal state deserves more than a gray status row.
-            Kvittensnummer + signature metadata come from the submission
+            Kvittensnummer + signature metadata come from the run-scoped
             record; a run stamped only via agi_submitted_at (e.g. cron
-            reconciliation with an evicted cache) still gets the card. */}
+            reconciliation with an evicted cache, or an original whose cached
+            receipt a later correction has replaced) still gets the card, just
+            without a number: better than showing another declaration's. */}
         {isSigned && (
           <div className="rounded-md border border-border bg-muted/30 p-4">
             <div className="flex items-start gap-3">
@@ -928,20 +952,20 @@ export function AGIPanel(props: AGIPanelProps) {
                 <p className="text-sm font-medium">
                   {t('success_card_title', { period: prettyPeriod })}
                 </p>
-                {submission?.kvittensnummer && (
+                {runSubmission?.kvittensnummer && (
                   <p className="text-sm text-muted-foreground tabular-nums">
-                    {t('success_card_kvittens', { kvittens: submission.kvittensnummer })}
+                    {t('success_card_kvittens', { kvittens: runSubmission.kvittensnummer })}
                   </p>
                 )}
-                {(submission?.signeradAv || signedAtText) && (
+                {(runSubmission?.signeradAv || signedAtText) && (
                   <p className="text-sm text-muted-foreground">
-                    {submission?.signeradAv
+                    {runSubmission?.signeradAv
                       ? signedAtText
                         ? t('success_card_signed_by_at', {
-                            name: submission.signeradAv,
+                            name: runSubmission.signeradAv,
                             date: signedAtText,
                           })
-                        : t('success_card_signed_by', { name: submission.signeradAv })
+                        : t('success_card_signed_by', { name: runSubmission.signeradAv })
                       : t('success_card_signed_at', { date: signedAtText ?? '' })}
                   </p>
                 )}
@@ -998,8 +1022,8 @@ export function AGIPanel(props: AGIPanelProps) {
           <StatusRow
             ok={isSigned}
             okText={
-              submission?.kvittensnummer
-                ? t('submitted_with_kvittens', { kvittens: submission.kvittensnummer })
+              runSubmission?.kvittensnummer
+                ? t('submitted_with_kvittens', { kvittens: runSubmission.kvittensnummer })
                 : agiSubmittedAt
                   ? t('submitted_at', { date: new Date(agiSubmittedAt).toLocaleString('sv-SE') })
                   : t('submitted')

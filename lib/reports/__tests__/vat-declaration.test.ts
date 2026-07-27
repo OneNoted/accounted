@@ -65,7 +65,9 @@ import {
   formatPeriodLabel,
   getVatDeclarationSummary,
   calculateVatDeclaration,
+  rcInputTotalsFromDeclaration,
 } from '../vat-declaration'
+import { runVatDeclarationChecks } from '../vat-declaration-checks'
 import type { VatDeclaration } from '@/types'
 
 let supabase: ReturnType<typeof makeClient>
@@ -979,6 +981,185 @@ describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
     // all, just the single totals RPC.
     expect(supabase.from).not.toHaveBeenCalled()
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ============================================================
+// The reverse-charge input pair that travels with the declaration
+// ============================================================
+//
+// Why the declaration carries 2645/2647 at all: runVatDeclarationChecks only
+// runs the sharp RC_INPUT_VAT_MISMATCH comparison when a caller hands it
+// per-account totals. The web UI reads the declaration over HTTP and has no
+// ledger access of its own, so without this pair on the response it was stuck
+// with the ruta 48 fallback, and ruta 48 aggregates 2640-2649: ordinary
+// debiterad ingående moms on 2641 hid a completely missing RC input.
+
+/**
+ * Same per-account aggregation seedLedger feeds the RPC mock, as the FULL totals
+ * map. Used to prove the 2-entry projection produces identical findings, which
+ * is also what pins RC_INPUT_VAT_ACCOUNTS to the private RC_INPUT_ACCOUNTS list
+ * inside vat-declaration-checks: the fixtures below carry a balance on every
+ * OTHER ruta 48 account, so if one of them ever counted as reverse-charge input
+ * the two maps would disagree here.
+ */
+function totalsFromLines(
+  lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>,
+): Map<string, { debit: number; credit: number }> {
+  const byAccount = new Map<string, { debit: number; credit: number }>()
+  for (const l of lines) {
+    const t = byAccount.get(l.account_number) ?? { debit: 0, credit: 0 }
+    t.debit += l.debit_amount
+    t.credit += l.credit_amount
+    byAccount.set(l.account_number, t)
+  }
+  return byAccount
+}
+
+const debit = (account_number: string, debit_amount: number) =>
+  ({ account_number, debit_amount, credit_amount: 0 })
+const credit = (account_number: string, credit_amount: number) =>
+  ({ account_number, debit_amount: 0, credit_amount })
+
+/**
+ * The masking case, as a ledger: 50 000 kr of fiktiv utgående moms (2614) with
+ * its basbelopp correctly on 4535, no beräknad ingående moms at all, and 60 000
+ * kr of ordinary 2641 alongside it. Every other ruta 48 account carries a
+ * balance too, so ruta 48 (70 000) stays above the RC output and the aggregate
+ * comparison is silent while 50 000 kr of deductible moms is missing.
+ */
+const MASKED_RC_LINES = [
+  debit('4535', 200000),   // ruta 21 basis: 50 000 / 0.25, so no FK004 finding
+  credit('2614', 50000),    // ruta 30 fiktiv utgående moms
+  debit('2641', 60000),    // ordinary debiterad ingående moms: the mask
+  debit('2640', 1000),
+  debit('2642', 2000),
+  debit('2646', 3000),
+  debit('2649', 4000),     // blandad verksamhet: deliberately NOT reverse-charge input
+]
+
+describe('calculateVatDeclaration: rcInputAccountTotals', () => {
+  it('exposes both RC input accounts, netting credits against debits', async () => {
+    seedLedger([
+      debit('2645', 12000),
+      credit('2645', 2000),   // storno of one fiktiv-moms pair
+      debit('2647', 500),
+      debit('2641', 60000),  // not part of the pair
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    expect(result.rcInputAccountTotals).toEqual({
+      '2645': { debit: 12000, credit: 2000 },
+      '2647': { debit: 500, credit: 0 },
+    })
+    // Only the pair, never the rest of the period's account balances.
+    expect(Object.keys(result.rcInputAccountTotals!)).toEqual(['2645', '2647'])
+  })
+
+  it('carries both keys as zeros when the period has no RC input', async () => {
+    seedLedger([debit('2641', 60000)])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    // Present-and-zero, not absent: absent has to keep meaning "this producer
+    // does not carry the pair", which is what the HTTP fallback reads.
+    expect(result.rcInputAccountTotals).toEqual({
+      '2645': { debit: 0, credit: 0 },
+      '2647': { debit: 0, credit: 0 },
+    })
+  })
+
+  it('warns on the masked RC shortfall, which the ruta 48 fallback misses', async () => {
+    seedLedger(MASKED_RC_LINES)
+
+    const declaration = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    expect(declaration.rutor.ruta30).toBe(50000)
+    expect(declaration.rutor.ruta48).toBe(70000)
+
+    // Unwired: no second argument, so the check compares against ruta 48 and
+    // says nothing at all.
+    expect(runVatDeclarationChecks(declaration.rutor)).toEqual([])
+
+    // Wired the way the web UI now calls it.
+    const findings = runVatDeclarationChecks(
+      declaration.rutor,
+      rcInputTotalsFromDeclaration(declaration),
+    )
+    const mismatch = findings.find((f) => f.code === 'RC_INPUT_VAT_MISMATCH')
+    expect(mismatch?.status).toBe('WARNING')
+    // \s, not a literal space: sv-SE groups thousands with a no-break space.
+    expect(mismatch?.message).toMatch(/50\s000 kr saknas/)
+  })
+
+  it('behaves identically on the 2-entry projection and the full totals map', async () => {
+    seedLedger(MASKED_RC_LINES)
+    const declaration = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    expect(
+      runVatDeclarationChecks(declaration.rutor, rcInputTotalsFromDeclaration(declaration)),
+    ).toEqual(
+      runVatDeclarationChecks(declaration.rutor, totalsFromLines(MASKED_RC_LINES)),
+    )
+  })
+
+  it('behaves identically on a partial shortfall too, values and not just zeros', async () => {
+    const lines = [...MASKED_RC_LINES, debit('2645', 20000)] // 20 000 of the 50 000 booked
+    seedLedger(lines)
+    const declaration = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    const projected = runVatDeclarationChecks(
+      declaration.rutor,
+      rcInputTotalsFromDeclaration(declaration),
+    )
+    expect(projected).toEqual(
+      runVatDeclarationChecks(declaration.rutor, totalsFromLines(lines)),
+    )
+    expect(
+      projected.find((f) => f.code === 'RC_INPUT_VAT_MISMATCH')?.message,
+    ).toMatch(/30\s000 kr saknas/)
+  })
+
+  it('stays silent when 2645 mirrors the fiktiv utgående moms exactly', async () => {
+    seedLedger([...MASKED_RC_LINES, debit('2645', 50000)])
+    const declaration = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    expect(
+      runVatDeclarationChecks(declaration.rutor, rcInputTotalsFromDeclaration(declaration)),
+    ).toEqual([])
+  })
+
+  it('leaves a company with no reverse charge at all untouched', async () => {
+    // Plain domestic SEK trading: sales with output VAT and ordinary input VAT.
+    seedLedger([
+      credit('3001', 400000),
+      credit('2611', 100000),
+      debit('2641', 60000),
+    ])
+    const declaration = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    expect(
+      runVatDeclarationChecks(declaration.rutor, rcInputTotalsFromDeclaration(declaration)),
+    ).toEqual([])
+    expect(runVatDeclarationChecks(declaration.rutor)).toEqual([])
+  })
+})
+
+describe('rcInputTotalsFromDeclaration', () => {
+  it('rebuilds the map the checks consume, keyed by account number', () => {
+    const map = rcInputTotalsFromDeclaration({
+      rcInputAccountTotals: { '2645': { debit: 1250, credit: 0 }, '2647': { debit: 0, credit: 0 } },
+    })
+    expect(map?.get('2645')).toEqual({ debit: 1250, credit: 0 })
+    expect(map?.size).toBe(2)
+  })
+
+  it('returns undefined, not an empty map, when the pair is absent', () => {
+    // A response from a deploy that predates the field. undefined makes the
+    // check fall back to ruta 48; an empty map would read as "0 kr beräknad
+    // ingående moms" and turn a correct declaration into a false warning.
+    expect(rcInputTotalsFromDeclaration({})).toBeUndefined()
   })
 })
 

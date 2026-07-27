@@ -112,7 +112,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Validation failed')
+    // Inverted from `toBe('Validation failed')`: the constant was the bug.
+    expect(body.error).toMatch(/^Valideringsfel: /)
+    expect(body.error).toContain('invoice_id')
   })
 
   it('returns 404 when transaction not found', async () => {
@@ -1014,7 +1016,44 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect((body.error as unknown as { code: string }).code).toBe('MATCH_INVOICE_DUPLICATE_PAYMENT')
   })
 
-  it('returns success with journal_entry_error when journal entry fails (non-blocking)', async () => {
+  it('aborts the match with 500 when the payment journal entry fails (no invoice update, no link)', async () => {
+    // Regression for the half-state: a generic booking failure used to mark
+    // the invoice paid and link the transaction with NO verifikat, which no
+    // flow could ever repair (mark-paid rejects paid invoices, this route
+    // rejects linked transactions). Mirrors match-supplier-invoice: the match
+    // aborts before ANY write.
+    const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
+    const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 12500, remaining_amount: 12500 })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    // Nothing else enqueued on purpose: the route must return before the
+    // invoice update, payment insert, or transaction link ever run.
+
+    mockCreateJournalEntry.mockRejectedValue(new Error('deadlock detected'))
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { reason?: string } }
+    }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
+    // The raw English message never reaches the user (issue #337): the reason
+    // detail carries the Swedish invoice-context fallback.
+    expect(body.error.details?.reason).toBe('Kunde inte hantera fakturan. Försök igen.')
+    // Exactly the four reads happened (tx, invoice, hard-dup, settings):
+    // no invoice update, no invoice_payments insert, no transaction link.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(4)
+  })
+
+  it('aborts the match when createJournalEntry resolves without an id (no half-state)', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 12500, remaining_amount: 12500 })
 
@@ -1023,34 +1062,18 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
-    mockCreateJournalEntry.mockRejectedValue(new Error('Period locked'))
-
-    // Update invoice (optimistic lock)
-    enqueue({ data: [{ id: VALID_UUID }], error: null })
-    // Insert invoice_payments
-    enqueue({ data: null, error: null })
-    // Update transaction
-    enqueue({ data: null, error: null })
-    // logMatchEvent
-    enqueue({ data: null, error: null })
+    mockCreateJournalEntry.mockResolvedValue(null)
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
       body: { invoice_id: VALID_UUID },
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{
-      success: boolean
-      journal_entry_id: null
-      journal_entry_error: string
-    }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_id).toBeNull()
-    // Untyped errors no longer leak their raw English message (issue #337):
-    // they map to the Swedish invoice-context fallback.
-    expect(body.journal_entry_error).toBe('Kunde inte hantera fakturan. Försök igen.')
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
+    expect(mockSupabase.from).toHaveBeenCalledTimes(4)
   })
 
   // ────────────────────────────────────────────────────────────────

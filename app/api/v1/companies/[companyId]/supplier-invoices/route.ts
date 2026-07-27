@@ -2,7 +2,7 @@
  * /api/v1/companies/{companyId}/supplier-invoices: list + register endpoints.
  *
  * GET   : list with filters (status, supplier_id, currency, invoice_date range).
- *         Cursor pagination on (invoice_date DESC, id DESC).
+ *         Cursor pagination on (created_at DESC, id ASC).
  * POST  : register a new supplier invoice. Idempotent (mandatory Idempotency-Key).
  *         Dry-runnable.
  *
@@ -34,6 +34,10 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import {
+  resolveSupplierInvoiceExchangeRate,
+  supplierInvoiceSekAmounts,
+} from '@/lib/currency/supplier-invoice-rate'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -85,7 +89,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices',
   summary: 'List supplier invoices for a company.',
   description:
-    'Returns supplier invoices in most-recent-first order. Filters: status, supplier_id, currency, date_from / date_to (filter by invoice_date).',
+    'Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newest-registered first; the `invoice_date` column is the seller\'s invoice date and is filterable via ?date_from / ?date_to but is not the sort key). Filters: status, supplier_id, currency, date_from / date_to (filter by invoice_date).',
   useWhen:
     'You need to enumerate registered supplier invoices for an AP dashboard, a payment run, or a leverantörsreskontra reconciliation.',
   doNotUseFor:
@@ -94,6 +98,8 @@ registerEndpoint({
     'Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.',
     'remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.',
     'arrival_number is internal book-keeping, not the seller\'s invoice number: use supplier_invoice_number for matching to received documents.',
+    'Ordering is by created_at (registration time), not invoice_date. A late-registered invoice appears where it was registered: filter on ?date_from / ?date_to when you care about the seller\'s invoice date.',
+    'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
   ],
   example: {
     response: {
@@ -163,12 +169,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const filters = filtersResult.data
 
+    // Sort by (created_at DESC, id ASC). created_at is the stable cursor
+    // anchor: it's a real timestamp (passes ISO-8601 validation in
+    // decodeDefaultCursor), NOT NULL, and total-orderable once id breaks
+    // ties. Sorting by `invoice_date` directly broke the cursor: a Postgres
+    // `date` serializes as YYYY-MM-DD, the decoder rejected it, the keyset
+    // predicate was never applied, and every "next page" silently returned
+    // page 1 forever while still advertising a fresh next_cursor.
+    // invoice_date is still on every row and ?date_from / ?date_to filter
+    // on it. Same anchor as the transactions list.
     let query = ctx.supabase
       .from('supplier_invoices')
       .select(`${SI_SUMMARY_COLUMNS}, supplier:suppliers(${SUPPLIER_NAME_ONLY_COLUMNS})`)
       .eq('company_id', ctx.companyId!)
-      .order('invoice_date', { ascending: false })
-      .order('id', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
       .limit(limit + 1)
 
     if (filters.status) query = query.eq('status', filters.status)
@@ -178,9 +193,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (filters.date_to) query = query.lte('invoice_date', filters.date_to)
 
     if (decoded) {
-      // Keyset on (invoice_date DESC, id DESC).
+      // Keyset on (created_at DESC, id ASC): created_at moves backward,
+      // id breaks ties within the same timestamp.
       query = query.or(
-        `invoice_date.lt.${decoded.ts},and(invoice_date.eq.${decoded.ts},id.lt.${decoded.id})`,
+        `created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
       )
     }
 
@@ -244,7 +260,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.invoice_date })
+      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
       : null
 
     return paginated(supplier_invoices, {
@@ -302,6 +318,8 @@ registerEndpoint({
     'Under faktureringsmetoden the registration JE is posted atomically with the SI row. JE failure aborts the whole call and no SI row is left behind (strict-mode).',
     'supplier_id must reference an existing, non-archived supplier in the same company: 404 SUPPLIER_NOT_FOUND otherwise.',
     'Duplicate (supplier_id, supplier_invoice_number) returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER. Use the credit flow on the original instead of re-registering with a tweaked number.',
+    'Foreign currency: omit exchange_rate and the server fetches Riksbanken\'s rate for invoice_date (ML 8 kap 21-23 §). If no rate can be resolved the create is refused with 400 SI_FX_RATE_MISSING rather than stored unconverted: pass exchange_rate explicitly to proceed. A SEK invoice needs no rate and gets total_sek = total.',
+    'exchange_rate is SEK per 1 unit of the invoice currency and must satisfy 0 < rate < 100000, the same bounds the supplier_invoices CHECK enforces. Out-of-range values return 400 VALIDATION_ERROR; passing an invoice total where a rate belongs is the usual cause.',
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). The registration JE lines are tagged accordingly. When the company has the dimension registry enabled, unknown or archived codes are rejected with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
   ],
   example: {
@@ -488,10 +506,35 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const { items, subtotal, vatAmount, total } = totalsResult
-    const exchangeRate = body.exchange_rate ?? null
-    const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
-    const vatAmountSek = exchangeRate ? Math.round(vatAmount * exchangeRate * 100) / 100 : null
-    const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
+
+    // Currency policy is shared with POST /api/supplier-invoices and the inbox
+    // convert route (lib/currency/supplier-invoice-rate.ts): a non-SEK invoice
+    // that arrives without a rate gets one fetched from Riksbanken for the
+    // invoice date, and if none can be had the create is refused rather than
+    // persisted with exchange_rate = NULL. Agents are the main caller here and
+    // the ones most likely to omit the field entirely; a NULL-rate row would
+    // only fail later, inside the booking path, with SI_FX_RATE_MISSING.
+    // Resolved before the arrival-number allocation and before the dry-run
+    // branch, so a dry run surfaces the same refusal a live commit would.
+    const fx = await resolveSupplierInvoiceExchangeRate(ctx.supabase, {
+      currency: body.currency,
+      invoiceDate: body.invoice_date,
+      suppliedRate: body.exchange_rate,
+    })
+    if (!fx.ok) {
+      return v1ErrorResponseFromCode('SI_FX_RATE_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { currency: fx.currency, invoice_date: fx.invoiceDate },
+      })
+    }
+    const exchangeRate = fx.rate.exchangeRate
+    const exchangeRateDate = fx.rate.exchangeRateDate
+    // SEK resolves to rate 1, so total_sek === total instead of NULL.
+    const {
+      subtotal_sek: subtotalSek,
+      vat_amount_sek: vatAmountSek,
+      total_sek: totalSek,
+    } = supplierInvoiceSekAmounts(fx.rate, { subtotal, vatAmount, total })
 
     // Derive a sensible default for vat_treatment + reverse_charge from the
     // supplier_type. EU/non-EU suppliers default to reverse-charge unless the
@@ -547,8 +590,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           due_date: body.due_date,
           delivery_date: body.delivery_date ?? null,
           status: 'registered',
-          currency: body.currency ?? 'SEK',
+          currency: fx.rate.currency,
           exchange_rate: exchangeRate,
+          exchange_rate_date: exchangeRateDate,
           vat_treatment: vatTreatment,
           reverse_charge: reverseCharge,
           subtotal,
@@ -596,8 +640,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         due_date: body.due_date,
         delivery_date: body.delivery_date ?? null,
         status: 'registered',
-        currency: body.currency ?? 'SEK',
+        currency: fx.rate.currency,
         exchange_rate: exchangeRate,
+        exchange_rate_date: exchangeRateDate,
         vat_treatment: vatTreatment,
         reverse_charge: reverseCharge,
         payment_reference: body.payment_reference ?? null,

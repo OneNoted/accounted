@@ -146,8 +146,13 @@ export default function ReviewCard({
           body: JSON.stringify(patchBody),
         })
         if (!res.ok) {
-          const text = await res.text()
-          throw new Error(text || `HTTP ${res.status}`)
+          // Map the parsed body plus the status, never the raw response text:
+          // the route answers thrown errors with the canonical envelope
+          // `{ error: { code, message } }`, and throwing the raw JSON text
+          // (or "[object Object]") discards the route's own Swedish reason.
+          const body = await res.json().catch(() => null)
+          setVerifyError(getUserErrorMessage(body, { statusCode: res.status }))
+          return
         }
       }
 
@@ -172,8 +177,9 @@ export default function ReviewCard({
         body: JSON.stringify({ company_id: companyId }),
       })
       if (!verifyRes.ok) {
-        const text = await verifyRes.text()
-        throw new Error(text || `HTTP ${verifyRes.status}`)
+        const body = await verifyRes.json().catch(() => null)
+        setVerifyError(getUserErrorMessage(body, { statusCode: verifyRes.status }))
+        return
       }
 
       onVerified()

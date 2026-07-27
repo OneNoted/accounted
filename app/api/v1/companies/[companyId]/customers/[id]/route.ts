@@ -178,7 +178,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         // Postgres error class 42 = "Syntax Error or Access Rule Violation"
         // (includes 42501 insufficient_privilege). These indicate a real
         // misconfiguration: a revoked grant or an incorrect RLS policy:
-        // and should reach Sentry/error monitoring rather than blending
+        // and should be logged at error level, which is what the observability
+        // sink (lib/observability) forwards, rather than blending
         // into informational warn logs. Other classes are typically
         // transient (network, timeout) and stay at warn.
         const isPermissionError = typeof errCode === 'string' && errCode.startsWith('42')

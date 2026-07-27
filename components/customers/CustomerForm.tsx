@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, CheckCircle, XCircle, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { CreateCustomerInput } from '@/types'
 
 interface CustomerFormProps {
@@ -104,6 +105,18 @@ export default function CustomerForm({
       })
 
       const result = await response.json()
+
+      if (!response.ok) {
+        // Map the parsed body plus the status: on this path `result.error` is
+        // the canonical envelope OBJECT (the route is withRouteContext), and
+        // rendering it as a toast description would crash the React render.
+        toast({
+          title: t('vat_failed_title'),
+          description: getErrorMessage(result, { statusCode: response.status }),
+          variant: 'destructive',
+        })
+        return
+      }
 
       setVatValidationResult({
         valid: result.valid,

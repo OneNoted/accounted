@@ -405,6 +405,7 @@ export default function NewSupplierInvoiceForm({
   const watchedItems = watch('items')
   const watchedSupplierId = watch('supplier_id')
   const watchedCurrency = watch('currency')
+  const watchedExchangeRate = watch('exchange_rate')
   const watchedPaidPrivately = watch('paid_with_private_funds')
   const watchedReverseCharge = watch('reverse_charge')
   // Watched values used to decide whether the AI-filled indicator should
@@ -862,6 +863,12 @@ export default function NewSupplierInvoiceForm({
       <AccrualPeriodControl
         direction="expense"
         amount={item.amount || 0}
+        // Line amounts are in the invoice's currency; the K2 5 000 kr limit is
+        // in SEK. The rate is the Riksbanken/manual one already on the form.
+        // An empty field parses to NaN, which the control reads as "unknown"
+        // and then hides the hint instead of comparing the wrong unit.
+        currency={watchedCurrency}
+        exchangeRate={parseFloat(watchedExchangeRate)}
         idPrefix={idPrefix}
         value={{
           start: item.accrual_period_start ?? '',

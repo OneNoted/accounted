@@ -25,8 +25,10 @@ import {
   SettingsRow,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle } from 'lucide-react'
 import { cn, formatDateLong } from '@/lib/utils'
+import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { getBranding } from '@/lib/branding/service'
 import { STAGING_SCOPES } from '@/lib/auth/api-keys'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
@@ -168,37 +170,53 @@ interface ApiKey {
   created_at: string
 }
 
+type CopyState = 'idle' | 'copied' | 'failed'
+
 function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: string }) {
-  const [copied, setCopied] = useState(false)
+  const t = useTranslations('settings_api_keys')
+  const [state, setState] = useState<CopyState>('idle')
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // clipboard unavailable (insecure context): silently ignore
+    // The write is the first await, so the click's user activation still holds.
+    const result = await copyToClipboard(text)
+    if (result !== 'copied') {
+      // Never imply success. The block stays on screen and is select-all, so
+      // the user can copy it by hand: with no clipboard there is no other way.
+      setState('failed')
+      return
     }
+    setState('copied')
+    setTimeout(() => setState('idle'), 2000)
   }
 
   return (
     <div className="relative group">
-      <pre className="rounded-md bg-muted p-4 pr-12 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+      <pre className="select-all rounded-md bg-muted p-4 pr-12 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
         {text}
       </pre>
       <Button
         variant="outline"
         size="sm"
-        className="absolute right-1.5 top-1.5 h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        className={cn(
+          'absolute right-1.5 top-1.5 h-7 w-7 p-0 transition-opacity focus-visible:opacity-100',
+          state === 'failed' ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+        )}
         onClick={handleCopy}
         aria-label={copyAriaLabel}
       >
-        {copied ? (
+        {state === 'copied' ? (
           <Check className="h-3.5 w-3.5 text-success" />
+        ) : state === 'failed' ? (
+          <AlertTriangle className="h-3.5 w-3.5 text-attn" />
         ) : (
           <Copy className="h-3.5 w-3.5" />
         )}
       </Button>
+      {/* Live region is always mounted so the message is announced when it
+          appears, not merely inserted. */}
+      <div role="status" aria-live="polite">
+        {state === 'failed' && <AttnLine className="mt-1.5">{t('copy_failed')}</AttnLine>}
+      </div>
     </div>
   )
 }
@@ -267,7 +285,6 @@ export function ApiKeysPanel() {
   const [newKeyMode, setNewKeyMode] = useState<'live' | 'test'>('live')
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
   const [newKeyValue, setNewKeyValue] = useState('')
-  const [copied, setCopied] = useState(false)
 
   // Segregation-of-duties: a single key that both stages bookkeeping (any
   // STAGING_SCOPES member) AND can approve it (pending_operations:approve)
@@ -365,12 +382,6 @@ export function ApiKeysPanel() {
     } catch {
       toast({ title: t('toast_revoke_failed'), variant: 'destructive' })
     }
-  }
-
-  function handleCopy() {
-    navigator.clipboard.writeText(newKeyValue)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
   }
 
   const mcpBase = typeof window !== 'undefined'
@@ -670,7 +681,6 @@ export function ApiKeysPanel() {
       <Dialog open={showKeyDialog} onOpenChange={(open) => {
         if (!open) {
           setNewKeyValue('')
-          setCopied(false)
         }
         setShowKeyDialog(open)
       }}>
@@ -681,29 +691,11 @@ export function ApiKeysPanel() {
               {t('new_key_dialog_description')}
             </DialogDescription>
           </DialogHeader>
-          <div className="relative">
-            <code className="block rounded-md bg-muted p-4 pr-12 text-sm font-mono break-all">
-              {newKeyValue}
-            </code>
-            <Button
-              variant="outline"
-              size="sm"
-              className="absolute right-2 top-2"
-              onClick={handleCopy}
-              aria-label={t('copy_aria')}
-            >
-              {copied ? (
-                <Check className="h-4 w-4 text-success" />
-              ) : (
-                <Copy className="h-4 w-4" />
-              )}
-            </Button>
-          </div>
+          <CopyBlock text={newKeyValue} copyAriaLabel={t('copy_aria')} />
           <DialogFooter>
             <Button onClick={() => {
               setShowKeyDialog(false)
               setNewKeyValue('')
-              setCopied(false)
             }}>
               {t('done')}
             </Button>

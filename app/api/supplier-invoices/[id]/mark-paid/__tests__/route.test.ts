@@ -405,6 +405,120 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
   })
 
+  // ── Duplicate-guard currency: the plus-minus 2 % band and the column it is
+  // applied to must share a unit. `remaining_amount` is invoice currency,
+  // `transactions.amount` is the bank row's currency; at ~11,50 SEK/EUR a EUR
+  // band on a kronor column is off by a factor of eleven.
+  const eurInvoice = (over: Record<string, unknown> = {}) =>
+    makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      currency: 'EUR',
+      total: 1000,
+      total_sek: 11500,
+      exchange_rate: 11.5,
+      remaining_amount: 1000,
+      paid_amount: 0,
+      supplier: makeSupplier(),
+      items: [],
+      ...over,
+    })
+
+  const bankRow = (over: Record<string, unknown> = {}) => ({
+    id: 'tx-99',
+    date: '2026-05-10',
+    amount: -1000,
+    description: 'Betalning Leverantör AB',
+    merchant_name: 'Leverantör AB',
+    currency: 'SEK',
+    amount_sek: null,
+    exchange_rate: null,
+    ...over,
+  })
+
+  it('EUR invoice: a 1 000 SEK bank row is not treated as the payment for 1 000 EUR', async () => {
+    enqueue({ data: eurInvoice(), error: null })
+    // Sweep 1 (EUR rows): nothing. Sweep 2 (kronor rows): a same-magnitude
+    // kronor row, which is exactly what the old EUR band selected.
+    enqueue({ data: [], error: null })
+    enqueue({ data: [bankRow({ amount: -1000 })], error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; status: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
+  })
+
+  it('EUR invoice with a rate: the 11 500 SEK bank row that paid it IS flagged', async () => {
+    enqueue({ data: eurInvoice(), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [bankRow({ amount: -11500 })], error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { candidates: Array<{ id: string }> } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_PAID_LIKELY_DUPLICATE')
+    expect(body.error.details.candidates.map((c) => c.id)).toEqual(['tx-99'])
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('EUR invoice with no stored rate: kronor rows are excluded, never compared raw', async () => {
+    enqueue({ data: eurInvoice({ total_sek: null, exchange_rate: null }), error: null })
+    // Only the EUR sweep can be planned; the kronor row it returns here cannot
+    // be brought into a shared unit and must be dropped, not read as kronor.
+    enqueue({ data: [bankRow({ amount: -1000 })], error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+  })
+
+  it('EUR invoice: a 1 000 EUR bank row still matches in its own currency', async () => {
+    enqueue({ data: eurInvoice(), error: null })
+    enqueue({
+      data: [bankRow({ amount: -1000, currency: 'EUR', amount_sek: -11500 })],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_PAID_LIKELY_DUPLICATE')
+  })
+
   it('proceeds when force=true even with candidates present', async () => {
     const supplier = makeSupplier()
     const invoice = makeSupplierInvoice({

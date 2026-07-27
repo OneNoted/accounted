@@ -218,10 +218,10 @@ describe('POST /api/bookkeeping/accounts', () => {
 })
 
 describe('DELETE /api/bookkeeping/accounts/[number]', () => {
-  it('scopes the usage check to the company via the journal_entries join', async () => {
+  it('scopes the usage check to the company via the usage-counts RPC', async () => {
     const { supabase, calls } = createCapturingSupabase([
       { data: { id: 'acc-1', is_system_account: false } }, // account fetch
-      { count: 0 }, // usage count
+      { data: [{ account_number: '4010', usage_count: 7 }] }, // usage counts (not 5010)
       { data: null }, // delete
     ])
     auth(supabase)
@@ -231,16 +231,18 @@ describe('DELETE /api/bookkeeping/accounts/[number]', () => {
     )
 
     expect(status).toBe(200)
+    // The company scope is an RPC argument now, not a filter on an embed:
+    // another company's use of the same BAS number can never be counted here.
+    const rpcCalls = calls.filter((c) => c.method === 'rpc').map((c) => c.args)
+    expect(rpcCalls).toContainEqual(['get_account_usage_counts', { p_company_id: 'company-1' }])
     const selectArgs = calls.filter((c) => c.method === 'select').map((c) => c.args[0])
-    expect(selectArgs).toContain('id, journal_entries!inner(company_id)')
-    const eqCalls = calls.filter((c) => c.method === 'eq').map((c) => c.args)
-    expect(eqCalls).toContainEqual(['journal_entries.company_id', 'company-1'])
+    expect(selectArgs).not.toContain('id, journal_entries!inner(company_id)')
   })
 
   it('refuses deleting an account used in this company with 400', async () => {
     const { supabase } = createCapturingSupabase([
       { data: { id: 'acc-1', is_system_account: false } },
-      { count: 3 },
+      { data: [{ account_number: '5010', usage_count: 3 }] },
     ])
     auth(supabase)
 
@@ -320,6 +322,55 @@ describe('PUT /api/bookkeeping/accounts/[number]', () => {
       default_vat_rate?: number | null
     }
     expect(updateArg?.default_vat_rate).toBe(0)
+  })
+
+  // The body is spread straight into .update(), so the write set must be
+  // exactly what the caller named. UpdateAccountSchema carries no .default()
+  // today; these two lock the property in so adding one cannot turn a rename
+  // into a silent rewrite of the VAT code and SRU mapping.
+  it('writes only the field the caller named', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { account_number: '5010', account_name: 'Nytt namn' } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/5010', {
+      method: 'PUT',
+      body: { account_name: 'Nytt namn' },
+    })
+    expect((await parseJsonResponse(await PUT(req, numberParams))).status).toBe(200)
+
+    const updateArg = calls.find((c) => c.method === 'update')?.args[0] as Record<string, unknown>
+    expect(Object.keys(updateArg)).toEqual(['account_name'])
+  })
+
+  it('keeps an explicit null so sru_code can be cleared', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { account_number: '5010', sru_code: null } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/5010', {
+      method: 'PUT',
+      body: { sru_code: null },
+    })
+    expect((await parseJsonResponse(await PUT(req, numberParams))).status).toBe(200)
+
+    const updateArg = calls.find((c) => c.method === 'update')?.args[0] as Record<string, unknown>
+    expect(updateArg).toEqual({ sru_code: null })
+  })
+
+  it('drops unknown keys instead of forwarding them to the update', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { account_number: '5010' } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/5010', {
+      method: 'PUT',
+      body: { account_name: 'Nytt namn', is_system_account: true, company_id: 'other' },
+    })
+    expect((await parseJsonResponse(await PUT(req, numberParams))).status).toBe(200)
+
+    const updateArg = calls.find((c) => c.method === 'update')?.args[0] as Record<string, unknown>
+    expect(Object.keys(updateArg)).toEqual(['account_name'])
   })
 })
 

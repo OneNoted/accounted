@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, KeyRound } from 'lucide-react'
+import { INVITE_PROBLEM_MESSAGE_KEYS } from '@/lib/auth/consume-invite-cookie'
+import { handoffPendingInvite } from './invite-handoff'
 
 /**
  * Three entry modes:
@@ -31,6 +33,7 @@ type Mode = 'loading' | 'set-password' | 'confirm-link' | 'enter-code'
 
 function ResetPasswordInner() {
   const t = useTranslations('reset_password')
+  const tInvite = useTranslations('invite')
   const searchParams = useSearchParams()
   const tokenHash = searchParams.get('token_hash')
   const [mode, setMode] = useState<Mode>('loading')
@@ -155,6 +158,34 @@ function ResetPasswordInner() {
         title: t('saved_title'),
         description: t('saved_description'),
       })
+
+      // Only now, with the reset finished and the session proven by the 2xx
+      // above (that route runs requireAuth()), pick up a pending invitation.
+      // This is the recovery flow's copy of what login, register and
+      // /mfa/verify already do, and it is the only chance an invitee who
+      // already has a company of their own gets: the server-side retry on
+      // /onboarding never sees them. See ./invite-handoff.ts.
+      const inviteDestination = await handoffPendingInvite({
+        getUser: async () => (await supabase.auth.getUser()).data.user,
+        getAssuranceLevel: async () =>
+          (await supabase.auth.mfa.getAuthenticatorAssuranceLevel()).data,
+        reportProblem: (problem) => {
+          const keys = INVITE_PROBLEM_MESSAGE_KEYS[problem]
+          toast({
+            title: tInvite(keys.title),
+            description: tInvite(keys.body),
+            variant: 'destructive',
+          })
+        },
+      })
+
+      if (inviteDestination) {
+        // Hard navigation: either the membership and the active company just
+        // changed server-side, or the destination re-runs acceptance on the
+        // server. Both leave the client router's cached render stale.
+        window.location.href = inviteDestination
+        return
+      }
 
       router.push('/')
       router.refresh()

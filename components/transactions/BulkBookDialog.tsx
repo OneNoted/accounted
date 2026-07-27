@@ -117,6 +117,23 @@ export default function BulkBookDialog({
     [transactions],
   )
 
+  // Currency homogeneity. A samlingsverifikation must be expressed in one
+  // redovisningsvaluta (BFL 4 kap 6 §), so `txSumAbs` above is only a
+  // meaningful number while every selected tx shares a currency: across
+  // currencies it would add 100 EUR to 100 SEK as if they were one unit.
+  // We therefore split the selection per currency and, when it spans more
+  // than one, never render the combined scalar and never let confirm fire.
+  // NULL currency is legacy for the column default 'SEK'.
+  const currencyTotals = useMemo(() => {
+    const byCurrency = new Map<string, number>()
+    for (const tx of transactions) {
+      const code = tx.currency ?? 'SEK'
+      byCurrency.set(code, round2((byCurrency.get(code) ?? 0) + Math.abs(tx.amount)))
+    }
+    return Array.from(byCurrency.entries()).sort(([a], [b]) => a.localeCompare(b))
+  }, [transactions])
+  const isMixedCurrency = currencyTotals.length > 1
+
   const selectedTemplate = useMemo(
     () => templates.find((tpl) => tpl.id === selectedTemplateId) ?? null,
     [templates, selectedTemplateId],
@@ -321,6 +338,7 @@ export default function BulkBookDialog({
   const allAccountsValid = previewLines.every((l) => /^\d{4}$/.test(l.account_number))
   const canConfirm =
     !submitting &&
+    !isMixedCurrency &&
     tabReady &&
     description.trim().length > 0 &&
     previewLines.length >= 2 &&
@@ -440,6 +458,58 @@ export default function BulkBookDialog({
   }
 
   if (transactions.length === 0) return null
+
+  // Mixed-currency dead end. This is deliberately NOT the advisory-guard
+  // pattern with a "book anyway" escape: a verifikat spanning two
+  // redovisningsvalutor is not representable at all, so there is no correct
+  // outcome to bypass to. We show the honest per-currency subtotals instead
+  // of one summed scalar, and the booking UI never renders, so the request
+  // is blocked before it is built. The route and the RPC refuse the same
+  // selection with BULK_BOOK_MIXED_CURRENCY.
+  if (isMixedCurrency) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>
+              {t('title', { count: txCount, date: sharedDate ? formatDate(sharedDate) : '' })}
+            </DialogTitle>
+            <DialogDescription>{t('mixed_currency_description')}</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-card p-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                {t('mixed_currency_totals_label')}
+              </p>
+              <ul className="mt-2 space-y-1">
+                {currencyTotals.map(([code, total]) => (
+                  <li
+                    key={code}
+                    className="flex items-center justify-between text-sm tabular-nums"
+                  >
+                    <span className="font-mono text-xs text-muted-foreground">{code}</span>
+                    <span>{formatCurrency(total, code)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="flex items-start gap-2 text-xs text-destructive">
+              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+              <span>{t('mixed_currency_blocked')}</span>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              {t('close')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

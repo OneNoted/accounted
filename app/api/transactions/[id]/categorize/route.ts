@@ -5,6 +5,7 @@ import { ensureInitialized } from '@/lib/init'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEntity } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -18,6 +19,14 @@ import {
   escapeLikePattern,
   normalizeOcrReference,
 } from '@/lib/invoices/duplicate-payment-guard'
+import {
+  invoiceAmountSek,
+  magnitudesWithinTolerance,
+  normalizeCurrencyCode,
+  planAmountSweeps,
+  type ComparableAmount,
+} from '@/lib/invoices/duplicate-guard-currency'
+import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
 import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -158,6 +167,11 @@ export const POST = withRouteContext(
         id,
         date: transaction.date,
         amount: transaction.amount,
+        // `amount` is denominated in `currency`; the ledger legs the guard
+        // compares it against are always SEK. Selected above via select('*').
+        currency: transaction.currency ?? null,
+        amount_sek: transaction.amount_sek ?? null,
+        exchange_rate: transaction.exchange_rate ?? null,
         cash_account_id: transaction.cash_account_id ?? null,
       })
       if (!body.force) {
@@ -207,8 +221,19 @@ export const POST = withRouteContext(
               transaction_id: id,
               dismissed_transaction_id: candidate.transaction_id,
               dismissed_journal_entry_id: candidate.journal_entry_id,
-              amount_ore: Math.round(candidate.amount * 100),
+              // Null when the candidate's SEK value could not be established
+              // (a rateless foreign sibling); the foreign figures below then
+              // carry the durable record instead of a fabricated kr amount.
+              amount_ore: candidate.amount != null ? Math.round(candidate.amount * 100) : null,
+              dismissed_currency: candidate.currency,
+              dismissed_amount_in_currency: candidate.amount_in_currency,
               entry_date: candidate.entry_date,
+              // Whether the user dismissed a confirmed same-amount twin or a
+              // candidate whose kr figure was never established (BFNAR 2013:2
+              // kap 8: the behandlingshistorik has to say which). Parity with
+              // the /book route's dismissal record.
+              amount_verified: candidate.amount_verified,
+              unverified_reason: candidate.unverified_reason,
             },
             actor: { type: 'user', id: user.id },
             occurredAt: new Date(),
@@ -403,6 +428,50 @@ export const POST = withRouteContext(
       })
     }
 
+    // Units for both invoice-suggestion prongs below. `transactions.amount` is
+    // denominated in `transactions.currency`, while `remaining_amount` on
+    // `supplier_invoices` / `invoices` is denominated in the INVOICE's
+    // currency. A plus-minus 2 % band built around a EUR bank row and applied
+    // to a kronor `remaining_amount` column is off by the whole exchange rate:
+    // it either matches nothing or points the user at an unrelated invoice.
+    // `planAmountSweeps` therefore issues one SQL sweep per currency (band and
+    // column in the same unit) and `magnitudesWithinTolerance` re-checks every
+    // returned row. A SEK transaction yields exactly one sweep with the band it
+    // had before, so a SEK-only company runs the identical single query.
+    const txReferenceAmount: ComparableAmount = {
+      amount: transaction.amount,
+      currency: normalizeCurrencyCode(transaction.currency),
+      sek: resolveTransactionAmountSek({
+        amount: transaction.amount,
+        currency: transaction.currency,
+        amount_sek: transaction.amount_sek,
+        exchange_rate: transaction.exchange_rate,
+      }),
+    }
+
+    /** A candidate invoice row as a comparable amount (pro-rates `total_sek`). */
+    const invoiceRowAmount = (row: {
+      remaining_amount: number | null
+      total?: number | null
+      currency: string | null
+      total_sek?: number | null
+      exchange_rate?: number | null
+    }): ComparableAmount => {
+      const remaining = row.remaining_amount ?? row.total ?? 0
+      const currency = normalizeCurrencyCode(row.currency)
+      return {
+        amount: Number(remaining),
+        currency,
+        sek: invoiceAmountSek({
+          amount: Number(remaining),
+          currency,
+          total: row.total,
+          totalSek: row.total_sek,
+          exchangeRate: row.exchange_rate,
+        }),
+      }
+    }
+
     // Prong B: intercept plain 244x categorization of supplier payments when
     // an open supplier invoice already covers this amount. Categorizing direct
     // to 244x leaves the invoice with status='approved' and lures the user
@@ -416,9 +485,20 @@ export const POST = withRouteContext(
       /^244\d$/.test(mappingResult.debit_account) &&
       /^1\d{3}$/.test(mappingResult.credit_account)
     ) {
-      const txAmountAbs = Math.abs(transaction.amount)
-      const windowLow = Math.round(txAmountAbs * (1 - DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
-      const windowHigh = Math.round(txAmountAbs * (1 + DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
+      const { sweeps, crossCurrencyUnverifiable } = planAmountSweeps(
+        txReferenceAmount,
+        DUPLICATE_AMOUNT_TOLERANCE_PCT,
+      )
+      if (crossCurrencyUnverifiable) {
+        // A foreign bank row with neither amount_sek nor exchange_rate cannot
+        // be stated in kronor, so kronor invoices are excluded rather than
+        // compared raw. Logged: an unevaluated candidate set is not the same
+        // thing as "no open invoice matches".
+        txLog.warn('supplier-invoice suggestion: cross-currency candidates not evaluated', {
+          reason: 'transaction_missing_sek_value',
+          currency: txReferenceAmount.currency,
+        })
+      }
 
       let supplierIds: string[] = []
       if (transaction.merchant_name) {
@@ -444,20 +524,56 @@ export const POST = withRouteContext(
           .toISOString()
           .split('T')[0]
 
-        const { data: openInvoices } = await supabase
-          .from('supplier_invoices')
-          .select('id, supplier_invoice_number, invoice_date, remaining_amount, currency, supplier:suppliers(name)')
-          .eq('company_id', companyId)
-          .in('supplier_id', supplierIds)
-          .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
-          .gte('remaining_amount', windowLow)
-          .lte('remaining_amount', windowHigh)
-          .gte('invoice_date', invoiceDateLow)
-          .lte('invoice_date', invoiceDateHigh)
-          .order('invoice_date', { ascending: false })
-          .limit(5)
+        type SupplierCandidateRow = {
+          id: string
+          supplier_invoice_number: string | null
+          invoice_date: string
+          remaining_amount: number | null
+          total: number | null
+          currency: string | null
+          total_sek: number | null
+          exchange_rate: number | null
+          supplier: { name?: string } | null
+        }
 
-        if (openInvoices && openInvoices.length > 0) {
+        const sweepResults = await Promise.all(
+          sweeps.map((sweep) =>
+            supabase
+              .from('supplier_invoices')
+              .select(
+                'id, supplier_invoice_number, invoice_date, remaining_amount, total, currency, total_sek, exchange_rate, supplier:suppliers(name)',
+              )
+              .eq('company_id', companyId)
+              .in('supplier_id', supplierIds)
+              .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+              .or(sweep.currencyFilter)
+              .gte('remaining_amount', sweep.low)
+              .lte('remaining_amount', sweep.high)
+              .gte('invoice_date', invoiceDateLow)
+              .lte('invoice_date', invoiceDateHigh)
+              .order('invoice_date', { ascending: false })
+              .limit(5),
+          ),
+        )
+
+        const byId = new Map<string, SupplierCandidateRow>()
+        for (const res of sweepResults) {
+          for (const row of (res.data ?? []) as unknown as SupplierCandidateRow[]) {
+            if (!byId.has(row.id)) byId.set(row.id, row)
+          }
+        }
+        const openInvoices = Array.from(byId.values())
+          .filter((inv) =>
+            magnitudesWithinTolerance(
+              txReferenceAmount,
+              invoiceRowAmount(inv),
+              DUPLICATE_AMOUNT_TOLERANCE_PCT,
+            ),
+          )
+          .sort((a, b) => (a.invoice_date < b.invoice_date ? 1 : a.invoice_date > b.invoice_date ? -1 : 0))
+          .slice(0, 5)
+
+        if (openInvoices.length > 0) {
           return errorResponseFromCode('TX_CATEGORIZE_SUGGEST_SI_MATCH', txLog, {
             requestId,
             details: {
@@ -488,9 +604,16 @@ export const POST = withRouteContext(
       /^19\d{2}$/.test(mappingResult.debit_account) &&
       /^151\d$/.test(mappingResult.credit_account)
     ) {
-      const txAmount = transaction.amount
-      const windowLow = Math.round(txAmount * (1 - DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
-      const windowHigh = Math.round(txAmount * (1 + DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
+      const { sweeps, crossCurrencyUnverifiable } = planAmountSweeps(
+        txReferenceAmount,
+        DUPLICATE_AMOUNT_TOLERANCE_PCT,
+      )
+      if (crossCurrencyUnverifiable) {
+        txLog.warn('customer-invoice suggestion: cross-currency candidates not evaluated', {
+          reason: 'transaction_missing_sek_value',
+          currency: txReferenceAmount.currency,
+        })
+      }
 
       // Resolve candidate customer(s) by name. Inbound bank txs are typically
       // described by payer name in EITHER merchant_name OR description, so
@@ -533,28 +656,47 @@ export const POST = withRouteContext(
         due_date: string | null
         remaining_amount: number | null
         total: number
-        currency: string
+        currency: string | null
+        total_sek: number | null
+        exchange_rate: number | null
         customer: { name?: string } | null
       }
+      const CANDIDATE_COLUMNS =
+        'id, invoice_number, invoice_date, due_date, remaining_amount, total, currency, total_sek, exchange_rate, customer:customers(name)'
       const openInvoiceCandidates: CandidateRow[] = []
+      /** Same-unit re-check: drops any row the SQL sweep let through. */
+      const comparable = (row: CandidateRow) =>
+        magnitudesWithinTolerance(
+          txReferenceAmount,
+          invoiceRowAmount(row),
+          DUPLICATE_AMOUNT_TOLERANCE_PCT,
+        )
 
       if (customerIds.length > 0) {
-        const { data: byCustomer } = await supabase
-          .from('invoices')
-          .select(
-            'id, invoice_number, invoice_date, due_date, remaining_amount, total, currency, customer:customers(name)',
-          )
-          .eq('company_id', companyId)
-          .in('customer_id', customerIds)
-          .in('status', ['sent', 'overdue', 'partially_paid'])
-          .gte('remaining_amount', windowLow)
-          .lte('remaining_amount', windowHigh)
-          .gte('due_date', dueDateLow)
-          .lte('due_date', dueDateHigh)
-          .order('due_date', { ascending: false })
-          .limit(5)
-        for (const row of (byCustomer ?? []) as unknown as CandidateRow[]) {
-          openInvoiceCandidates.push(row)
+        const sweepResults = await Promise.all(
+          sweeps.map((sweep) =>
+            supabase
+              .from('invoices')
+              .select(CANDIDATE_COLUMNS)
+              .eq('company_id', companyId)
+              .in('customer_id', customerIds)
+              .in('status', ['sent', 'overdue', 'partially_paid'])
+              .or(sweep.currencyFilter)
+              .gte('remaining_amount', sweep.low)
+              .lte('remaining_amount', sweep.high)
+              .gte('due_date', dueDateLow)
+              .lte('due_date', dueDateHigh)
+              .order('due_date', { ascending: false })
+              .limit(5),
+          ),
+        )
+        for (const res of sweepResults) {
+          for (const row of (res.data ?? []) as unknown as CandidateRow[]) {
+            if (!comparable(row)) continue
+            if (!openInvoiceCandidates.some((existing) => existing.id === row.id)) {
+              openInvoiceCandidates.push(row)
+            }
+          }
         }
       }
 
@@ -565,21 +707,26 @@ export const POST = withRouteContext(
       const txReference = (transaction as Transaction & { reference?: string | null }).reference
       const normalizedTxRef = normalizeOcrReference(txReference ?? null)
       if (normalizedTxRef) {
-        const { data: byRef } = await supabase
-          .from('invoices')
-          .select(
-            'id, invoice_number, invoice_date, due_date, remaining_amount, total, currency, customer:customers(name)',
-          )
-          .eq('company_id', companyId)
-          .in('status', ['sent', 'overdue', 'partially_paid'])
-          .gte('remaining_amount', windowLow)
-          .lte('remaining_amount', windowHigh)
-          .gte('due_date', dueDateLow)
-          .lte('due_date', dueDateHigh)
-          .order('due_date', { ascending: false })
-          .limit(20)
-        for (const row of (byRef ?? []) as unknown as CandidateRow[]) {
-          if (normalizeOcrReference(row.invoice_number) === normalizedTxRef) {
+        const refSweepResults = await Promise.all(
+          sweeps.map((sweep) =>
+            supabase
+              .from('invoices')
+              .select(CANDIDATE_COLUMNS)
+              .eq('company_id', companyId)
+              .in('status', ['sent', 'overdue', 'partially_paid'])
+              .or(sweep.currencyFilter)
+              .gte('remaining_amount', sweep.low)
+              .lte('remaining_amount', sweep.high)
+              .gte('due_date', dueDateLow)
+              .lte('due_date', dueDateHigh)
+              .order('due_date', { ascending: false })
+              .limit(20),
+          ),
+        )
+        for (const res of refSweepResults) {
+          for (const row of (res.data ?? []) as unknown as CandidateRow[]) {
+            if (normalizeOcrReference(row.invoice_number) !== normalizedTxRef) continue
+            if (!comparable(row)) continue
             if (!openInvoiceCandidates.some((existing) => existing.id === row.id)) {
               openInvoiceCandidates.unshift(row)
             }
@@ -779,28 +926,16 @@ export const POST = withRouteContext(
 
     if ((!updateResult || updateResult.length === 0) && journalEntryId) {
       // CAS guard: another request set journal_entry_id between our read and
-      // write. Cancel the orphaned entry and document the voucher gap.
-      const { data: orphan } = await supabase
-        .from('journal_entries')
-        .select('fiscal_period_id, voucher_series, voucher_number')
-        .eq('id', journalEntryId)
-        .single()
-
-      await supabase
-        .from('journal_entries')
-        .update({ status: 'cancelled' })
-        .eq('id', journalEntryId)
-
-      if (orphan) {
-        await supabase.from('voucher_gap_explanations').insert({
-          company_id: companyId,
-          fiscal_period_id: orphan.fiscal_period_id,
-          voucher_series: orphan.voucher_series || 'A',
-          gap_number: orphan.voucher_number,
-          explanation: 'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-          created_by: user.id,
-        })
-      }
+      // write. Cancel the orphaned entry and document the voucher gap through
+      // the shared helper (BFNAR 2013:2), which owns the correct
+      // voucher_gap_explanations column set and logs failures loudly.
+      await cancelOrphanedPaymentEntry(
+        supabase,
+        companyId,
+        user.id,
+        journalEntryId,
+        'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+      )
 
       return errorResponseFromCode('TX_CATEGORIZE_RACE', txLog, { requestId })
     }

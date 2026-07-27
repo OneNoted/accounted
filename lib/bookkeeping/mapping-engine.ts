@@ -37,6 +37,33 @@ function getCapitalizationThreshold(year: number): number {
 }
 
 /**
+ * Resolve the SEK value of a transaction, or null when it cannot be
+ * established.
+ *
+ * Deliberately stricter than `resolveSekAmount()` in currency-utils: that
+ * helper falls back to the raw foreign amount for legacy rows, which is
+ * tolerable for a line amount (the entry still balances against itself) but
+ * never for a comparison against a SEK limit. Both the halva-prisbasbeloppet
+ * threshold and a rule's amount_min/amount_max band are SEK figures; feeding
+ * them an unconverted foreign number silently picks the wrong branch. When no
+ * rate is known we return null so the caller declines instead of guessing.
+ */
+function resolveSekAmountOrNull(transaction: Transaction): number | null {
+  const currency = (transaction.currency || 'SEK').toUpperCase()
+  if (currency === 'SEK') return transaction.amount
+
+  if (transaction.amount_sek != null) {
+    return Math.round(transaction.amount_sek * 100) / 100
+  }
+
+  if (transaction.exchange_rate != null && transaction.exchange_rate > 0) {
+    return Math.round(transaction.amount * transaction.exchange_rate * 100) / 100
+  }
+
+  return null
+}
+
+/**
  * Evaluate all mapping rules against a transaction and return the best match
  *
  * Evaluation order (by priority):
@@ -212,13 +239,36 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
     }
   }
 
-  // Amount threshold matching
-  const absAmount = Math.abs(transaction.amount)
-  if (rule.amount_min != null && absAmount < rule.amount_min) {
-    return false
-  }
-  if (rule.amount_max != null && absAmount > rule.amount_max) {
-    return false
+  // Amount threshold matching.
+  //
+  // `mapping_rules` has no currency column, so an amount_min/amount_max band
+  // can only mean SEK: the ledger currency. Compare it against the SEK value
+  // of the transaction, never the raw foreign amount (a 3000 EUR row would
+  // otherwise slip through a "max 5000" band that was written to mean kronor).
+  // When a non-SEK row carries neither amount_sek nor an exchange_rate the
+  // band is not evaluable, so the rule does not apply: skipping is the honest
+  // outcome, matching on an unconverted number is not.
+  if (rule.amount_min != null || rule.amount_max != null) {
+    const sekAmount = resolveSekAmountOrNull(transaction)
+    if (sekAmount === null) {
+      log.warn('mapping rule with a SEK amount band skipped: transaction has no SEK value', {
+        transactionId: transaction.id,
+        currency: transaction.currency,
+        ruleId: rule.id,
+        ruleName: rule.rule_name,
+        amountMin: rule.amount_min,
+        amountMax: rule.amount_max,
+      })
+      return false
+    }
+
+    const absAmount = Math.abs(sekAmount)
+    if (rule.amount_min != null && absAmount < rule.amount_min) {
+      return false
+    }
+    if (rule.amount_max != null && absAmount > rule.amount_max) {
+      return false
+    }
   }
 
   return true
@@ -228,17 +278,48 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
  * Build a MappingResult from a matched rule
  */
 function buildResult(rule: MappingRule, transaction: Transaction, entityType?: EntityType): MappingResult {
+  // NOTE: this is the amount in the transaction's own currency. It still feeds
+  // the VAT line generation below, which understates ingående moms on non-SEK
+  // rows (a known separate defect, tracked on its own: fixing it changes
+  // posted VAT amounts). The capitalization check below deliberately does not
+  // use it: an account-selection decision must run on a SEK value.
   const absAmount = Math.abs(transaction.amount)
   const isExpense = transaction.amount < 0
 
   let debitAccount = rule.debit_account || (isExpense ? '6991' : '1930')
   const creditAccount = rule.credit_account || (isExpense ? '1930' : '3900')
 
-  // Check capitalization threshold for equipment
-  const year = new Date(transaction.date).getFullYear()
-  const threshold = rule.capitalization_threshold ?? getCapitalizationThreshold(year)
-  if (absAmount > threshold && rule.capitalized_debit_account) {
-    debitAccount = rule.capitalized_debit_account
+  // Capitalization threshold for equipment (IL 18 kap 4 §, "inventarier av
+  // mindre värde"): below half prisbasbelopp it may be expensed straight to a
+  // 54xx förbrukningsinventarie account, above it must be capitalised to 12xx
+  // and depreciated.
+  //
+  // The threshold is a SEK figure, so the amount compared against it has to be
+  // SEK as well. Comparing a raw 3000 EUR laptop (about 34 500 kr) against the
+  // 29 600 kr limit for 2026 reads as "under the limit" and expenses a
+  // capital asset to 5410: no avskrivning, wrong balansräkning, and a
+  // skattemässig error. Only rules that can actually capitalise are affected.
+  let capitalizationUndecided = false
+  if (rule.capitalized_debit_account) {
+    const year = new Date(transaction.date).getFullYear()
+    const threshold = rule.capitalization_threshold ?? getCapitalizationThreshold(year)
+    const sekAmount = resolveSekAmountOrNull(transaction)
+
+    if (sekAmount === null) {
+      // Non-SEK row with neither amount_sek nor an exchange_rate. Both
+      // branches are a guess and a wrong guess is a depreciation and tax
+      // error, so decline to auto-classify and hand it to the user instead
+      // of faking a conversion.
+      capitalizationUndecided = true
+      log.warn('capitalization threshold undecidable: transaction has no SEK value', {
+        transactionId: transaction.id,
+        currency: transaction.currency,
+        ruleId: rule.id,
+        ruleName: rule.rule_name,
+      })
+    } else if (Math.abs(sekAmount) > threshold) {
+      debitAccount = rule.capitalized_debit_account
+    }
   }
 
   // If default_private, use entity-specific private account
@@ -295,16 +376,24 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType?: E
     }
   }
 
+  // An undecidable capitalization check must not auto-post: drop the
+  // confidence under the auto-book bar (0.8 in lib/transactions/ingest.ts),
+  // force review, and say why in the suggestion label so the user sees the
+  // missing rate rather than a silently expensed asset.
   return {
     rule,
     debit_account: debitAccount,
     credit_account: creditAccount,
     risk_level: rule.risk_level,
-    confidence: rule.confidence_score,
-    requires_review: rule.requires_review,
+    confidence: capitalizationUndecided
+      ? Math.min(rule.confidence_score, 0.3)
+      : rule.confidence_score,
+    requires_review: capitalizationUndecided ? true : rule.requires_review,
     default_private: rule.default_private,
     vat_lines: vatLines,
-    description: rule.rule_name,
+    description: capitalizationUndecided
+      ? `${rule.rule_name} (granska: växelkurs saknas, går inte att avgöra om beloppet överstiger halva prisbasbeloppet)`
+      : rule.rule_name,
   }
 }
 

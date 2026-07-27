@@ -15,6 +15,8 @@
  * - Negative amounts may use a Unicode minus (U+2212) or dash; normalizeMinusSign
  *   maps those to ASCII '-' so parseFloat does not return NaN.
  * - Filter rows with "Prel" prefix (preliminary/pending transactions).
+ * - Of the two date columns we emit Reskontradatum, the booking date; see the
+ *   primaryDateIdx comment below for why the transaction date is wrong here.
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
@@ -103,8 +105,23 @@ export const handelsbankenFormat: BankFileFormat = {
     const amountIdx = headers.findIndex((h) => h.includes('belopp'))
     const balanceIdx = headers.findIndex((h) => h.includes('saldo'))
 
-    // Prefer transaktionsdatum (real transaction date) over reskontradatum (booking date)
-    const primaryDateIdx = txDateIdx >= 0 ? txDateIdx : reskontraIdx
+    // Prefer reskontradatum (the bank's booking date) over transaktionsdatum
+    // (the card-swipe date), falling back to whichever column exists.
+    //
+    // The two differ on card purchases (swiped the 14th, booked the 16th) and
+    // the emitted date is NOT cosmetic: it feeds generateExternalId and the
+    // exact-date content-dedup bucket (contentBucketKey). The PSD2 / Enable
+    // Banking feed for the same account keys every row on the ASPSP's
+    // booking_date and cannot be moved off it (Berlin Group exposes no stable
+    // transaction date, and the value_date path caused the June 2026 fleet-wide
+    // re-import; see extensions/general/enable-banking/lib/sync.ts). So a CSV
+    // row dated on transaktionsdatum lands in a different bucket than the feed
+    // row for the same affärshändelse, the ±1-day drift bridge is
+    // measurement-only, and both rows insert as duplicates.
+    //
+    // Booking date is also what the Saldo column ties to: dating the row on the
+    // swipe date desynchronizes the 19xx balance from the bank statement.
+    const primaryDateIdx = reskontraIdx >= 0 ? reskontraIdx : txDateIdx
 
     if (primaryDateIdx === -1 || amountIdx === -1) {
       return emptyResult({

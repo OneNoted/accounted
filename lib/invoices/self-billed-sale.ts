@@ -16,7 +16,7 @@
  * accepts an optional is_self_billed flag), so the two can never drift.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
@@ -120,11 +120,18 @@ export async function resolveSelfBilledSaleDraft(
     c.customer_type as Parameters<typeof getVatRules>[0],
     c.vat_number_validated ?? undefined,
   )
-  const availableRates = getAvailableVatRates(
-    c.customer_type as Parameters<typeof getAvailableVatRates>[0],
+  // Gate on the PERMITTED set, not the picker default, exactly like
+  // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
+  // (hotel/restaurang 12%, persontransport and event admission 6%,
+  // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
+  // foreign business customer, and a self-bill transcribes what the customer
+  // actually invoiced in our name. The default is still 0% (vatRules.rate is the
+  // fallback below), so a Swedish rate only lands here when the line carried it.
+  const permittedRates = getPermittedVatRates(
+    c.customer_type as Parameters<typeof getPermittedVatRates>[0],
     c.vat_number_validated ?? undefined,
   )
-  const allowedRates = new Set(availableRates.map((r) => r.rate))
+  const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   const items: SelfBilledSaleComputedItem[] = []
   let vatAmount = 0

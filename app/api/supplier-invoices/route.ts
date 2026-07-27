@@ -13,6 +13,11 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import {
+  resolveSupplierInvoiceExchangeRate,
+  supplierInvoiceSekAmounts,
+} from '@/lib/currency/supplier-invoice-rate'
+import { roundOre } from '@/lib/money'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -181,6 +186,26 @@ export const POST = withRouteContext(
       entityType = company.entity_type as 'aktiebolag' | 'enskild_firma'
     }
 
+    // Resolve the exchange rate BEFORE the arrival-number sequence is touched:
+    // a foreign invoice we cannot translate must not burn an ankomstnummer.
+    // Shared with the v1 REST route and the inbox convert route so all three
+    // write paths apply the same currency policy (lib/currency/supplier-invoice-rate.ts).
+    const fx = await resolveSupplierInvoiceExchangeRate(supabase, {
+      currency: body.currency,
+      invoiceDate: body.invoice_date,
+      suppliedRate: body.exchange_rate,
+    })
+    if (!fx.ok) {
+      // Storing exchange_rate = NULL here is what created the permanently
+      // unconverted rows: the booking path refuses them (SI_FX_RATE_MISSING)
+      // and the user is by then far away from the invoice. Refuse at creation
+      // instead, where the kurs can still be typed into the form.
+      return errorResponseFromCode('SI_FX_RATE_MISSING', log, {
+        requestId,
+        details: { currency: fx.currency, invoice_date: fx.invoiceDate },
+      })
+    }
+
     const { data: arrivalNum, error: arrivalError } = await supabase
       .rpc('get_next_arrival_number', { p_company_id: companyId })
 
@@ -240,7 +265,9 @@ export const POST = withRouteContext(
     // the net. VAT is still tracked separately (vat_amount) for declarations
     // and books fiktiv 2614/2645 in the engine, but neither side moves cash.
     const payableVat = body.reverse_charge ? 0 : vatAmount
-    const total = Math.round((subtotal + payableVat) * 100) / 100
+    // roundOre, not the naive form: `total` and `total_sek` must round
+    // identically or a SEK invoice ends up with total_sek one öre off `total`.
+    const total = roundOre(subtotal + payableVat)
 
     // Representation (BAS 6070-6079): ingående moms is only deductible up to
     // 300 SEK base/person per ML 8 kap. 1 §, and the income-tax deduction was
@@ -263,12 +290,17 @@ export const POST = withRouteContext(
       }
     }
 
-    const exchangeRate = body.exchange_rate || null
-    const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
-    const vatAmountSek = exchangeRate ? Math.round(vatAmount * exchangeRate * 100) / 100 : null
-    const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
+    // SEK invoices resolve to rate 1, so total_sek === total. The old
+    // `exchangeRate ? … : null` guard left every ordinary Swedish supplier
+    // invoice with total_sek = NULL, which is why SEK-reporting readers saw
+    // nothing.
+    const {
+      subtotal_sek: subtotalSek,
+      vat_amount_sek: vatAmountSek,
+      total_sek: totalSek,
+    } = supplierInvoiceSekAmounts(fx.rate, { subtotal, vatAmount, total })
 
-    const totalRounded = Math.round(total * 100) / 100
+    const totalRounded = roundOre(total)
     const { data: invoice, error: invoiceError } = await supabase
       .from('supplier_invoices')
       .insert({
@@ -282,15 +314,18 @@ export const POST = withRouteContext(
         due_date: body.due_date,
         delivery_date: body.delivery_date || null,
         status: paidPrivately ? 'paid' : 'registered',
-        currency: body.currency || 'SEK',
-        exchange_rate: exchangeRate,
+        currency: fx.rate.currency,
+        exchange_rate: fx.rate.exchangeRate,
+        // Which day's kurs the SEK amounts were translated at: the audit trail
+        // that makes them verifiable (BFL 5 kap).
+        exchange_rate_date: fx.rate.exchangeRateDate,
         vat_treatment: body.vat_treatment || 'standard_25',
         reverse_charge: body.reverse_charge || false,
         payment_reference: body.payment_reference || null,
         paid_with_private_funds: paidPrivately,
-        subtotal: Math.round(subtotal * 100) / 100,
+        subtotal: roundOre(subtotal),
         subtotal_sek: subtotalSek,
-        vat_amount: Math.round(vatAmount * 100) / 100,
+        vat_amount: roundOre(vatAmount),
         vat_amount_sek: vatAmountSek,
         total: totalRounded,
         total_sek: totalSek,

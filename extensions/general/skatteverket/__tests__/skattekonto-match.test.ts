@@ -47,6 +47,33 @@ function lineRow(opts: {
   }
 }
 
+/**
+ * Enqueue the two pages the two-step entry-lines fetch reads
+ * (lib/bookkeeping/entry-lines.ts): the parent entries first, then the bare
+ * lines keyed by journal_entry_id. Fixtures stay embed-shaped; the helper
+ * reattaches the parent under `journal_entries`, which is exactly what the
+ * old `journal_entries!inner(...)` embed produced.
+ */
+function enqueueLines(
+  enqueue: (result: { data?: unknown; error?: unknown }) => void,
+  rows: ReturnType<typeof lineRow>[],
+) {
+  const entries = [
+    ...new Map(rows.map((r) => [r.journal_entries.id, r.journal_entries])).values(),
+  ]
+  enqueue({ data: entries })
+  // No matching entry means the helper never queries the lines at all.
+  if (entries.length === 0) return
+  enqueue({
+    data: rows.map((r, i) => ({
+      id: `line-${String(i).padStart(4, '0')}`,
+      journal_entry_id: r.journal_entries.id,
+      debit_amount: r.debit_amount,
+      credit_amount: r.credit_amount,
+    })),
+  })
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // findMatchCandidates
 // ──────────────────────────────────────────────────────────────────────
@@ -55,7 +82,7 @@ describe('findMatchCandidates', () => {
   it('returns candidate verifikat that debits 1630 with matching amount (positive SKV → looks for debit on 1630)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
-    enqueue({ data: [lineRow({ entryId: 'je-1', debit: 5000, credit: 0 })] })
+    enqueueLines(enqueue, [lineRow({ entryId: 'je-1', debit: 5000, credit: 0 })])
     enqueue({ data: [] }) // no already-linked
 
     const result = await findMatchCandidates(supabase as never, COMPANY, TX_ID)
@@ -70,7 +97,7 @@ describe('findMatchCandidates', () => {
   it('uses credit 1630 lookup when SKV amount is negative (money leaving skattekontot)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow({ belopp_skatteverket: -8333, transaktionstext: 'Debiterad F-skatt' }) })
-    enqueue({ data: [lineRow({ entryId: 'je-7', debit: 0, credit: 8333 })] })
+    enqueueLines(enqueue, [lineRow({ entryId: 'je-7', debit: 0, credit: 8333 })])
     enqueue({ data: [] })
 
     const result = await findMatchCandidates(supabase as never, COMPANY, TX_ID)
@@ -100,12 +127,10 @@ describe('findMatchCandidates', () => {
   it('filters out entries already linked to another SKV row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
-    enqueue({
-      data: [
-        lineRow({ entryId: 'je-1', debit: 5000, credit: 0 }),
-        lineRow({ entryId: 'je-2', debit: 5000, credit: 0 }),
-      ],
-    })
+    enqueueLines(enqueue, [
+      lineRow({ entryId: 'je-1', debit: 5000, credit: 0 }),
+      lineRow({ entryId: 'je-2', debit: 5000, credit: 0 }),
+    ])
     enqueue({ data: [{ journal_entry_id: 'je-1' }] }) // je-1 already linked
 
     const result = await findMatchCandidates(supabase as never, COMPANY, TX_ID)
@@ -133,13 +158,11 @@ describe('findMatchCandidates', () => {
   it('orders candidates by date proximity to the SKV row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow({ transaktionsdatum: '2026-03-17' }) })
-    enqueue({
-      data: [
-        lineRow({ entryId: 'je-far', debit: 5000, entryDate: '2026-03-08' }), // 9 days
-        lineRow({ entryId: 'je-close', debit: 5000, entryDate: '2026-03-16' }), // 1 day
-        lineRow({ entryId: 'je-mid', debit: 5000, entryDate: '2026-03-12' }), // 5 days
-      ],
-    })
+    enqueueLines(enqueue, [
+      lineRow({ entryId: 'je-far', debit: 5000, entryDate: '2026-03-08' }), // 9 days
+      lineRow({ entryId: 'je-close', debit: 5000, entryDate: '2026-03-16' }), // 1 day
+      lineRow({ entryId: 'je-mid', debit: 5000, entryDate: '2026-03-12' }), // 5 days
+    ])
     enqueue({ data: [] })
 
     const result = await findMatchCandidates(supabase as never, COMPANY, TX_ID)
@@ -265,13 +288,11 @@ describe('matchSkattekontoToEntry', () => {
 describe('findMatchSuggestionsBulk', () => {
   it('returns a suggestion only when exactly one candidate matches per row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        lineRow({ entryId: 'je-unique', debit: 5000, entryDate: '2026-03-16' }),
-        // unrelated different-amount line that should not match
-        lineRow({ entryId: 'je-other', debit: 9999, entryDate: '2026-03-16' }),
-      ],
-    })
+    enqueueLines(enqueue, [
+      lineRow({ entryId: 'je-unique', debit: 5000, entryDate: '2026-03-16' }),
+      // unrelated different-amount line that should not match
+      lineRow({ entryId: 'je-other', debit: 9999, entryDate: '2026-03-16' }),
+    ])
     enqueue({ data: [] }) // none linked
 
     const suggestions = await findMatchSuggestionsBulk(supabase as never, COMPANY, [
@@ -289,12 +310,10 @@ describe('findMatchSuggestionsBulk', () => {
 
   it('returns no suggestion when there are TWO candidates (ambiguous)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        lineRow({ entryId: 'je-a', debit: 5000, entryDate: '2026-03-15' }),
-        lineRow({ entryId: 'je-b', debit: 5000, entryDate: '2026-03-16' }),
-      ],
-    })
+    enqueueLines(enqueue, [
+      lineRow({ entryId: 'je-a', debit: 5000, entryDate: '2026-03-15' }),
+      lineRow({ entryId: 'je-b', debit: 5000, entryDate: '2026-03-16' }),
+    ])
     enqueue({ data: [] })
 
     const suggestions = await findMatchSuggestionsBulk(supabase as never, COMPANY, [
@@ -341,12 +360,10 @@ describe('findMatchSuggestionsBulk', () => {
 
   it('skips candidates whose entry_date is outside the per-row ±14 day window', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        // 20 days before the SKV row: too far
-        lineRow({ entryId: 'je-far', debit: 5000, entryDate: '2026-02-25' }),
-      ],
-    })
+    enqueueLines(enqueue, [
+      // 20 days before the SKV row: too far
+      lineRow({ entryId: 'je-far', debit: 5000, entryDate: '2026-02-25' }),
+    ])
     enqueue({ data: [] })
 
     const suggestions = await findMatchSuggestionsBulk(supabase as never, COMPANY, [
@@ -362,9 +379,8 @@ describe('findMatchSuggestionsBulk', () => {
 
   it('excludes entries that are already linked to a different SKV row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [lineRow({ entryId: 'je-linked', debit: 5000, entryDate: '2026-03-16' })],
-    })
+    enqueueLines(enqueue, [lineRow({ entryId: 'je-linked', debit: 5000, entryDate: '2026-03-16' })
+    ])
     enqueue({ data: [{ journal_entry_id: 'je-linked' }] })
 
     const suggestions = await findMatchSuggestionsBulk(supabase as never, COMPANY, [
@@ -380,12 +396,10 @@ describe('findMatchSuggestionsBulk', () => {
 
   it('respects sign convention per row: negative SKV needs a credit on 1630', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: [
-        // Debit-side line: wrong side for a -8333 SKV row
-        lineRow({ entryId: 'je-wrong-side', debit: 8333, entryDate: '2026-03-16' }),
-      ],
-    })
+    enqueueLines(enqueue, [
+      // Debit-side line: wrong side for a -8333 SKV row
+      lineRow({ entryId: 'je-wrong-side', debit: 8333, entryDate: '2026-03-16' }),
+    ])
     enqueue({ data: [] })
 
     const suggestions = await findMatchSuggestionsBulk(supabase as never, COMPANY, [

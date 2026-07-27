@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { Invoice, InvoiceItem } from '@/types'
 import { makeInvoice } from '@/tests/helpers'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import {
   buildRotRutFile,
   evaluateInvoiceForFile,
@@ -82,6 +83,45 @@ describe('buildRotRutFile: rot', () => {
     expect(xml).toContain('<ns2:Bygg>')
     expect(xml).toContain('<ns2:AntalTimmar>25</ns2:AntalTimmar>')
     expect(xml).toContain('<ns2:Materialkostnad>0</ns2:Materialkostnad>')
+  })
+
+  it('is byte-identical for a plain SEK invoice (conversion is a no-op)', () => {
+    // Locks the SEK output: threading currency through the amount block must
+    // not move a single character for the overwhelmingly common case.
+    const expected = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<ns1:Begaran xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+        + ' xmlns:ns1="http://xmls.skatteverket.se/se/skatteverket/ht/begaran/6.0"'
+        + ' xmlns:ns2="http://xmls.skatteverket.se/se/skatteverket/ht/komponent/begaran/6.0">',
+      '\t<ns2:NamnPaBegaran>ROT 2026-07-02</ns2:NamnPaBegaran>',
+      '\t<ns2:RotBegaran>',
+      '\t\t<ns2:Arenden>',
+      `\t\t\t<ns2:Kopare>${PNR_A}</ns2:Kopare>`,
+      '\t\t\t<ns2:BetalningsDatum>2026-06-20</ns2:BetalningsDatum>',
+      '\t\t\t<ns2:PrisForArbete>12500</ns2:PrisForArbete>',
+      '\t\t\t<ns2:BetaltBelopp>9500</ns2:BetaltBelopp>',
+      '\t\t\t<ns2:BegartBelopp>3000</ns2:BegartBelopp>',
+      '\t\t\t<ns2:FakturaNr>F-2024001</ns2:FakturaNr>',
+      '\t\t\t<ns2:Ovrigkostnad>0</ns2:Ovrigkostnad>',
+      '\t\t\t<ns2:Fastighetsbeteckning>Stockholm Vasastan 1:23</ns2:Fastighetsbeteckning>',
+      '\t\t\t<ns2:UtfortArbete>',
+      '\t\t\t\t<ns2:Bygg>',
+      '\t\t\t\t\t<ns2:AntalTimmar>25</ns2:AntalTimmar>',
+      '\t\t\t\t\t<ns2:Materialkostnad>0</ns2:Materialkostnad>',
+      '\t\t\t\t</ns2:Bygg>',
+      '\t\t\t</ns2:UtfortArbete>',
+      '\t\t</ns2:Arenden>',
+      '\t</ns2:RotBegaran>',
+      '</ns1:Begaran>',
+    ].join('\n')
+
+    const result = buildRotRutFile({
+      type: 'rot',
+      name: 'ROT 2026-07-02',
+      invoices: [makeRotInvoice()],
+      today: TODAY,
+    })
+    expect(result.xml).toBe(expected)
   })
 
   it('emits ärende elements in the XSD sequence order', () => {
@@ -202,6 +242,140 @@ describe('buildRotRutFile: rut', () => {
 
     expect(xml).toMatch(/<ns2:TvattVidTvattinrattning>\s*<ns2:Utfort>true<\/ns2:Utfort>/)
     expect(xml).not.toContain('AntalTimmar')
+  })
+})
+
+describe('foreign-currency invoices: kronor conversion', () => {
+  /**
+   * Begaran.xsd has no currency attribute: every belopp is an xs:long in
+   * kronor. The ledger already converts (BAS 1513 is debited in SEK), so the
+   * file has to convert with the same rate or the receivable can never clear.
+   */
+
+  /** The ledger's own 1513 debit for this invoice, per öre. */
+  function ledger1513(invoice: Invoice): number {
+    const lines = proposeSendLines({ invoice, entityType: 'enskild_firma' })
+    return lines
+      .filter((l) => l.account_number === '1513')
+      .reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
+  }
+
+  const EUR_RATE = 11.4
+
+  function makeEurRotInvoice(item: Partial<InvoiceItem>, overrides: Partial<Invoice> = {}): Invoice {
+    const merged = makeItem(item)
+    return makeRotInvoice(
+      {
+        currency: 'EUR',
+        exchange_rate: EUR_RATE,
+        subtotal: merged.line_total,
+        vat_amount: merged.vat_amount,
+        total: merged.line_total + merged.vat_amount,
+        ...overrides,
+      },
+      [merged],
+    )
+  }
+
+  it('emits SEK whole kronor for a 3 000 EUR rot invoice', () => {
+    // 3 000 EUR arbete + 750 EUR moms, 900 EUR avdrag, rate 11,40:
+    //   PrisForArbete 34 200 + 8 550 = 42 750 kr
+    //   BegartBelopp  900 × 11,40    = 10 260 kr
+    //   BetaltBelopp  42 750 - 10 260 = 32 490 kr
+    const invoice = makeEurRotInvoice({
+      unit_price: 3000,
+      quantity: 1,
+      line_total: 3000,
+      vat_amount: 750,
+      deduction_amount: 900,
+      labor_hours: 10,
+    })
+
+    const result = buildRotRutFile({ type: 'rot', name: 'EUR', invoices: [invoice], today: TODAY })
+    expect(result.blockers).toHaveLength(0)
+
+    const xml = result.xml!
+    expect(xml).toContain('<ns2:PrisForArbete>42750</ns2:PrisForArbete>')
+    expect(xml).toContain('<ns2:BegartBelopp>10260</ns2:BegartBelopp>')
+    expect(xml).toContain('<ns2:BetaltBelopp>32490</ns2:BetaltBelopp>')
+    expect(result.requested_total).toBe(10260)
+
+    // The begäran and the receivable must be the same claim.
+    expect(result.arenden[0].begart_belopp).toBe(Math.round(ledger1513(invoice)))
+  })
+
+  it('asks for 7 125 kr, not 625, on the 625 EUR deduction case', () => {
+    // The bug this test pins: 625 EUR avdrag booked to 1513 as 7 125 kr while
+    // the begäran asked Skatteverket for "625" (read as kronor).
+    const invoice = makeEurRotInvoice({
+      unit_price: 2083.33,
+      quantity: 1,
+      line_total: 2083.33,
+      vat_amount: 520.83,
+      deduction_amount: 625,
+      labor_hours: 8,
+    })
+
+    const result = buildRotRutFile({ type: 'rot', name: 'EUR 625', invoices: [invoice], today: TODAY })
+    expect(result.blockers).toHaveLength(0)
+
+    const xml = result.xml!
+    expect(xml).toContain('<ns2:BegartBelopp>7125</ns2:BegartBelopp>')
+    expect(xml).not.toContain('<ns2:BegartBelopp>625</ns2:BegartBelopp>')
+    expect(ledger1513(invoice)).toBe(7125)
+    expect(result.arenden[0].begart_belopp).toBe(7125)
+  })
+
+  it('MISSING_EXCHANGE_RATE rather than a guessed figure when the rate is absent', () => {
+    for (const rate of [null, 0, -1]) {
+      const invoice = makeEurRotInvoice(
+        { unit_price: 3000, line_total: 3000, vat_amount: 750, deduction_amount: 900 },
+        { exchange_rate: rate },
+      )
+      const result = evaluateInvoiceForFile('rot', invoice)
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.blocker.code).toBe('MISSING_EXCHANGE_RATE')
+        expect(result.blocker.message).toContain('växelkurs')
+      }
+    }
+  })
+
+  it('refuses to build a file from a rate-less foreign invoice', () => {
+    const invoice = makeEurRotInvoice(
+      { unit_price: 3000, line_total: 3000, vat_amount: 750, deduction_amount: 900 },
+      { exchange_rate: null },
+    )
+    const result = buildRotRutFile({ type: 'rot', name: 'Utan kurs', invoices: [invoice], today: TODAY })
+    expect(result.xml).toBeNull()
+    expect(result.requested_total).toBe(0)
+    expect(result.blockers.map((b) => b.code)).toEqual(['MISSING_EXCHANGE_RATE'])
+  })
+
+  it('requested_total sums kronor, never mixed currencies', () => {
+    // One SEK invoice (3 000 kr avdrag) + one EUR invoice (900 EUR = 10 260 kr).
+    const sekInvoice = makeRotInvoice()
+    const eurInvoice = makeEurRotInvoice({
+      unit_price: 3000,
+      quantity: 1,
+      line_total: 3000,
+      vat_amount: 750,
+      deduction_amount: 900,
+      labor_hours: 10,
+    })
+
+    const result = buildRotRutFile({
+      type: 'rot',
+      name: 'Blandad valuta',
+      invoices: [sekInvoice, eurInvoice],
+      today: TODAY,
+    })
+
+    expect(result.blockers).toHaveLength(0)
+    expect(result.arenden.map((a) => a.begart_belopp)).toEqual([3000, 10260])
+    expect(result.requested_total).toBe(13260)
+    // The old scalar added 3 000 kr to 900 EUR and called it 3 900.
+    expect(result.requested_total).not.toBe(3900)
   })
 })
 

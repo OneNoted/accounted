@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
+import { sparsePatchBody } from '@/lib/api/sparse-patch'
 import { UpdateAccountSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -35,14 +36,31 @@ export const DELETE = withRouteContext(
     }
 
     // Check if the account is referenced in THIS company's journal entries.
-    // journal_entry_lines has no company_id column, so scope via the parent
-    // entry — a user can be a member of several companies, and another
-    // company's usage of the same BAS number must not block deletion here.
-    const { count } = await supabase
-      .from('journal_entry_lines')
-      .select('id, journal_entries!inner(company_id)', { count: 'exact', head: true })
-      .eq('journal_entries.company_id', companyId)
-      .eq('account_number', number)
+    // journal_entry_lines has no company_id column, so the scope has to come
+    // from the parent entry: a user can be a member of several companies, and
+    // another company's usage of the same BAS number must not block deletion
+    // here.
+    //
+    // This used to be a `journal_entries!inner(company_id)` head+count query.
+    // PostgREST compiles that embed into a correlated LATERAL join, so the
+    // count walked the ENTIRE journal_entry_lines table across all tenants to
+    // answer a single-account question (see lib/bookkeeping/entry-lines.ts).
+    // fetchEntryLines cannot replace it (it returns rows, not a count), so the
+    // count moves into SQL: get_account_usage_counts is the same
+    // company-scoped aggregate the kontoplan usage column and the prune dialog
+    // already run (migration 20260704110000, covering index 20260706120000),
+    // and it counts lines on ALL entry statuses, exactly like the old query.
+    const { data: usage, error: usageError } = await supabase.rpc('get_account_usage_counts', {
+      p_company_id: companyId,
+    })
+
+    if (usageError) {
+      return NextResponse.json({ error: getUserErrorMessage(usageError) }, { status: 500 })
+    }
+
+    const count = ((usage ?? []) as { account_number: string; usage_count: number }[]).find(
+      (row) => row.account_number === number,
+    )?.usage_count
 
     if (count && count > 0) {
       return NextResponse.json(
@@ -72,7 +90,14 @@ export const PUT = withRouteContext(
     const { number } = await params
     const { supabase, companyId, log } = ctx
 
-    const validation = await validateBody(request, UpdateAccountSchema, {
+    // The body is spread straight into .update(), so only the fields the
+    // caller actually named may reach it. UpdateAccountSchema carries no
+    // .default() today, so sparsePatchBody is a no-op here: it is the
+    // structural guarantee that adding one later cannot make a PUT that
+    // renames an account also rewrite its VAT code or SRU mapping. An
+    // explicit null (clearing sru_code, default_vat_code, default_vat_rate)
+    // still survives.
+    const validation = await validateBody(request, sparsePatchBody(UpdateAccountSchema), {
       log,
       operation: 'bookkeeping.accounts.update',
     })

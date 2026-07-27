@@ -3,6 +3,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import type { SkattekontoBalanceSnapshot } from '../types'
 import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY } from './skattekonto-sync'
 import { createLogger } from '@/lib/logger'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 const log = createLogger('skattekonto-drift')
 
@@ -39,7 +40,9 @@ export interface DriftAlertState {
 /**
  * Compute the difference between Skatteverket's cached saldo and the GL sum on
  * BAS 1630. Returns null when no snapshot exists yet (fresh company, never
- * synced).
+ * synced), and null when the GL read fails: a transient read failure must
+ * skip the drift pass for this run, not compute drift = the full SKV saldo
+ * and email a false "Skattekontot stämmer inte med bokföringen".
  *
  * The comparison uses the snapshot's `fetchedAt` date as the GL cutoff: a
  * skattekonto sync at 04:00 today should only count GL entries posted with
@@ -58,6 +61,16 @@ export async function computeSkattekontoDrift(
   const saldoSkatteverket = Number(snapshot.saldo.saldoSkatteverket) || 0
 
   const glSum1630 = await sumGl1630(ctx.supabase, ctx.companyId, fetchedDate)
+  if (glSum1630 === null) {
+    // The read failed (already warn-logged in sumGl1630 with the reason).
+    // Skip the drift pass for this company this run: a 0-substitute would
+    // make the "drift" equal the entire SKV saldo.
+    log.warn('skipping drift check for this run: GL 1630 read failed', {
+      companyId: ctx.companyId,
+      cutoffDate: fetchedDate,
+    })
+    return null
+  }
   // SKV side and GL side use opposite sign conventions in this codebase:
   //   - SKV saldoSkatteverket > 0 means the taxpayer has a credit balance
   //     with SKV (money sitting at Skatteverket).
@@ -134,26 +147,44 @@ export async function maybeAlertDrift(
   return true
 }
 
+/**
+ * Sum debit - credit on BAS 1630 up to the cutoff. Returns null (NOT 0) when
+ * the read fails: 0 is a real balance claim ("nothing booked on 1630"), and
+ * substituting it for a failed read turns every transient DB blip into a
+ * full-saldo drift alert.
+ */
 async function sumGl1630(
   supabase: SupabaseClient,
   companyId: string,
   cutoffDate: string,
-): Promise<number> {
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select('debit_amount, credit_amount, journal_entries!inner(company_id, entry_date, status)')
-    .eq('account_number', SKATTEKONTO_BAS_ACCOUNT)
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.status', 'posted')
-    .lte('journal_entries.entry_date', cutoffDate)
-
-  if (error || !data) {
-    log.warn('sumGl1630 failed', { companyId, cutoffDate, error: error?.message })
-    return 0
+): Promise<number | null> {
+  // Driven from the journal_entries side (lib/bookkeeping/entry-lines.ts):
+  // the scope filters used to sit on a `journal_entries!inner` embed, which
+  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
+  // journal_entry_lines table across all tenants. Both steps paginate, so a
+  // company with more than 1000 skattekonto lines is no longer silently
+  // truncated (which would have under-reported the drift).
+  let data: Array<{ debit_amount: number | string; credit_amount: number | string }>
+  try {
+    data = await fetchEntryLines({
+      supabase,
+      lineColumns: 'debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q.eq('company_id', companyId).eq('status', 'posted').lte('entry_date', cutoffDate),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_BAS_ACCOUNT),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
+    log.warn('sumGl1630 failed', {
+      companyId,
+      cutoffDate,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
   }
 
   let sum = 0
-  for (const row of data as Array<{ debit_amount: number | string; credit_amount: number | string }>) {
+  for (const row of data) {
     sum += Number(row.debit_amount || 0) - Number(row.credit_amount || 0)
   }
   return Math.round(sum * 100) / 100

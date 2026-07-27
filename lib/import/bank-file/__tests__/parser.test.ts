@@ -902,23 +902,39 @@ describe('parseBankFile: Handelsbanken format', () => {
     expect(descriptions).not.toContain(expect.stringContaining('Prel'))
   })
 
-  it('prefers transaktionsdatum over reskontradatum when both are present', () => {
-    // Handelsbanken has both columns; transaktionsdatum should be used
+  it('uses reskontradatum when both date columns are present', () => {
+    // Handelsbanken has both columns; reskontradatum (booking date) should be used
     const result = parseBankFile(HANDELSBANKEN_CSV, 'handelsbanken.csv')
 
     // In our test data both dates are the same, but verify it selects dates properly
     expect(result.transactions[0].date).toBe('2024-01-15')
   })
 
-  it('uses transaktionsdatum as the primary date field', () => {
-    // Create data where reskontradatum differs from transaktionsdatum
+  it('uses reskontradatum (booking date), not transaktionsdatum, as the primary date field', () => {
+    // A card purchase booked two days after the swipe: the PSD2 / Enable Banking
+    // feed delivers this row on its booking_date (the 16th). Emitting the
+    // transaktionsdatum here would put the same affärshändelse in a different
+    // exact-date content-dedup bucket and insert it twice.
     const diffDates = [
       'Reskontradatum;Transaktionsdatum;Text;Belopp;Saldo',
-      '2024-01-16;2024-01-15;PURCHASE;-100,00;5000,00',
+      '2026-03-16;2026-03-14;KORTKÖP CLAS OHLSON;-100,00;5000,00',
     ].join('\n')
 
     const result = parseBankFile(diffDates, 'shb.csv')
-    expect(result.transactions[0].date).toBe('2024-01-15')
+    expect(result.transactions[0].date).toBe('2026-03-16')
+  })
+
+  it('falls back to transaktionsdatum when reskontradatum is absent', () => {
+    const txOnly = [
+      'Transaktionsdatum;Text;Belopp;Saldo',
+      '2026-03-14;KORTKÖP CLAS OHLSON;-100,00;5000,00',
+    ].join('\n')
+
+    const result = parseBankFile(txOnly, 'shb.csv')
+    expect(result.format).toBe('handelsbanken')
+    expect(result.transactions).toHaveLength(1)
+    expect(result.issues).toHaveLength(0)
+    expect(result.transactions[0].date).toBe('2026-03-14')
   })
 
   it('detects Handelsbanken CSV when a metadata preamble precedes the header', () => {
@@ -1012,6 +1028,38 @@ describe('parseBankFile: Länsförsäkringar format', () => {
 
     expect(result.date_from).toBe('2024-01-13')
     expect(result.date_to).toBe('2024-01-15')
+  })
+
+  it('uses Bokföringsdag (booking date), not Datum, when the two differ', () => {
+    // Same rationale as Handelsbanken: the PSD2 feed keys the row on its
+    // booking_date, so the CSV must emit the same date or the affärshändelse
+    // lands in two different exact-date dedup buckets and inserts twice.
+    const diffDates = [
+      '"Datum";"Bokföringsdag";"Typ";"Text";"Belopp";"Saldo"',
+      '"2026-03-14";"2026-03-16";"Kortköp";"CLAS OHLSON";"-100,00";"5 000,00"',
+    ].join('\n')
+
+    const result = parseBankFile(diffDates, 'lf.csv')
+    expect(result.format).toBe('lansforsakringar')
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].date).toBe('2026-03-16')
+  })
+
+  it('uses the Bokföringsdag column position on header-less files', () => {
+    // The header-less layout is pinned by isLFRow (two adjacent dates, comma
+    // number in field 4), so field 1 is Bokföringsdag. Header-ful and
+    // header-less exports of the same account must agree on the date, or the
+    // two upload paths duplicate each other.
+    const noHeaderDiffDates = [
+      '"2026-03-14";"2026-03-16";"Kortköp";"CLAS OHLSON";"-100,00";"5 000,00"',
+      '"2026-03-11";"2026-03-12";"Kortköp";"ICA MAXI";"-432,50";"5 100,00"',
+    ].join('\n')
+
+    const result = parseBankFile(noHeaderDiffDates, 'lf.csv')
+    expect(result.format).toBe('lansforsakringar')
+    expect(result.transactions).toHaveLength(2)
+    expect(result.transactions[0].date).toBe('2026-03-16')
+    expect(result.transactions[1].date).toBe('2026-03-12')
   })
 })
 

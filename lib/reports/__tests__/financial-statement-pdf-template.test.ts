@@ -16,6 +16,10 @@ function fakeCompany(): CompanySettings {
   } as unknown as CompanySettings
 }
 
+// Real @react-pdf/renderer layout is CPU-heavy; under a fully parallel
+// test run these can exceed the 5s default on a saturated machine.
+const RENDER_TIMEOUT = 30_000
+
 describe('FinancialStatementPDF', () => {
   it('renders a balance-sheet-shaped document to a PDF buffer', async () => {
     const doc = FinancialStatementPDF({
@@ -61,7 +65,7 @@ describe('FinancialStatementPDF', () => {
     expect(buffer.length).toBeGreaterThan(1000)
     // PDF files always start with "%PDF-"
     expect(buffer.slice(0, 5).toString()).toBe('%PDF-')
-  })
+  }, RENDER_TIMEOUT)
 
   it('renders an income-statement-shaped document with a summary block', async () => {
     const doc = FinancialStatementPDF({
@@ -109,7 +113,7 @@ describe('FinancialStatementPDF', () => {
     const buffer = await renderToBuffer(doc)
     expect(buffer).toBeInstanceOf(Buffer)
     expect(buffer.slice(0, 5).toString()).toBe('%PDF-')
-  })
+  }, RENDER_TIMEOUT)
 
   it('handles empty section groups gracefully', async () => {
     const doc = FinancialStatementPDF({
@@ -135,5 +139,5 @@ describe('FinancialStatementPDF', () => {
 
     const buffer = await renderToBuffer(doc)
     expect(buffer.slice(0, 5).toString()).toBe('%PDF-')
-  })
+  }, RENDER_TIMEOUT)
 })

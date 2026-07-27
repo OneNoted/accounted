@@ -28,13 +28,9 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
-vi.mock('@/lib/salary/personnummer', () => ({
-  decryptPersonnummer: vi.fn((v: string) => v),
-  maskPersonnummer: vi.fn(() => '19900101-****'),
-}))
-
 import { DELETE, GET } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
 // ── Test data ────────────────────────────────────────────────
 
@@ -226,6 +222,55 @@ describe('GET /api/salary/runs/[id] — additive detail fields', () => {
 
     expect(status).toBe(200)
     expect(body.data.previous_run).toBeNull()
+  })
+
+  it('masks embedded employees: no ciphertext, no personnummer_last4', async () => {
+    // The mask is YYYYMMDD-XXXX; a payload carrying the mask AND the last four
+    // digits would reassemble the full personnummer by concatenation.
+    const STORED_PNR = '190203040000' // synthetic
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: GET_RUN },
+      {
+        data: [
+          {
+            id: 'sre-1',
+            gross_salary: 30000,
+            employee: {
+              id: 'emp-1',
+              first_name: 'Test',
+              last_name: 'Testsson',
+              personnummer: encryptPersonnummer(STORED_PNR),
+              personnummer_last4: '0000',
+              employment_type: 'employee',
+              default_dimensions: {},
+            },
+            line_items: [],
+          },
+        ],
+      },
+      { data: null }, // settings
+      { data: null }, // no previous booked run
+      { data: [] }, // deliveries
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-2'),
+      createMockRouteParams({ id: 'run-2' }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      data: { employees: Array<{ employee: Record<string, unknown> }> }
+    }>(response)
+
+    expect(status).toBe(200)
+    const employee = body.data.employees[0].employee
+    expect(employee.personnummer_masked).toBe('19020304-XXXX')
+    expect(employee).not.toHaveProperty('personnummer')
+    expect(employee).not.toHaveProperty('personnummer_last4')
+    // Neither the plaintext nor the suffix may appear anywhere in the payload.
+    expect(JSON.stringify(body)).not.toContain(STORED_PNR)
   })
 
   it('exposes corrected_by_run_id on corrected originals and counts latest deliveries', async () => {

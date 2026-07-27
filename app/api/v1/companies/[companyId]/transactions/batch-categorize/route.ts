@@ -25,6 +25,7 @@ import {
   validateTemplateForEntity,
 } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { recordVoucherGapExplanation } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
@@ -367,23 +368,26 @@ async function categorizeOne(
           .from('journal_entries')
           .select('fiscal_period_id, voucher_series, voucher_number')
           .eq('id', journalEntryId)
+          .eq('company_id', companyId)
           .single()
         if (orphan && orphan.voucher_series) {
           // Same rationale as the single :categorize route: skip the gap row
           // when no series exists rather than filing under a fallback series
-          // that an audit query won't find.
-          await supabase.from('voucher_gap_explanations').insert({
-            company_id: companyId,
-            fiscal_period_id: orphan.fiscal_period_id,
-            voucher_series: orphan.voucher_series,
-            gap_number: orphan.voucher_number,
+          // that an audit query won't find. The insert itself lives in the
+          // shared helper, which owns the real voucher_gap_explanations
+          // column set (gap_start/gap_end/user_id) and logs failures loudly.
+          await recordVoucherGapExplanation(supabase, {
+            companyId,
+            userId,
+            fiscalPeriodId: orphan.fiscal_period_id,
+            voucherSeries: orphan.voucher_series,
+            voucherNumber: orphan.voucher_number,
             explanation:
               'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
-            created_by: userId,
           })
         }
       } catch (gapErr) {
-        log.error('batch-categorize: failed to log voucher_gap_explanations', gapErr as Error, {
+        log.error('batch-categorize: failed to look up the orphan for its gap explanation', gapErr as Error, {
           request_index: index,
           orphanJournalEntryId: journalEntryId,
         })

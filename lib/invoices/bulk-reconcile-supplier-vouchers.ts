@@ -117,6 +117,16 @@ export interface ReconcileOptions {
 const SELECT_COLUMNS =
   'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, is_credit_note, supplier:suppliers(id, name)'
 
+/**
+ * The invoice's outstanding balance, in the INVOICE's currency (total /
+ * paid_amount / remaining_amount are all quoted there; *_sek carries the SEK
+ * equivalent). Every amount comparison below pairs this with
+ * `SupplierVoucherCandidate.ap_debit_amount`, which the matcher also quotes in
+ * the invoice's currency. Both sides must stay in that unit: the ledger's
+ * debit_amount is ALWAYS SEK, so a candidate that leaked the raw column here
+ * would compare a SEK figure against a foreign remainder and auto-link the
+ * wrong voucher at the wrong amount.
+ */
 function remainingOf(inv: ReconcileInvoiceRow): number {
   if (typeof inv.remaining_amount === 'number') return Math.max(0, inv.remaining_amount)
   return Math.max(0, Math.round((inv.total - (inv.paid_amount ?? 0)) * 100) / 100)
@@ -226,6 +236,7 @@ export async function reconcileSupplierInvoiceVouchers(
     const clearMargin = !runnerUp || top.confidence - runnerUp.confidence >= AUTO_LINK_MIN_MARGIN
     // The RPC rejects a voucher whose AP debit exceeds the remaining amount; an
     // OCR match (which ignores amount) could trip this, so screen it out here.
+    // Both sides are in the invoice's currency (see remainingOf).
     const amountFits = top.ap_debit_amount <= remaining + AMOUNT_TOLERANCE
 
     if (confidentEnough && clearMargin && amountFits) {

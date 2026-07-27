@@ -3,9 +3,13 @@
  *
  * GET: full invoice record. ?expand=items,payments controls embedding.
  * PATCH: partial update on DRAFT invoices only. Allowed fields are the
- *         "metadata" subset (dates, references, notes); customer_id,
- *         currency, document_type, and items are immutable: changing any
- *         of those means delete-and-recreate (drafts are cheap). Returns
+ *         "metadata" subset (dates, references, notes, default_dimensions)
+ *         plus an OPTIONAL `items` array: when present, it fully REPLACES
+ *         the draft's line items and totals/VAT are recomputed via the
+ *         shared buildInvoiceWriteData against the invoice's EXISTING
+ *         customer; when omitted, items are untouched. customer_id,
+ *         currency, and document_type remain immutable: changing those
+ *         means delete-and-recreate (drafts are cheap). Returns
  *         409 INVOICE_UPDATE_NOT_DRAFT (reusing existing code) if the
  *         invoice is not in draft status.
  *
@@ -21,11 +25,18 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
+import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
+import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 
-// Allowed PATCH fields for a draft invoice. Excludes items (separate
-// workflow), customer_id / currency / document_type (structural: change
-// via delete + recreate), invoice_number (allocated server-side), all
-// computed totals, and status (state machine: use action verbs in PR-B-2b).
+// Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
+// document_type (structural: change via delete + recreate), invoice_number
+// (allocated server-side), all computed totals, and status (state machine:
+// use action verbs in PR-B-2b). `items` is OPTIONAL: when present it fully
+// replaces the line set (delete + reinsert, totals recomputed); when omitted
+// the items are unchanged. Note this differs from the cookie route, where
+// items is required: a v1 metadata-only PATCH must keep working without it.
 const V1PatchDraftInvoiceSchema = z.object({
   invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD').optional(),
   due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD').optional(),
@@ -37,6 +48,9 @@ const V1PatchDraftInvoiceSchema = z.object({
   // Send {} to clear all tags. Codes are validated against the dimension
   // registry when the invoice posts at :send, not here.
   default_dimensions: DimensionsBagSchema.optional(),
+  // FULL REPLACE when present. Same item shape as POST /invoices (article
+  // linkage, ROT/RUT lines, accrual periods, per-line dimensions included).
+  items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required').optional(),
 })
 
 // Loose schema: detail responses carry many fields, and pinning the exact
@@ -183,17 +197,18 @@ registerEndpoint({
   operation: 'invoices.update',
   method: 'PATCH',
   path: '/api/v1/companies/:companyId/invoices/:id',
-  summary: 'Update a draft invoice (metadata fields only).',
+  summary: 'Update a draft invoice (metadata fields, optionally replacing line items).',
   description:
-    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag). customer_id, currency, document_type, items, and computed totals are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
+    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag), and an optional items array. When items is present, it fully REPLACES the draft\'s line items and subtotal / VAT / total are recomputed against the invoice\'s existing customer (same validation as POST /invoices); when omitted, items and totals are unchanged. customer_id, currency, and document_type are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
   useWhen:
-    'You need to correct a typo, push the due date, or update a customer reference on a draft you have not sent yet. The invoice number stays null until the first :send action.',
+    'You need to correct a typo, push the due date, update a customer reference, or rewrite the line items on a draft you have not sent yet. The invoice number stays null until the first :send action.',
   doNotUseFor:
-    'Updating a sent / paid / credited invoice (those are immutable per ML 17 kap; issue a credit note via POST /:id:credit in PR-B-2b). Changing items, currency, or customer: drafts are cheap to delete and recreate.',
+    'Updating a sent / paid / credited invoice (those are immutable per ML 17 kap; issue a credit note via POST /:id:credit in PR-B-2b). Changing currency or customer: drafts are cheap to delete and recreate.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The error code name is shared with the DELETE handler.',
-    'Items are immutable here: to change line items, delete the draft and POST a fresh one.',
+    'items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.',
+    'items are always built against the invoice\'s EXISTING customer: customer_id cannot change on PATCH.',
     'default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.',
   ],
   example: {
@@ -270,7 +285,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       if (body[key] !== undefined) updateData[key] = body[key]
     }
 
-    if (Object.keys(updateData).length === 0) {
+    if (Object.keys(updateData).length === 0 && !body.items) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'body', message: 'At least one field must be supplied for update.' },
@@ -302,6 +317,188 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         requestId: ctx.requestId,
         details: { current_status: (current as { status: string }).status },
       })
+    }
+
+    // ── Items replacement path ────────────────────────────────────────
+    // Full replace + recompute via the shared write-builder (the same one
+    // POST /invoices and the cookie PATCH route use), built against the
+    // invoice's EXISTING customer: customer_id is immutable on PATCH.
+    if (body.items) {
+      const cur = current as Record<string, unknown>
+
+      // Internal-only columns for the rebuild. Fetched separately so the
+      // response/preview projection (INVOICE_PATCH_RESPONSE_COLUMNS) can
+      // never leak the encrypted personnummer blob.
+      const { data: internal, error: internalErr } = await ctx.supabase
+        .from('invoices')
+        .select('ore_rounding, deduction_personnummer_encrypted, deduction_personnummer_last4')
+        .eq('company_id', ctx.companyId!)
+        .eq('id', invoiceId)
+        .maybeSingle()
+      if (internalErr) {
+        return v1ErrorResponse(internalErr, ctx.log, { requestId: ctx.requestId })
+      }
+      if (!internal) {
+        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+          requestId: ctx.requestId,
+          details: { resource: 'invoice' },
+        })
+      }
+      const internalCols = internal as {
+        ore_rounding: boolean | null
+        deduction_personnummer_encrypted: string | null
+        deduction_personnummer_last4: string | null
+      }
+
+      // The builder only reads customer_type + vat_number_validated: narrow
+      // projection keeps customer PII out of this path.
+      const { data: customer, error: customerErr } = await ctx.supabase
+        .from('customers')
+        .select('id, customer_type, vat_number_validated')
+        .eq('company_id', ctx.companyId!)
+        .eq('id', cur.customer_id as string)
+        .maybeSingle()
+      if (customerErr) {
+        return v1ErrorResponse(customerErr, ctx.log, { requestId: ctx.requestId })
+      }
+      if (!customer) {
+        return v1ErrorResponseFromCode('INVOICE_CUSTOMER_NOT_FOUND', ctx.log, {
+          requestId: ctx.requestId,
+          details: { resource: 'customer' },
+        })
+      }
+
+      // ROT/RUT claim info lives per line, not on the header: surface the
+      // first deduction line's values as the invoice-level inputs the
+      // builder's presence checks expect (per-line values win regardless).
+      const firstDeduction = body.items.find((item) => item.deduction_type)
+
+      const build = await buildInvoiceWriteData({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        customer: customer as unknown as Customer,
+        documentType: ((cur.document_type as string) || 'invoice') as InvoiceDocumentType,
+        input: {
+          customer_id: cur.customer_id as string,
+          invoice_date: (body.invoice_date ?? cur.invoice_date) as string,
+          due_date: (body.due_date ?? cur.due_date) as string,
+          delivery_date:
+            body.delivery_date !== undefined
+              ? body.delivery_date
+              : (cur.delivery_date as string | null),
+          currency: cur.currency as Currency,
+          your_reference:
+            (body.your_reference !== undefined ? body.your_reference : (cur.your_reference as string | null)) ??
+            undefined,
+          our_reference:
+            (body.our_reference !== undefined ? body.our_reference : (cur.our_reference as string | null)) ??
+            undefined,
+          notes: (body.notes !== undefined ? body.notes : (cur.notes as string | null)) ?? undefined,
+          // Not editable on this surface: fed back so the builder echoes the
+          // stored values instead of clearing them.
+          payment_link_url: (cur.payment_link_url as string | null) ?? undefined,
+          payment_link_auto: (cur.payment_link_auto as boolean | null) ?? undefined,
+          ore_rounding: internalCols.ore_rounding ?? undefined,
+          deduction_housing_designation: firstDeduction?.housing_designation ?? undefined,
+          deduction_apartment_number: firstDeduction?.apartment_number ?? undefined,
+          deduction_brf_org_number: firstDeduction?.brf_org_number ?? undefined,
+          default_dimensions:
+            body.default_dimensions ??
+            ((cur.default_dimensions as Record<string, string> | null) ?? {}),
+          items: body.items,
+        },
+        // The stored personnummer exists only as ciphertext: a replace that
+        // still carries deduction lines keeps the stored value.
+        existingPersonnummer: internalCols.deduction_personnummer_encrypted
+          ? {
+              encrypted: internalCols.deduction_personnummer_encrypted,
+              last4: internalCols.deduction_personnummer_last4,
+            }
+          : null,
+      })
+      if (!build.ok) {
+        if ('dbError' in build) {
+          return v1ErrorResponse(build.dbError, ctx.log, { requestId: ctx.requestId })
+        }
+        // Same snake_case wire mapping as POST /invoices for this code.
+        const details =
+          build.code === 'INVOICE_CREATE_VAT_RULE_VIOLATION' && build.details
+            ? {
+                attempted_rate: build.details.attemptedRate,
+                allowed_rates: build.details.allowedRates,
+                customer_type: build.details.customerType,
+              }
+            : build.details
+        return v1ErrorResponseFromCode(build.code, ctx.log, {
+          requestId: ctx.requestId,
+          details,
+        })
+      }
+
+      // Never echo the encrypted personnummer blob in a preview.
+      const { deduction_personnummer_encrypted: _omit, ...previewFields } = build.invoiceFields
+
+      if (ctx.dryRun) {
+        return dryRunPreview(
+          { ...current, ...previewFields, ...updateData, items: build.items },
+          { requestId: ctx.requestId, log: ctx.log },
+        )
+      }
+
+      // Computed fields from the builder; explicitly-sent metadata (incl.
+      // nulls that clear a column) wins on top. invoice_number and status
+      // stay untouched; the status guard turns a concurrent send into a
+      // 0-row update instead of rewriting a now-issued invoice.
+      const { data: updatedRow, error: updateErr } = await ctx.supabase
+        .from('invoices')
+        .update({ ...build.invoiceFields, ...updateData, updated_at: new Date().toISOString() })
+        .eq('company_id', ctx.companyId!)
+        .eq('id', invoiceId)
+        .eq('status', 'draft')
+        .select(INVOICE_PATCH_RESPONSE_COLUMNS)
+        .maybeSingle()
+
+      if (updateErr) {
+        return v1ErrorResponse(updateErr, ctx.log, { requestId: ctx.requestId })
+      }
+      if (!updatedRow) {
+        return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
+          requestId: ctx.requestId,
+          details: { reason: 'Invoice transitioned out of draft during update.' },
+        })
+      }
+
+      // Full replace via the shared helper (same delete + reinsert as the
+      // cookie route and the update_invoice commit executor).
+      const replaced = await replaceInvoiceItems(ctx.supabase, invoiceId, build.items)
+      if (!replaced.ok) {
+        ctx.log.error(`invoice items ${replaced.stage} failed on v1 update`, replaced.error, {
+          invoiceId,
+          companyId: ctx.companyId,
+        })
+        return v1ErrorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+          details: { stage: replaced.stage, pg_code: replaced.error.code },
+        })
+      }
+
+      // Refetch with items so the caller sees the replaced line set.
+      const { data: complete, error: refetchErr } = await ctx.supabase
+        .from('invoices')
+        .select(`${INVOICE_PATCH_RESPONSE_COLUMNS}, items:invoice_items(${INVOICE_ITEM_COLUMNS})`)
+        .eq('company_id', ctx.companyId!)
+        .eq('id', invoiceId)
+        .maybeSingle()
+
+      if (refetchErr || !complete) {
+        ctx.log.warn('invoice refetch after items update failed; returning header without items', {
+          invoiceId,
+          pgCode: (refetchErr as { code?: string } | null)?.code,
+        })
+        return ok(updatedRow, { requestId: ctx.requestId })
+      }
+
+      return ok(complete, { requestId: ctx.requestId })
     }
 
     if (ctx.dryRun) {

@@ -17,6 +17,10 @@ import { isBankIdEnabled } from '@/lib/auth/bankid'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
+import {
+  consumeInviteCookie,
+  INVITE_PROBLEM_MESSAGE_KEYS,
+} from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 
 const branding = getBranding()
@@ -35,6 +39,17 @@ export default function RegisterPage() {
 }
 
 function RegisterPageContent() {
+  // `invite` is the only query parameter this page reads. It deliberately does
+  // NOT read `next`: nothing links here with one (bounceToAuth in
+  // lib/supabase/middleware.ts targets /login and the two MFA pages only, and
+  // app/invite/[token]/page.tsx sends `?invite=`), the already-signed-in case
+  // is handled in the middleware behind safeReturnTo, and neither signup path
+  // has a destination to spend it on: the password path leaves through the
+  // confirmation mail and /auth/callback, and the BankID path must land a
+  // brand-new account on '/' or /select-company rather than a deep link it has
+  // no membership for. If a destination is ever wanted here it MUST go through
+  // safeReturnTo (lib/auth/safe-return-to.ts); a hand-rolled check on this
+  // value is an open redirect.
   const searchParams = useSearchParams()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -51,10 +66,35 @@ function RegisterPageContent() {
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   const t = useTranslations('register')
+  const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
+
+  // Accept a pending invite, if any, and report a non-definitive failure.
+  // Returns true when the caller should land the user in the app directly.
+  // The invite cookie survives anything that is not a settled outcome, so
+  // /onboarding and /select-company can retry acceptance server-side.
+  const acceptPendingInvite = async (): Promise<boolean> => {
+    const invite = await consumeInviteCookie()
+    if (invite.accepted) return true
+    if (invite.problem) {
+      const keys = INVITE_PROBLEM_MESSAGE_KEYS[invite.problem]
+      toast({
+        title: tInvite(keys.title),
+        description: tInvite(keys.body),
+        variant: 'destructive',
+      })
+    }
+    return false
+  }
 
   // When arriving from an invite link, fetch the invite info to pre-fill
   // and lock the email field so the user registers with the correct address.
+  // BOTH signup forms are pre-filled: the BankID form used to be left blank
+  // and editable, so an invitee who signed up with BankID typed their private
+  // address, POST /api/team/accept answered 403 on the email equality check,
+  // and they landed on /select-company with no membership. The token now
+  // survives that 403 (lib/auth/consume-invite-cookie.ts) so it is recoverable
+  // rather than terminal, but the signup should not walk into it at all.
   useEffect(() => {
     const inviteToken = searchParams.get('invite')
     if (!inviteToken) return
@@ -65,6 +105,7 @@ function RegisterPageContent() {
         if (data?.data?.email) {
           setInviteEmail(data.data.email)
           setEmail(data.data.email)
+          setBankIdEmail(data.data.email)
         }
       })
       .catch(() => {})
@@ -156,27 +197,9 @@ function RegisterPageContent() {
       // invitee who registers with BankID lands on /select-company with no
       // membership and gets funneled into creating a company instead of
       // joining the one they were invited to.
-      const inviteCookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
-      const inviteToken = inviteCookieMatch?.[1]
-
-      if (inviteToken) {
-        try {
-          const res = await fetch('/api/team/accept', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: inviteToken }),
-          })
-
-          if (res.ok) {
-            document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
-            window.location.href = '/'
-            return
-          }
-        } catch (err) {
-          console.error('[register] invite acceptance failed:', err instanceof Error ? err.message : String(err))
-        }
-        // Clear cookie even on failure to avoid retrying stale tokens
-        document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
+      if (await acceptPendingInvite()) {
+        window.location.href = '/'
+        return
       }
 
       router.push('/select-company')
@@ -326,8 +349,15 @@ function RegisterPageContent() {
           </div>
 
           <div className="space-y-2">
+            {/*
+              Plain /login, no `email` parameter: app/(auth)/login/page.tsx
+              reads only `error`, `flow` and `next`, so the address was
+              travelling in the URL (browser history, Referer, every proxy
+              access log) and arriving nowhere. The address is already on
+              screen above, so nothing is lost by dropping it.
+            */}
             <Button className="w-full" asChild>
-              <Link href={`/login?email=${encodeURIComponent(duplicateEmail)}`}>
+              <Link href="/login">
                 {t('sign_in')}
               </Link>
             </Button>
@@ -452,11 +482,12 @@ function RegisterPageContent() {
                   value={bankIdEmail}
                   onChange={(e) => setBankIdEmail(e.target.value)}
                   required
-                  disabled={isLoading}
+                  disabled={isLoading || !!inviteEmail}
+                  readOnly={!!inviteEmail}
                   className="h-11"
                 />
                 <p className="text-xs text-muted-foreground">
-                  {t('bankid_email_hint')}
+                  {inviteEmail ? t('invite_email_hint') : t('bankid_email_hint')}
                 </p>
               </div>
               <Button type="submit" className="w-full h-11" disabled={isLoading}>

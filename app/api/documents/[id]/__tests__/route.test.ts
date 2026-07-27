@@ -38,6 +38,16 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }))
 
+// deleteDocument removes storage objects via the cookieless service-role
+// client: the documents bucket is WORM (no DELETE policy on storage.objects),
+// so a caller-bound remove() is silently blocked by RLS.
+const serviceRemoveMock = vi.fn()
+vi.mock('@/lib/auth/api-keys', () => ({
+  createServiceClientNoCookies: () => ({
+    storage: { from: vi.fn(() => ({ remove: serviceRemoveMock })) },
+  }),
+}))
+
 import { GET, DELETE } from '../route'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { NextResponse } from 'next/server'
@@ -55,6 +65,7 @@ beforeEach(() => {
     data: { signedUrl: 'https://example.com/signed' },
     error: null,
   })
+  serviceRemoveMock.mockResolvedValue({ data: [], error: null })
 })
 
 function makeReq(method: 'GET' | 'DELETE' = 'DELETE') {
@@ -228,9 +239,17 @@ describe('DELETE /api/documents/[id]', () => {
     expect(status).toBe(200)
     expect(body.data).toEqual({ id: 'doc-1', deleted: true })
 
-    expect(mockSupabase.storage.from).toHaveBeenCalledWith('documents')
-    const storageBucket = mockSupabase.storage.from.mock.results[0]?.value
-    expect(storageBucket.remove).toHaveBeenCalledWith(['documents/user-1/kvitto.pdf'])
+    // Both storage layouts are removed: the stored pointer plus the alternate
+    // candidate key. During the company-scoped path migration a document can
+    // exist under either prefix, and removing only the stored one would leave a
+    // readable orphan copy of a document the user asked to erase. The removal
+    // must go through the service-role client (WORM bucket: RLS silently
+    // blocks a caller-bound remove()), never the user-bound client.
+    expect(serviceRemoveMock).toHaveBeenCalledWith([
+      'documents/user-1/kvitto.pdf',
+      'documents/company-1/user-1/kvitto.pdf',
+    ])
+    expect(mockSupabase.storage.from).not.toHaveBeenCalled()
 
     expect(handler).toHaveBeenCalledOnce()
     expect(handler).toHaveBeenCalledWith(

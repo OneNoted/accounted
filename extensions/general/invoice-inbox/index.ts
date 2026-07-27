@@ -33,6 +33,11 @@ import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-sugges
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import {
+  resolveSupplierInvoiceExchangeRate,
+  supplierInvoiceSekAmounts,
+} from '@/lib/currency/supplier-invoice-rate'
+import { roundOre } from '@/lib/money'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
@@ -1896,6 +1901,25 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
+        // Same currency policy as POST /api/supplier-invoices and the v1 REST
+        // route (lib/currency/supplier-invoice-rate.ts): a non-SEK invoice with
+        // no caller-supplied rate gets one fetched from Riksbanken for the
+        // invoice date, and an unresolvable rate refuses the conversion instead
+        // of writing exchange_rate = NULL. That matters most here: inbox items
+        // are AI-extracted, the currency comes off the PDF and the rate never
+        // does, so this path produced unconverted rows most readily. Resolved
+        // before the arrival number so a refusal burns no ankomstnummer.
+        const fx = await resolveSupplierInvoiceExchangeRate(ctx.supabase, {
+          currency: body.currency,
+          invoiceDate: body.invoice_date,
+          suppliedRate: body.exchange_rate,
+        })
+        if (!fx.ok) {
+          return errorResponseFromCode('SI_FX_RATE_MISSING', ctx.log, {
+            details: { currency: fx.currency, invoice_date: fx.invoiceDate },
+          })
+        }
+
         const { data: arrivalNum, error: arrivalError } = await ctx.supabase
           .rpc('get_next_arrival_number', { p_company_id: ctx.companyId })
 
@@ -1943,12 +1967,16 @@ export const invoiceInboxExtension: Extension = {
 
         const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
         const totalVat = items.reduce((sum, i) => sum + i.vat_amount, 0)
-        const total = Math.round((subtotal + totalVat) * 100) / 100
+        // roundOre, not the naive form: `total` and `total_sek` must round
+        // identically or a SEK invoice ends up one öre apart.
+        const total = roundOre(subtotal + totalVat)
 
-        const exchangeRate = body.exchange_rate || null
-        const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
-        const vatAmountSek = exchangeRate ? Math.round(totalVat * exchangeRate * 100) / 100 : null
-        const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
+        // SEK resolves to rate 1, so total_sek === total rather than NULL.
+        const {
+          subtotal_sek: subtotalSek,
+          vat_amount_sek: vatAmountSek,
+          total_sek: totalSek,
+        } = supplierInvoiceSekAmounts(fx.rate, { subtotal, vatAmount: totalVat, total })
 
         const { data: invoice, error: invoiceError } = await ctx.supabase
           .from('supplier_invoices')
@@ -1962,18 +1990,21 @@ export const invoiceInboxExtension: Extension = {
             due_date: body.due_date,
             delivery_date: body.delivery_date || null,
             status: 'registered',
-            currency: body.currency || 'SEK',
-            exchange_rate: exchangeRate,
+            currency: fx.rate.currency,
+            exchange_rate: fx.rate.exchangeRate,
+            // Which day's kurs the SEK amounts were translated at: the audit
+            // trail that makes them verifiable (BFL 5 kap).
+            exchange_rate_date: fx.rate.exchangeRateDate,
             vat_treatment: body.vat_treatment || 'standard_25',
             reverse_charge: body.reverse_charge || false,
             payment_reference: body.payment_reference || null,
-            subtotal: Math.round(subtotal * 100) / 100,
+            subtotal: roundOre(subtotal),
             subtotal_sek: subtotalSek,
-            vat_amount: Math.round(totalVat * 100) / 100,
+            vat_amount: roundOre(totalVat),
             vat_amount_sek: vatAmountSek,
-            total: Math.round(total * 100) / 100,
+            total,
             total_sek: totalSek,
-            remaining_amount: Math.round(total * 100) / 100,
+            remaining_amount: total,
             document_id: item.document_id || null,
             notes: body.notes || null,
           })

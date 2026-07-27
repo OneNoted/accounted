@@ -8,9 +8,16 @@ import {
   computeInvoiceDeductionTotal,
   computeDeductionTotalsByKind,
   validateInvoice,
+  deductionSekConverter,
+  deductionToSek,
   type ItemForDeduction,
   type ValidateInvoiceItem,
 } from '../rot-rut-rules'
+
+// Mirrors the warning-text formatter in rot-rut-rules.ts, so the expected
+// strings stay correct regardless of which group separator the ICU build picks.
+const sv = (n: number): string =>
+  n.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 describe('rot-rut-rules: constants', () => {
   it('uses the 2026 statutory rates', () => {
@@ -131,6 +138,30 @@ describe('computeDeductionTotalsByKind', () => {
   })
 })
 
+describe('deductionSekConverter / deductionToSek', () => {
+  it('SEK (or no context) is an identity conversion', () => {
+    expect(deductionToSek(3000)).toBe(3000)
+    expect(deductionToSek(3000, { currency: 'SEK' })).toBe(3000)
+    expect(deductionToSek(3000, { currency: null })).toBe(3000)
+    expect(deductionToSek(3000, { currency: 'sek', exchangeRate: 99 })).toBe(3000)
+  })
+
+  it('converts with the booking rate, öre-rounded like the 1513 debit', () => {
+    expect(deductionToSek(625, { currency: 'EUR', exchangeRate: 11.4 })).toBe(7125)
+    expect(deductionToSek(2083.33, { currency: 'EUR', exchangeRate: 11.4 })).toBe(23749.96)
+    expect(deductionToSek(100, { currency: 'eur', exchangeRate: 11.4 })).toBe(1140)
+  })
+
+  it('returns null for a foreign currency with no usable rate', () => {
+    expect(deductionToSek(625, { currency: 'EUR' })).toBeNull()
+    expect(deductionToSek(625, { currency: 'EUR', exchangeRate: null })).toBeNull()
+    expect(deductionToSek(625, { currency: 'EUR', exchangeRate: 0 })).toBeNull()
+    expect(deductionToSek(625, { currency: 'EUR', exchangeRate: -1 })).toBeNull()
+    expect(deductionToSek(625, { currency: 'EUR', exchangeRate: Number.NaN })).toBeNull()
+    expect(deductionSekConverter({ currency: 'EUR' })).toBeNull()
+  })
+})
+
 describe('validateInvoice', () => {
   it('errors when ROT/RUT but personnummer missing', () => {
     const items: ValidateInvoiceItem[] = [
@@ -190,5 +221,72 @@ describe('validateInvoice', () => {
     ]
     const result = validateInvoice(items, true, true)
     expect(result.warnings).toHaveLength(0)
+  })
+
+  it('SEK cap warning wording is unchanged', () => {
+    const items: ValidateInvoiceItem[] = [
+      { unit_price: 200000, quantity: 1, deduction_type: 'rot' }, // 60 000 deduction
+    ]
+    const expected =
+      `ROT-avdraget på denna faktura (${sv(60000)} kr) överstiger årsmaximum ${ROT_MAX.toLocaleString('sv-SE')} kr. ` +
+      'Kunden behöver kontrollera sitt återstående utrymme själv.'
+    expect(validateInvoice(items, true, true).warnings).toEqual([expected])
+    // Passing the currency explicitly must not change a character.
+    expect(validateInvoice(items, true, true, { currency: 'SEK' }).warnings).toEqual([expected])
+  })
+})
+
+describe('validateInvoice: foreign currency vs the kronor ceilings', () => {
+  it('warns when the SEK value breaches the cap even though the foreign figure does not', () => {
+    // 6 000 EUR avdrag looks tiny next to 50 000, but is 68 400 kr.
+    const items: ValidateInvoiceItem[] = [
+      { unit_price: 20000, quantity: 1, deduction_type: 'rot' },
+    ]
+    const result = validateInvoice(items, true, true, { currency: 'EUR', exchangeRate: 11.4 })
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain(`${sv(6000)} EUR = ${sv(68400)} kr`)
+    expect(result.warnings[0]).toContain('överstiger årsmaximum')
+  })
+
+  it('stays quiet when the SEK value is under the cap although the foreign figure is not', () => {
+    // 55 000 NOK avdrag is 49 500 kr: under the 50 000 kr ceiling.
+    const items: ValidateInvoiceItem[] = [
+      { unit_price: 183333.33, quantity: 1, deduction_type: 'rot' },
+    ]
+    const result = validateInvoice(items, true, true, { currency: 'NOK', exchangeRate: 0.9 })
+    expect(result.warnings).toHaveLength(0)
+  })
+
+  it('never labels a foreign amount "kr"', () => {
+    const items: ValidateInvoiceItem[] = [
+      { unit_price: 250000, quantity: 1, deduction_type: 'rut' }, // 125 000 EUR
+    ]
+    const result = validateInvoice(items, true, true, { currency: 'EUR', exchangeRate: 11.4 })
+    expect(result.warnings[0]).toContain(`${sv(125000)} EUR`)
+    expect(result.warnings[0]).not.toContain(`(${sv(125000)} kr)`)
+  })
+
+  it('says the cap could not be checked when the invoice has no rate', () => {
+    const items: ValidateInvoiceItem[] = [
+      { unit_price: 20000, quantity: 1, deduction_type: 'rot' },
+    ]
+    const result = validateInvoice(items, true, true, { currency: 'EUR' })
+    expect(result.errors).toHaveLength(0)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain(`${sv(6000)} EUR`)
+    expect(result.warnings[0]).toContain('kan inte stämmas av')
+    expect(result.warnings[0]).toContain('saknar växelkurs')
+    expect(result.warnings[0]).not.toContain('överstiger')
+  })
+
+  it('reports ROT and RUT separately on the same foreign invoice', () => {
+    const items: ValidateInvoiceItem[] = [
+      { unit_price: 20000, quantity: 1, deduction_type: 'rot' }, // 6 000 EUR = 68 400 kr
+      { unit_price: 20000, quantity: 1, deduction_type: 'rut' }, // 10 000 EUR = 114 000 kr
+    ]
+    const result = validateInvoice(items, true, true, { currency: 'EUR', exchangeRate: 11.4 })
+    expect(result.warnings).toHaveLength(2)
+    expect(result.warnings[0]).toContain('ROT-avdraget')
+    expect(result.warnings[1]).toContain('RUT-avdraget')
   })
 })

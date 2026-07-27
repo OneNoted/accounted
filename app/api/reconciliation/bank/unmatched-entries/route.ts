@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { fetchGLLinesForMatching, tryReconcileTransaction } from '@/lib/reconciliation/bank-reconciliation'
+import {
+  fetchGLLinesForMatching,
+  ledgerLineAmountIn,
+  tryReconcileTransaction,
+} from '@/lib/reconciliation/bank-reconciliation'
 import type { Transaction } from '@/types'
 
 export const GET = withRouteContext(
@@ -28,9 +32,11 @@ export const GET = withRouteContext(
     // including '1930': the cash_accounts backfill seeds 1930 for every company
     // that had a SEK PSD2 account, and the AccountPickerDialog seeds it for new
     // companies on first connection.
+    // `currency` comes along because it, not the transaction's own currency, is
+    // the unit this account is reconciled in: see the ranking block below.
     const { data: cashAccount } = await supabase
       .from('cash_accounts')
-      .select('id')
+      .select('id, currency')
       .eq('company_id', companyId)
       .eq('ledger_account', accountNumber)
       .maybeSingle()
@@ -41,6 +47,11 @@ export const GET = withRouteContext(
         { status: 400 },
       )
     }
+
+    // cash_accounts.currency is NOT NULL in the schema; the fallback only guards
+    // against a legacy/hand-built row so a missing value can never silently turn
+    // into "no currency" and disable ranking for a SEK company.
+    const accountCurrency = (cashAccount.currency as string | null) ?? 'SEK'
 
     const lines = await fetchGLLinesForMatching(supabase, companyId, accountNumber, dateFrom, dateTo, includeMatched)
 
@@ -62,14 +73,45 @@ export const GET = withRouteContext(
         return NextResponse.json({ data: [] })
       }
 
+      // The reconciliation currency is the CASH ACCOUNT's, never the
+      // transaction's. Reading it off `tx` made tryReconcileTransaction's
+      // `transaction.currency !== expectedCurrency` guard compare the
+      // transaction against itself: a tautology that passed for every row, so
+      // the guard never rejected anything and a foreign bank line was ranked
+      // against this account's (SEK) vouchers.
       const txCurrency = (tx.currency as string | null) ?? 'SEK'
+      if (txCurrency !== accountCurrency) {
+        // A bank line in another currency cannot be settled on this account, so
+        // there is no honest ranking to produce. Same posture as the unresolved
+        // transaction above: no candidates beats plausible-looking wrong ones.
+        return NextResponse.json({
+          data: [],
+          not_rankable_reason: 'transaction_currency_mismatch',
+        })
+      }
+
+      // Withhold any candidate that cannot be expressed in the account's
+      // currency. journal_entry_lines.debit_amount / credit_amount are ALWAYS
+      // SEK; `currency` on the line labels the underlying DOCUMENT and
+      // amount_in_currency carries the foreign figure (see ledgerLineAmountIn).
+      // On a SEK account this filter is a no-op: ledgerLineAmountIn never
+      // returns null there, so SEK-only companies see exactly the list they
+      // always did. On a foreign account it currently drops EVERY candidate,
+      // because get_account_gl_lines_for_matching projects neither currency nor
+      // amount_in_currency (verified against prod), so no row carries a rate to
+      // convert with. Ranking them anyway would offer a 1 150 SEK ledger leg as
+      // the settlement for a 1 150 EUR bank line. Written per-line rather than
+      // as an `accountCurrency !== 'SEK'` short-circuit so that ranking resumes
+      // by itself the day the RPC projects those two columns.
+      const rankable = lines.filter((line) => ledgerLineAmountIn(line, accountCurrency) !== null)
+
       const txDate = tx.date as string
-      const ranked = lines
+      const ranked = rankable
         .map((line) => {
           // Score each line in isolation; confidence 0 means "no auto-match
           // rule fired": the line still appears so the user can pick it
           // manually (e.g. a salary or Fortnox voucher with a tweaked date).
-          const match = tryReconcileTransaction(tx as unknown as Transaction, [line], txCurrency)
+          const match = tryReconcileTransaction(tx as unknown as Transaction, [line], accountCurrency)
           return { ...line, confidence: match?.confidence ?? 0 }
         })
         .sort((a, b) => {
@@ -78,6 +120,15 @@ export const GET = withRouteContext(
           const db = Math.abs(new Date(b.entry_date).getTime() - new Date(txDate).getTime())
           return da - db
         })
+
+      // Say so when candidates were withheld, instead of letting an empty list
+      // read as "this account has no unmatched verifikationer in the period".
+      if (rankable.length !== lines.length) {
+        return NextResponse.json({
+          data: ranked,
+          not_rankable_reason: 'gl_lines_missing_currency_amount',
+        })
+      }
       return NextResponse.json({ data: ranked })
     }
 

@@ -40,6 +40,44 @@ describe('safeReturnTo', () => {
     expect(safeReturnTo('javascript:alert(1)', '/')).toBe('/')
   })
 
+  it('rejects dot segments that normalise into a protocol-relative URL', () => {
+    // The raw input starts with a single '/', so the prefix guards let it
+    // through, and it resolves against the sentinel origin, so the origin
+    // check lets it through too. But URL normalisation collapses it to
+    // '//evil.com', which navigates off-origin the moment a caller uses it
+    // as a bare href (window.location.assign / router.push).
+    expect(safeReturnTo('/..//evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/.//evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/a/../..//evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/../\\evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/..//evil.com?x=1', '/')).toBe('/')
+  })
+
+  it('rejects the percent-encoded spelling of those dot segments', () => {
+    expect(safeReturnTo('/%2e%2e//evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/%2E%2E//evil.com', '/')).toBe('/')
+  })
+
+  it('rejects dot segments that normalise into the /@ form', () => {
+    // The raw-input rule rejects '/@evil.com' outright, but dot-segment
+    // resolution can smuggle it past that guard: '/a/../@evil.com' starts
+    // with an innocent '/a' yet normalises to '/@evil.com'. The
+    // post-normalisation check must reject every prefix the raw check does.
+    expect(safeReturnTo('/a/../@evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/.//@evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/%2e%2e/@evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/a/../@evil.com?x=1', '/')).toBe('/')
+  })
+
+  it('still allows ordinary dot segments that stay on-origin', () => {
+    expect(safeReturnTo('/settings/../invoices', '/')).toBe('/invoices')
+    expect(safeReturnTo('/./settings/tax', '/')).toBe('/settings/tax')
+  })
+
+  it('keeps percent-encoded slashes, which are path data and stay on-origin', () => {
+    expect(safeReturnTo('/%2F%2Fevil.com', '/')).toBe('/%2F%2Fevil.com')
+  })
+
   it('rejects data: URIs', () => {
     expect(safeReturnTo('data:text/html,<script>alert(1)</script>', '/')).toBe('/')
     expect(safeReturnTo('data:,', '/')).toBe('/')

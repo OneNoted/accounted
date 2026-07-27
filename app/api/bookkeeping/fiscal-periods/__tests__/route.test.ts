@@ -153,6 +153,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toBeDefined()
+    // Nothing precedes the first period, so there is nothing to advise about.
+    expect(body.warnings).toBeUndefined()
   })
 
   it('rejects overlapping periods', async () => {
@@ -162,6 +164,22 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     })
     // Forward chain from 2024, start = 2025-01-01
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
+    const res = await POST(req)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toMatch(/Overlaps/)
+  })
+
+  // Dropping the "prior year must be locked" gate must not open an overlap
+  // hole: a period colliding with a still-open prior year is still a 409.
+  it('rejects an overlapping period even when the prior year is still open', async () => {
+    buildMockSupabase({
+      allPeriods: [{ id: 'p1', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false }],
+      openPeriods: [{ id: 'p1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' }],
+      overlapping: [{ id: 'p1', name: 'FY 2025' }],
+    })
+    // Starts inside FY 2025.
+    const req = createMockRequest({ name: 'FY 2025 dup', period_start: '2025-07-01', period_end: '2026-06-30' })
     const res = await POST(req)
     expect(res.status).toBe(409)
     const body = await res.json()
@@ -179,22 +197,81 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(body.error).toMatch(/must start on 2026-01-01/)
   })
 
-  it('rejects forward period when an unlocked open period exists and returns it as a blocking period', async () => {
+  // Regression (BFL 5 kap 2 §): this used to be a 409. One unbooked December
+  // bank transaction makes FY 2025 unlockable (lockPeriod refuses, correctly),
+  // and the old guard then refused to create FY 2026, so ALL bookkeeping in the
+  // new year stopped, while BFL 5 kap 2 § requires the new year's
+  // affärshändelser to be booked "så snart det kan ske" (senast månaden efter)
+  // and BFL 6 kap gives the bokslut 6 months. Both bind at once: the new
+  // räkenskapsår must be creatable with the prior one still fully open.
+  it('creates the new räkenskapsår while the prior year is still fully open', async () => {
     buildMockSupabase({
       allPeriods: [{ id: 'p1', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false }],
-      openPeriods: [{ id: 'p1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' }],
+      openPeriods: [{ id: 'p1', name: 'Räkenskapsår 2025', period_start: '2025-01-01', period_end: '2025-12-31' }],
+      overlapping: [],
     })
-    const req = createMockRequest({ name: 'FY 2026', period_start: '2026-01-01', period_end: '2026-12-31' })
+    const req = createMockRequest({
+      name: 'Räkenskapsår 2026',
+      period_start: '2026-01-01',
+      period_end: '2026-12-31',
+    })
     const res = await POST(req)
-    expect(res.status).toBe(409)
+    expect(res.status).toBe(200)
     const body = await res.json()
-    // Canonical envelope with a machine code + the blocking periods so the
-    // dialog can offer to lock them inline.
-    expect(body.error.code).toBe('PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS')
-    expect(body.error.message).toMatch(/låsa föregående räkenskapsår/)
-    expect(body.error.details.blockingPeriods).toEqual([
-      { id: 'p1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
-    ])
+    expect(body.data).toBeDefined()
+    // The open prior year survives only as a non-blocking advisory.
+    expect(body.warnings).toHaveLength(1)
+    expect(body.warnings[0].code).toBe('PRIOR_FISCAL_YEAR_STILL_OPEN')
+    expect(body.warnings[0].message).toContain('Räkenskapsår 2025')
+  })
+
+  // The advisory must be actionable and must not dead-end: it states that the
+  // new year is bookable now and that the IB arrives with the bokslut, rather
+  // than demanding a lock the user may be unable to perform.
+  it('advisory tells the user booking may continue and that IB follows the bokslut', async () => {
+    buildMockSupabase({
+      allPeriods: [{ id: 'p1', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false }],
+      openPeriods: [{ id: 'p1', name: 'Räkenskapsår 2025', period_start: '2025-01-01', period_end: '2025-12-31' }],
+      overlapping: [],
+    })
+    const req = createMockRequest({
+      name: 'Räkenskapsår 2026',
+      period_start: '2026-01-01',
+      period_end: '2026-12-31',
+    })
+    const res = await POST(req)
+    const body = await res.json()
+    expect(body.warnings[0].message).toMatch(/bokföra i det direkt/)
+    expect(body.warnings[0].message).toMatch(/Ingående balanser bokförs automatiskt/)
+    // No wording that orders the user to lock the prior year first.
+    expect(body.warnings[0].message).not.toMatch(/måste låsa/)
+  })
+
+  // Every still-open prior year is named, not just the immediate predecessor:
+  // the user needs to know the full set whose UB is still provisional.
+  it('names every still-open prior räkenskapsår in the single advisory', async () => {
+    buildMockSupabase({
+      allPeriods: [
+        { id: 'p1', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false },
+        { id: 'p2', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false },
+      ],
+      openPeriods: [
+        { id: 'p1', name: 'Räkenskapsår 2024', period_start: '2024-01-01', period_end: '2024-12-31' },
+        { id: 'p2', name: 'Räkenskapsår 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+      ],
+      overlapping: [],
+    })
+    const req = createMockRequest({
+      name: 'Räkenskapsår 2026',
+      period_start: '2026-01-01',
+      period_end: '2026-12-31',
+    })
+    const res = await POST(req)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.warnings).toHaveLength(1)
+    expect(body.warnings[0].message).toContain('Räkenskapsår 2024')
+    expect(body.warnings[0].message).toContain('Räkenskapsår 2025')
   })
 
   // Regression: BFL 6 kap allows löpande bokföring of the new year in parallel
@@ -232,10 +309,14 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toBeDefined()
+    // Effectively locked: nothing to advise about.
+    expect(body.warnings).toBeUndefined()
   })
 
-  // Partial coverage: lock-through covers only part of the period: must still block.
-  it('rejects forward period creation when company-wide lock only partially covers prior period', async () => {
+  // Partial coverage: lock-through covers only part of the period, so the prior
+  // year still counts as open. Creation proceeds either way; only the advisory
+  // distinguishes the two states.
+  it('advises but does not block when company-wide lock only partially covers prior period', async () => {
     buildMockSupabase({
       allPeriods: [{ id: 'p1', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false }],
       openPeriods: [{ id: 'p1', name: 'FY 2024', period_start: '2024-01-01', period_end: '2024-12-31' }],
@@ -244,12 +325,11 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
     const res = await POST(req)
-    expect(res.status).toBe(409)
+    expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.error.code).toBe('PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS')
-    expect(body.error.details.blockingPeriods).toEqual([
-      { id: 'p1', name: 'FY 2024', period_start: '2024-01-01', period_end: '2024-12-31' },
-    ])
+    expect(body.warnings).toHaveLength(1)
+    expect(body.warnings[0].code).toBe('PRIOR_FISCAL_YEAR_STILL_OPEN')
+    expect(body.warnings[0].message).toContain('FY 2024')
   })
 
   it('allows backward period creation', async () => {
@@ -283,6 +363,10 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
     const res = await POST(req)
     expect(res.status).toBe(200)
+    // The advisory is about the NEXT year's ingående balanser, so it belongs to
+    // appends only. Backfilling an earlier year says nothing about IB.
+    const body = await res.json()
+    expect(body.warnings).toBeUndefined()
   })
 
   // Regression (2026-06-16): a company with FY 2024 + FY 2026 but no
@@ -356,6 +440,9 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
     const res = await POST(req)
     expect(res.status).toBe(200)
+    // Gap fill is a backfill too: no IB advisory.
+    const body = await res.json()
+    expect(body.warnings).toBeUndefined()
   })
 
   it('rejects invalid period duration (> 18 months)', async () => {

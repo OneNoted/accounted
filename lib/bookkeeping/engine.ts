@@ -24,6 +24,7 @@ import {
   fetchActiveDimensionRules,
   isDimensionRuleExemptSource,
 } from '@/lib/bookkeeping/dimension-rules'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { getActor } from '@/lib/bookkeeping/actor-context'
@@ -574,21 +575,36 @@ export async function commitEntry(
       entityId: entryId,
     })
   } else if (rules.some((r) => r.rule_type === 'required')) {
-    const { data: ruleLines, error: ruleLinesError } = await supabase
-      .from('journal_entry_lines')
-      .select('account_number, dimensions, journal_entries!inner(source_type)')
-      .eq('journal_entry_id', entryId)
-    if (ruleLinesError || !ruleLines) {
+    // READ ONLY: this is a pre-commit policy check, not a write. The two-step
+    // fetch (lib/bookkeeping/entry-lines.ts) replaces a
+    // `journal_entries!inner(source_type)` embed so no query in the commit
+    // path can compile to the correlated LATERAL join that scans every
+    // tenant's journal_entry_lines. The parent is reattached under the same
+    // `journal_entries` key, so the exemption read below is unchanged. The
+    // entry-side company_id filter is defense in depth (repo convention);
+    // commitEntry is always called with the entry's own company.
+    type RuleLine = {
+      account_number: string
+      dimensions: Record<string, string>
+      journal_entries: { source_type: string }
+    }
+    let typedLines: RuleLine[] | null = null
+    try {
+      typedLines = await fetchEntryLines<RuleLine>({
+        supabase,
+        entryColumns: 'source_type',
+        lineColumns: 'account_number, dimensions',
+        filterEntries: (q: EntryLinesQuery) => q.eq('id', entryId).eq('company_id', companyId),
+      })
+    } catch {
+      typedLines = null
+    }
+    if (!typedLines) {
       log.warn('line fetch for mandatory dimension check failed — enforcement skipped (fail-open)', {
         companyId,
         entityId: entryId,
       })
     } else {
-      const typedLines = ruleLines as unknown as Array<{
-        account_number: string
-        dimensions: Record<string, string>
-        journal_entries: { source_type: string }
-      }>
       // System/correction sources are exempt — see
       // DIMENSION_RULE_EXEMPT_SOURCE_TYPES (imported history, bokslut
       // mechanics and credit instruments must never be blocked by policy).

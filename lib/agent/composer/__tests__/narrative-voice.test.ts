@@ -22,6 +22,7 @@ function makeInputs(overrides: Partial<ComposerInputs>): ComposerInputs {
     ticSnapshot: null,
     ticFetchedAt: null,
     companySettings: null,
+    activeEmployees: null,
     sieSummary: null,
     bankingSummary: null,
     atomIndex: [],

@@ -532,7 +532,15 @@ export default function JournalEntryList() {
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        toast({ title: t('no_doc_required_save_failed'), description: body.error, variant: 'destructive' })
+        // Resolve via the parsed body plus the status: the route answers
+        // thrown errors with the canonical envelope `{ error: { code,
+        // message } }`, and rendering that object as the toast description
+        // would crash React ("Objects are not valid as a React child").
+        toast({
+          title: t('no_doc_required_save_failed'),
+          description: getErrorMessage(body, { statusCode: res.status }),
+          variant: 'destructive',
+        })
         return
       }
       // Reflect the new exemptions locally: triangle → muted "no doc" indicator.
@@ -592,7 +600,11 @@ export default function JournalEntryList() {
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        toast({ title: t('no_doc_required_save_failed'), description: body.error, variant: 'destructive' })
+        toast({
+          title: t('no_doc_required_save_failed'),
+          description: getErrorMessage(body, { statusCode: res.status }),
+          variant: 'destructive',
+        })
         return
       }
       setBulkOpen(false)

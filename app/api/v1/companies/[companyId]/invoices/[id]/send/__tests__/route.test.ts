@@ -102,7 +102,11 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
 }))
 
-vi.mock('@/lib/email/invoice-templates', () => ({
+// Partial mock: the route's module graph reaches INVOICE_EMAIL_PLACEHOLDER_KEYS
+// through the company-settings staging schema, so keep the real exports and
+// stub only the render functions.
+vi.mock('@/lib/email/invoice-templates', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/email/invoice-templates')>()),
   generateInvoiceEmailHtml: vi.fn().mockReturnValue('<html>...</html>'),
   generateInvoiceEmailText: vi.fn().mockReturnValue('plain text'),
   generateInvoiceEmailSubject: vi.fn().mockReturnValue('Faktura'),

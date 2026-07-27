@@ -32,6 +32,9 @@ const mockGetAvailableVatRates = vi.fn()
 vi.mock('@/lib/invoices/vat-rules', () => ({
   getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
   getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+  // The builder gates on the permitted set (taxed-where-performed exceptions);
+  // these route tests only care that the gate reads the stubbed rates.
+  getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
 }))
 
 vi.mock('@/lib/currency/riksbanken', () => ({
@@ -151,6 +154,7 @@ describe('PATCH /api/invoices/[id]', () => {
     enqueue({ data: makeCustomer({ id: 'customer-1', customer_type: 'swedish_business' }), error: null }) // customer
     enqueue({ data: { vat_registered: true }, error: null }) // company_settings.vat_registered
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // update ... select('id')
+    enqueue({ data: [], error: null }) // snapshot existing invoice_items
     enqueue({ data: [], error: null }) // delete invoice_items
     enqueue({ data: null, error: null }) // insert invoice_items
     enqueue({

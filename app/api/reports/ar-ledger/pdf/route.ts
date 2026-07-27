@@ -39,6 +39,12 @@ export const GET = withRouteContext('report.ar_ledger.pdf', async (request, { su
           invoice_date: inv.invoice_date,
           due_date: inv.due_date,
           outstanding: inv.outstanding,
+          // The SEK bridge: `outstanding` is in the invoice's own currency
+          // while the aging table above it is in SEK, so the PDF needs the
+          // converted amount to let a reader tie the two together. `null`
+          // means the FX rate was missing, i.e. the row is absent from the
+          // aging totals. Matches the XLSX export's "Utestående (SEK)".
+          outstanding_sek: inv.outstanding_sek,
           currency: inv.currency,
           days_overdue: inv.days_overdue,
         })

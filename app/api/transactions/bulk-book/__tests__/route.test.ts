@@ -75,6 +75,14 @@ describe('POST /api/transactions/bulk-book', () => {
   })
 
   it('link path passes through to RPC and returns the success envelope', async () => {
+    // Currency gate tx fetch (hoisted: runs on every path).
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-05' },
+      ],
+      error: null,
+    })
     // RPC returns the link-existing happy path.
     enqueue({
       data: {
@@ -109,6 +117,14 @@ describe('POST /api/transactions/bulk-book', () => {
   })
 
   it('create-new path fetches template, expands per mode, and calls RPC', async () => {
+    // Tx fetch (hoisted for the currency gate): 2 incomes totalling 300.
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-05' },
+      ],
+      error: null,
+    })
     // Template fetch.
     enqueue({
       data: {
@@ -121,14 +137,6 @@ describe('POST /api/transactions/bulk-book', () => {
         ],
         is_active: true,
       },
-      error: null,
-    })
-    // Tx fetch: 2 incomes totalling 300.
-    enqueue({
-      data: [
-        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
-        { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-05' },
-      ],
       error: null,
     })
 
@@ -178,6 +186,14 @@ describe('POST /api/transactions/bulk-book', () => {
   })
 
   it('maps RPC structured failure code to errorResponseFromCode', async () => {
+    // Currency gate tx fetch.
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-06' },
+      ],
+      error: null,
+    })
     enqueue({
       data: { ok: false, code: 'BULK_BOOK_DATE_MISMATCH', details: { expected: '2026-06-05', got: '2026-06-06' } },
       error: null,
@@ -191,5 +207,205 @@ describe('POST /api/transactions/bulk-book', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('BULK_BOOK_DATE_MISMATCH')
+  })
+})
+
+/**
+ * Mixed-currency guard (BFL 4 kap 6 §: one redovisningsvaluta). A
+ * samlingsverifikation spanning SEK and EUR has no representable single
+ * belopp, so all three request shapes must refuse it with the SAME code the
+ * MCP twin uses. Before this, only the template branch checked; manual_lines
+ * and existing_journal_entry_id went straight to the RPC, which summed
+ * 100 EUR + 100 SEK into the scalar 200.
+ */
+describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  const MIXED_TXS = [
+    { id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' },
+    { id: TX2, amount: 100, currency: 'EUR', description: 'Stripe', date: '2026-06-05' },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  it('refuses a mixed-currency selection on the template branch', async () => {
+    enqueue({ data: MIXED_TXS, error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: {
+        tx_ids: [TX1, TX2],
+        template_id: TPL,
+        mode: 'sum_per_account',
+        entry_description: 'Samlingsverifikation',
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { currencies?: string[] } }
+    }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BULK_BOOK_MIXED_CURRENCY')
+  })
+
+  it('refuses a mixed-currency selection on the manual_lines branch', async () => {
+    enqueue({ data: MIXED_TXS, error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: {
+        tx_ids: [TX1, TX2],
+        entry_description: 'Samlingsverifikation',
+        manual_lines: [
+          { account_number: '1930', debit_amount: 200, credit_amount: 0, currency: 'SEK' },
+          { account_number: '3001', debit_amount: 0, credit_amount: 200, currency: 'SEK' },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BULK_BOOK_MIXED_CURRENCY')
+    // Refused before the RPC: the chart-of-accounts lookup never ran either.
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses a mixed-currency selection on the existing_journal_entry_id branch', async () => {
+    enqueue({ data: MIXED_TXS, error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BULK_BOOK_MIXED_CURRENCY')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses a homogeneous non-SEK selection with BULK_BOOK_FOREIGN_CURRENCY', async () => {
+    // Same currency throughout, but not kronor: the RPC would write the
+    // foreign magnitudes into the always-SEK debit/credit columns, so the
+    // route refuses before the RPC just like the mixed-currency case.
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'EUR', description: 'Stripe 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'EUR', description: 'Stripe 2', date: '2026-06-05' },
+      ],
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: {
+        tx_ids: [TX1, TX2],
+        entry_description: 'Samlingsverifikation',
+        manual_lines: [
+          { account_number: '1930', debit_amount: 300, credit_amount: 0, currency: 'EUR' },
+          { account_number: '3001', debit_amount: 0, credit_amount: 300, currency: 'EUR' },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { currency?: string } }
+    }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BULK_BOOK_FOREIGN_CURRENCY')
+    expect(body.error.details?.currency).toBe('EUR')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('books a single-currency manual_lines selection', async () => {
+    // Tx fetch: both SEK.
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' },
+        { id: TX2, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' },
+      ],
+      error: null,
+    })
+    // chart_of_accounts allowlist.
+    enqueue({
+      data: [{ account_number: '1930' }, { account_number: '3001' }],
+      error: null,
+    })
+    // Dimension rules: none configured.
+    enqueue({ data: [], error: null })
+    // RPC happy path.
+    enqueue({
+      data: {
+        ok: true,
+        mode: 'create_new',
+        journal_entry_id: JE,
+        voucher_series: 'A',
+        voucher_number: 14,
+        linked_tx_count: 2,
+        tx_sum: 200,
+      },
+      error: null,
+    })
+    // Event re-fetch.
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: {
+        tx_ids: [TX1, TX2],
+        entry_description: 'Samlingsverifikation',
+        manual_lines: [
+          { account_number: '1930', debit_amount: 200, credit_amount: 0, currency: 'SEK' },
+          { account_number: '3001', debit_amount: 0, credit_amount: 200, currency: 'SEK' },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ data: { mode: string } }>(response)
+    expect(status).toBe(200)
+    expect(body.data.mode).toBe('create_new')
+  })
+
+  it('treats NULL currency as SEK and still books', async () => {
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: null, description: 'Legacy row', date: '2026-06-05' },
+        { id: TX2, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-06-05' },
+      ],
+      error: null,
+    })
+    enqueue({ data: [{ account_number: '1930' }, { account_number: '3001' }], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: {
+        ok: true,
+        mode: 'create_new',
+        journal_entry_id: JE,
+        voucher_series: 'A',
+        voucher_number: 15,
+        linked_tx_count: 2,
+        tx_sum: 200,
+      },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: {
+        tx_ids: [TX1, TX2],
+        entry_description: 'Samlingsverifikation',
+        manual_lines: [
+          { account_number: '1930', debit_amount: 200, credit_amount: 0, currency: 'SEK' },
+          { account_number: '3001', debit_amount: 0, credit_amount: 200, currency: 'SEK' },
+        ],
+      },
+    })
+    const response = await POST(request)
+    expect(response.status).toBe(200)
   })
 })

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupplierInvoiceItem, CreateJournalEntryLineInput, CreateJournalEntryInput } from '@/types'
 import { makeSupplierInvoice } from '@/tests/helpers'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 // Mock engine
 vi.mock('../engine', () => ({
@@ -90,6 +92,7 @@ const {
   createSupplierInvoiceCashEntry,
   createSupplierCreditNoteEntry,
   createSupplierInvoicePrivatelyPaidEntry,
+  SupplierInvoiceFxRateMissingError,
 } = await import('../supplier-invoice-entries')
 
 function makeItem(overrides: Partial<SupplierInvoiceItem> = {}): SupplierInvoiceItem {
@@ -847,6 +850,166 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     expect(findByAccount(input.lines, '2624')[0].credit_amount).toBe(600)
 
     assertBalanced(input)
+  })
+})
+
+// ============================================================
+// Foreign currency without an exchange rate: must fail loudly
+// ============================================================
+
+describe('supplier invoice booking: foreign currency without an exchange rate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  // The 99% path: a SEK invoice never touches the FX guard.
+  it('SEK reverse-charge invoice is unaffected (no rate needed)', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000, vat_amount: 0, total: 10000,
+      currency: 'SEK', exchange_rate: null, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 10000, vat_rate: 0.25, account_number: '6540' })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(2500)
+    assertBalanced(input)
+  })
+
+  // 1000 EUR at 11,50 SEK/EUR: fiktiv moms is 11 500 × 25% = 2 875,00 kr on
+  // 2614 (ruta 30) / 2645 (ruta 48), and the basbelopp on 4535 is 11 500
+  // (ruta 21). Not 250,00 kr and 1 000.
+  it('EUR reverse-charge invoice WITH a rate books fiktiv moms in SEK', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 0, total: 1000,
+      currency: 'EUR', exchange_rate: 11.50, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 1000, vat_rate: 0.25, account_number: '6540' })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '6540')[0].debit_amount).toBe(11500)
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(2875)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(2875)
+    expect(findByAccount(input.lines, '4535')[0].debit_amount).toBe(11500)
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(11500)
+    assertBalanced(input)
+  })
+
+  it('EUR reverse-charge invoice WITHOUT a rate throws instead of booking 1:1', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 0, total: 1000,
+      currency: 'EUR', exchange_rate: null, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 1000, vat_rate: 0.25, account_number: '6540' })]
+
+    await expect(
+      createSupplierInvoiceRegistrationEntry(
+        null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+      )
+    ).rejects.toThrow(SupplierInvoiceFxRateMissingError)
+
+    // No verifikat at all: a wrong one would balance and pass every trigger.
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('the thrown error carries the structured code and the currency', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 0, total: 1000,
+      currency: 'EUR', exchange_rate: null, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 1000, vat_rate: 0.25, account_number: '6540' })]
+
+    const err = await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SupplierInvoiceFxRateMissingError)
+    const fxErr = err as { code?: string; currency?: string }
+    expect(fxErr.code).toBe('SI_FX_RATE_MISSING')
+    expect(fxErr.currency).toBe('EUR')
+    // Registered in the canonical registry so routes/MCP render Swedish.
+    expect(getErrorEntry('SI_FX_RATE_MISSING')?.httpStatus).toBe(400)
+    expect(getErrorMessage(err)).toMatch(/saknar växelkurs/i)
+  })
+
+  // Domestic-VAT path (2641 / ruta 48) has the same exposure.
+  it('EUR domestic-VAT invoice WITHOUT a rate throws instead of booking 1:1', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 250, total: 1250,
+      currency: 'EUR', exchange_rate: null,
+    })
+    const items = [makeItem({ line_total: 1000, vat_rate: 0.25, account_number: '6200' })]
+
+    await expect(
+      createSupplierInvoiceRegistrationEntry(
+        null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+      )
+    ).rejects.toThrow(SupplierInvoiceFxRateMissingError)
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('kontantmetoden without a rate throws, but a settlement-derived rate still books', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 0, total: 1000,
+      currency: 'EUR', exchange_rate: null, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 1000, vat_rate: 0.25, account_number: '6540' })]
+
+    await expect(
+      createSupplierInvoiceCashEntry(
+        null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'eu_business'
+      )
+    ).rejects.toThrow(SupplierInvoiceFxRateMissingError)
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+
+    // settledBankSek pins the payment-date rate (11 500 / 1 000 = 11.50),
+    // so the same invoice books correctly through the cash path.
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'eu_business',
+      undefined, undefined, 11500
+    )
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(2875)
+    assertBalanced(input)
+  })
+
+  it('credit note in EUR WITHOUT a rate throws instead of reversing 1:1', async () => {
+    const creditNote = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 0, total: 1000,
+      currency: 'EUR', exchange_rate: null, reverse_charge: true, is_credit_note: true,
+    })
+    const items = [makeItem({ line_total: 1000, vat_rate: 0.25, account_number: '6540' })]
+
+    await expect(
+      createSupplierCreditNoteEntry(
+        null as never, 'company-1', 'user-1', creditNote, items, 'eu_business'
+      )
+    ).rejects.toThrow(SupplierInvoiceFxRateMissingError)
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('eget utlägg in EUR WITHOUT a rate throws instead of booking 1:1', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 250, total: 1250,
+      currency: 'EUR', exchange_rate: null,
+    })
+    const items = [makeItem({ line_total: 1000, vat_rate: 0.25, account_number: '6200' })]
+
+    await expect(
+      createSupplierInvoicePrivatelyPaidEntry(
+        null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
+      )
+    ).rejects.toThrow(SupplierInvoiceFxRateMissingError)
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
   })
 })
 

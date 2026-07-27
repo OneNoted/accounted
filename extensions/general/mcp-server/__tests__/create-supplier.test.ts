@@ -122,10 +122,20 @@ describe('gnubok_create_supplier: input validation', () => {
     ).rejects.toThrow(/default_payment_terms/i)
   })
 
-  it('requires vat_number when supplier_type is eu_business', async () => {
-    await expect(
-      tool().execute({ name: 'Acme GmbH', supplier_type: 'eu_business' }, 'company-1', 'user-1', noopSupabase),
-    ).rejects.toThrow(/vat_number/i)
+  // vat_number is optional for every supplier type, including eu_business: an
+  // EU supplier below its national registration threshold has none, and nothing
+  // downstream needs one (reverse charge keys off supplier_type). See the header
+  // of lib/pending-operations/schemas/create-supplier.ts.
+  it('accepts supplier_type eu_business without a vat_number', async () => {
+    const result = await tool().execute(
+      { name: 'Kleinanbieter GmbH', supplier_type: 'eu_business', dry_run: true },
+      'company-1',
+      'user-1',
+      noopSupabase,
+    ) as { preview?: { supplier_type?: string; vat_number?: string }; dry_run?: boolean }
+    expect(result.dry_run).toBe(true)
+    expect(result.preview?.supplier_type).toBe('eu_business')
+    expect(result.preview?.vat_number).toBeUndefined()
   })
 })
 

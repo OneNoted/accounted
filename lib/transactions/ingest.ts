@@ -39,9 +39,11 @@ type BucketEntry = {
   isImportFeed: boolean
   /**
    * ISO currency of the stored row ('SEK', 'USD', ...), null for rows without
-   * one. Guards the booked-hand-entered mirror: the content bucket keys on
-   * (date, öre) only, so without this a manual 2 500 SEK row could consume an
-   * incoming 2 500 USD feed row.
+   * one. Guards EVERY content-dedup match path (text bridge, cross-channel
+   * mirror, booked-hand-entered mirror): the content bucket keys on (date, öre)
+   * only, so without this a stored 250,00 SEK row and an incoming 250,00 EUR
+   * row on the same date share a bucket and either could consume the other.
+   * See the currency guard in `consumeBridgingTwin`.
    */
   currency: string | null
   /**
@@ -571,6 +573,12 @@ export async function ingestTransactions(
     // single-account and legacy (un-backfilled) rows exactly as before. The guard
     // applies to BOTH the text and the cross-channel-mirror path.
     //
+    // Currency guard: same shape, same null-tolerance, applied to all three
+    // match paths. The bucket key carries no currency, so 250,00 EUR and
+    // 250,00 SEK on one date share a bucket; without this an incoming row in
+    // one currency consumes a stored row in another and the survivor is never
+    // bokförd. A null on either side stays compatible (legacy rows).
+    //
     // crossSourceMirror: this (date, öre) bucket holds the same number of
     // incoming rows as stored rows from a different feed → the same real
     // transactions arriving once per channel. Only then is the description
@@ -610,6 +618,20 @@ export async function ingestTransactions(
         const sameAccount =
           cashAccountId === null || entry.cashAccountId === null || entry.cashAccountId === cashAccountId
         if (!sameAccount) continue
+        // Currency guard, applies to ALL THREE match paths below. The bucket key
+        // is (date, öre) with no currency, so a stored 250,00 SEK row and an
+        // incoming 250,00 EUR row on the same date land in the SAME bucket; the
+        // text bridge (identical bank titles) or the cross-channel mirror would
+        // then consume one for the other and the survivor is silently never
+        // bokförd (BFL 5 kap: a real affärshändelse dropped without a trace).
+        // Two channels reporting the SAME movement always agree on the booked
+        // amount's currency, so a mismatch here means two different movements
+        // whose öre happen to coincide. Null on either side is compatible:
+        // rows predating the currency column, and feeds that send none, must
+        // dedup exactly as they did before this guard existed.
+        const sameCurrency =
+          entry.currency === null || rawCurrency === null || entry.currency === rawCurrency
+        if (!sameCurrency) continue
         if (descriptionsBridge(description, entry.desc) && entry.desc.length > bestLen) {
           bestIdx = i
           bestLen = entry.desc.length
@@ -622,14 +644,10 @@ export async function ingestTransactions(
         }
         // Booked-hand-entered fallback: hand-entered entries only exist in the
         // booked map (the unbooked query excludes manual/mcp at the DB level),
-        // so !isImportFeed here already implies booked. Currency must not
-        // contradict: null on either side is compatible (legacy rows).
-        if (
-          handIdx === -1 &&
-          handEnteredMirror &&
-          !entry.isImportFeed &&
-          (entry.currency === null || rawCurrency === null || entry.currency === rawCurrency)
-        ) {
+        // so !isImportFeed here already implies booked. The currency
+        // requirement this path used to carry on its own is now the loop-level
+        // `sameCurrency` guard above, which every match path shares.
+        if (handIdx === -1 && handEnteredMirror && !entry.isImportFeed) {
           handIdx = i
         }
       }
@@ -642,6 +660,34 @@ export async function ingestTransactions(
       consumeBridgingTwin(existingMaps.booked) ?? consumeBridgingTwin(existingMaps.unbookedImported)
     if (consumedTwin) {
       result.duplicates++
+      // Leave a trace of the drop. Layer-1 (external_id) duplicates are exact
+      // key collisions and need none, but this layer drops a row on a
+      // judgement call (text bridge / cross-channel mirror / hand mirror), and
+      // an incoming row dropped here is never inserted and therefore never
+      // bokförd. result.duplicates does count it, and that count reaches the
+      // API response plus bank_file_imports.duplicate_count, but no import UI
+      // currently RENDERS it (BankFileResultStep and the EB sync toast show
+      // `imported` only), and the count cannot distinguish this judgement call
+      // from an exact Layer-1 id collision anyway. So this log is the only
+      // per-row record of WHICH affärshändelse was dropped and against what;
+      // keep it until a UI surfaces skipped rows. Same field shape as the two
+      // shadow blocks below.
+      log.info('import dedup: content-bridge duplicate skipped', {
+        decision: 'content-bridge',
+        mode: 'enforced',
+        bucket: bucketKey,
+        incomingExternalId: raw.external_id,
+        incomingDescription: description,
+        incomingAmount: raw.amount,
+        incomingCurrency: rawCurrency,
+        incomingSource: raw.import_source ?? null,
+        cashAccountId,
+        matchedStoredId: consumedTwin.id,
+        matchedStoredExternalId: consumedTwin.externalId,
+        matchedStoredDescription: consumedTwin.desc,
+        matchedStoredCurrency: consumedTwin.currency,
+        matchedStoredCashAccountId: consumedTwin.cashAccountId,
+      })
       // Persist the hand-mirror adoption: bind the account-unbound hand row to
       // the account this feed batch settled on. Consumption is otherwise
       // in-memory only, so without this ONE null-account hand row could

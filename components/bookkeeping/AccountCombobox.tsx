@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
   buildAccountIndex,
@@ -44,9 +45,15 @@ interface AccountComboboxProps {
   // Optional always-visible label for compact editors where the selected
   // account name must remain readable after the dropdown closes.
   selectedName?: string
+  // Renders the trigger in the flat row language (SettingsRows): no box, a
+  // dashed underline on hover, solid on focus. For hosts that compose
+  // SettingsRow, where a bordered Input would be the only box in the form.
+  // The dropdown also narrows to the row's width so it cannot overflow a
+  // dialog. Default (false) keeps the boxed Input every existing caller uses.
+  flat?: boolean
 }
 
-export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, flat = false }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -242,21 +249,35 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
 
   const showSelectedName = Boolean(selectedName && value && search === value)
 
+  // In flat mode the dropdown follows the trigger's width instead of forcing
+  // 34rem: inside a SettingsRow that fixed width would overflow the dialog.
+  const listWidthClass = flat ? 'w-full min-w-0' : 'min-w-[24rem] w-[max(100%,34rem)]'
+
+  const triggerProps = {
+    ref: setInputRef,
+    value: search,
+    onChange: handleInputChange,
+    onFocus: handleFocus,
+    onBlur: handleBlur,
+    onKeyDown: handleKeyDown,
+    placeholder: 'Sök konto…',
+    autoComplete: 'off',
+    disabled,
+    'aria-describedby': showSelectedName ? selectedNameId : undefined,
+    className: flat
+      ? cn(
+          'min-w-0 flex-1 rounded-none border-0 border-b border-dashed border-transparent bg-transparent px-0 py-1 font-mono text-sm text-foreground',
+          'placeholder:text-muted-foreground/60 hover:border-border',
+          'focus:border-solid focus:border-foreground/50 focus:outline-none',
+          'disabled:cursor-not-allowed disabled:border-transparent disabled:opacity-60',
+          className,
+        )
+      : `font-mono ${className ?? ''}`.trim(),
+  }
+
   return (
     <div ref={containerRef} className="relative">
-      <Input
-        ref={setInputRef}
-        value={search}
-        onChange={handleInputChange}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        onKeyDown={handleKeyDown}
-        placeholder="Sök konto…"
-        className={`font-mono ${className ?? ''}`.trim()}
-        autoComplete="off"
-        disabled={disabled}
-        aria-describedby={showSelectedName ? selectedNameId : undefined}
-      />
+      {flat ? <input {...triggerProps} /> : <Input {...triggerProps} />}
 
       {showSelectedName ? (
         <p id={selectedNameId} className="mt-1 break-words px-1 text-sm leading-snug text-foreground">
@@ -268,7 +289,10 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       {isOpen && !disabled && flatList.length > 0 && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 min-w-[24rem] w-[max(100%,34rem)] max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md"
+          className={cn(
+            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md',
+            listWidthClass,
+          )}
         >
           {groupedAccounts.map((group) => (
             <div key={group.className}>
@@ -311,7 +335,12 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
 
       {/* Empty state */}
       {isOpen && !disabled && search.trim() && flatList.length === 0 && (
-        <div className="absolute z-50 top-full left-0 mt-1 min-w-[24rem] w-[max(100%,34rem)] rounded-md border border-input bg-card shadow-md p-3">
+        <div
+          className={cn(
+            'absolute z-50 top-full left-0 mt-1 rounded-md border border-input bg-card shadow-md p-3',
+            listWidthClass,
+          )}
+        >
           <p className="text-sm text-muted-foreground">
             Hittade inget konto som matchar.
           </p>

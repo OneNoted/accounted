@@ -7,6 +7,17 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
+/**
+ * Shape produced by maskCustomerPersonalNumber: no read path ever returns the
+ * stored personnummer, only '********-1234'. A client that PATCHes back a
+ * customer it just read therefore submits the mask, which must mean "leave the
+ * stored value alone", never "store this literally" and never "clear it".
+ * components/customers/CustomerForm.tsx strips it before sending, but that
+ * guard belongs here too: any other client (script, agent, future UI) that
+ * skips it would otherwise destroy the value.
+ */
+const MASKED_PERSONAL_NUMBER = /^\*{8}-\d{4}$/
+
 export const GET = withRouteContext(
   'customer.get',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
@@ -72,8 +83,14 @@ export const PATCH = withRouteContext(
       return errorResponseFromCode('CUSTOMER_UPDATE_FAILED', opLog, { requestId })
     }
 
+    // The masked sentinel counts as "field not supplied": it carries no new
+    // value, so it must not be validated, stored or treated as a clear.
+    const personalNumberSubmitted =
+      body.personal_number !== undefined &&
+      !(typeof body.personal_number === 'string' && MASKED_PERSONAL_NUMBER.test(body.personal_number))
+
     const effectiveType = body.customer_type ?? existing.customer_type
-    if (body.personal_number && effectiveType !== 'individual') {
+    if (personalNumberSubmitted && body.personal_number && effectiveType !== 'individual') {
       return errorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED', opLog, { requestId })
     }
 
@@ -91,7 +108,9 @@ export const PATCH = withRouteContext(
     if (body.country !== undefined) updateData.country = body.country
     if (body.org_number !== undefined) updateData.org_number = body.org_number
     if (body.vat_number !== undefined) updateData.vat_number = body.vat_number
-    if (body.personal_number !== undefined) {
+    if (personalNumberSubmitted) {
+      // Stored as ciphertext; customers_personal_number_check accepts that
+      // shape only (20260726110000).
       updateData.personal_number = encryptCustomerPersonalNumber(body.personal_number)
     } else if (body.customer_type !== undefined && effectiveType !== 'individual') {
       updateData.personal_number = null

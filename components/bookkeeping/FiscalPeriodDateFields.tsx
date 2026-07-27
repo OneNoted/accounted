@@ -111,7 +111,7 @@ interface FiscalPeriodDateFieldsProps {
 /**
  * Shared first-fiscal-period date entry: day-level start (native date input),
  * caller-provided end-date control, and a Swedish summary card with inline
- * validation errors (6-18 months, EF calendar-year rule, last-day-of-month).
+ * validation errors (max 18 months, EF calendar-year rule, last-day-of-month).
  *
  * Used by onboarding Step 3 and the settings FiscalPeriodEditor so the two
  * screens stay in lockstep.

@@ -16,6 +16,14 @@
  * risk of the wider window, a Pass-3 hit where more than one invoice matches the
  * same amount in-window is flagged `ambiguous`; callers must downgrade an
  * ambiguous auto-match to a mere suggestion.
+ *
+ * Amounts are only ever compared inside one currency (passes 2-4): same
+ * currency → raw magnitudes, different currencies → both sides converted to SEK
+ * from STORED values, and when either side has no stored conversion the invoice
+ * is not offered at all. Comparing raw magnitudes across currencies is what let
+ * a 1000 EUR supplier invoice "exact match" a -1000 SEK bank debit at 0.85 on
+ * every import. Pass 1 is deliberately exempt: an OCR/payment reference
+ * identifies the invoice on its own, no amount is involved.
  */
 
 import type { Transaction, SupplierInvoice } from '@/types'
@@ -38,6 +46,95 @@ export interface SupplierInvoiceMatch {
  */
 function normalizeReference(ref: string): string {
   return ref.replace(/\D/g, '')
+}
+
+/**
+ * Currency codes compare case-insensitively, and a missing code means SEK:
+ * `transactions.currency` is nullable (DEFAULT 'SEK') while
+ * `supplier_invoices.currency` is NOT NULL DEFAULT 'SEK', so a legacy bank row
+ * with a NULL currency must still count as kronor and keep matching.
+ */
+function normalizeCurrency(code: string | null | undefined): string {
+  return (code || 'SEK').toUpperCase()
+}
+
+/**
+ * SEK value of an amount, or null when it cannot be established.
+ *
+ * This is `lib/bookkeeping/currency-utils.ts#resolveSekAmount` minus its final
+ * "no conversion info → return the amount as-is" branch. That branch is safe
+ * for booking legacy rows but fatal here: it would hand the matcher a raw EUR
+ * total dressed up as kronor, which is the exact false match this guard exists
+ * to stop. A missing rate must mean "not comparable", never "assume SEK".
+ */
+function sekValue(
+  amount: number,
+  currency: string,
+  amountSek: number | null | undefined,
+  exchangeRate: number | null | undefined
+): number | null {
+  if (currency === 'SEK') return amount
+  if (amountSek != null) return Math.round(amountSek * 100) / 100
+  if (exchangeRate != null && exchangeRate > 0) return Math.round(amount * exchangeRate * 100) / 100
+  return null
+}
+
+/**
+ * The invoice's stored SEK conversion scaled down to the part that is still
+ * unpaid. `total_sek` covers the whole invoice at the rate booked on
+ * registration, while `remaining_amount` is in the invoice currency, so a
+ * partially paid invoice needs the same proportion of the SEK total. Same
+ * pro-rating as the customer-side twin in `invoice-matching.ts`.
+ *
+ * Returns null when there is nothing to pro-rate; the caller then falls back to
+ * the invoice's stored `exchange_rate` (the same rate `match_batch_allocate`
+ * books the payment with) and otherwise treats the invoice as not comparable.
+ */
+function remainingTotalSek(invoice: SupplierInvoice, remaining: number): number | null {
+  if (invoice.total_sek == null || !invoice.total) return null
+  return Math.round((remaining / invoice.total) * invoice.total_sek * 100) / 100
+}
+
+/**
+ * Express the transaction amount and the invoice's remaining amount in one
+ * shared unit, or return null when no such unit can be established.
+ *
+ * Both values come back as positive magnitudes: a bank expense row is negative
+ * while an invoice total is positive. Mirrors
+ * `lib/documents/core-receipt-matcher.ts#amountVarianceForMatch`.
+ */
+function comparableAmounts(
+  transaction: Transaction,
+  invoice: SupplierInvoice,
+  remaining: number
+): { txValue: number; invoiceValue: number } | null {
+  const txCurrency = normalizeCurrency(transaction.currency)
+  const invoiceCurrency = normalizeCurrency(invoice.currency)
+
+  // Same currency → raw magnitudes. Most reliable, needs no rate, and it is the
+  // only path a SEK-only company ever takes.
+  if (txCurrency === invoiceCurrency) {
+    return { txValue: Math.abs(transaction.amount), invoiceValue: Math.abs(remaining) }
+  }
+
+  // Different currencies → compare in SEK, but only from stored conversions.
+  const txSek = sekValue(
+    transaction.amount,
+    txCurrency,
+    transaction.amount_sek,
+    transaction.exchange_rate
+  )
+  if (txSek === null) return null
+
+  const invoiceSek = sekValue(
+    remaining,
+    invoiceCurrency,
+    remainingTotalSek(invoice, remaining),
+    invoice.exchange_rate
+  )
+  if (invoiceSek === null) return null
+
+  return { txValue: Math.abs(txSek), invoiceValue: Math.abs(invoiceSek) }
 }
 
 /**
@@ -81,8 +178,16 @@ export function findSupplierInvoiceMatch(
       }
     }
 
+    // Passes 2-4 all compare amounts, so they need a common unit. No common
+    // unit → this invoice is not a candidate at all: a foreign invoice with no
+    // stored rate must never be offered as a confident match on the strength of
+    // a raw number that happens to line up.
+    const comparison = comparableAmounts(transaction, invoice, remaining)
+    if (!comparison) continue
+    const { txValue, invoiceValue } = comparison
+
     // Pass 2: Exact amount + bankgiro/plusgiro match → 0.92
-    const amountMatch = Math.abs(txAmount - remaining) < 0.005
+    const amountMatch = Math.abs(txValue - invoiceValue) < 0.005
     if (amountMatch) {
       const txDesc = (transaction.description || '').toLowerCase()
       const supplierBg = invoice.supplier?.bankgiro
@@ -125,9 +230,12 @@ export function findSupplierInvoiceMatch(
       }
     }
 
-    // Pass 4: Fuzzy amount (±5 SEK) + supplier name in description → 0.70
-    // Tolerance covers öresavrundning and minor fee differences
-    const fuzzyAmountMatch = Math.abs(txAmount - remaining) <= 5.00
+    // Pass 4: Fuzzy amount (±5) + supplier name in description → 0.70
+    // Tolerance covers öresavrundning and minor fee differences. It is expressed
+    // in whatever unit `comparableAmounts` settled on: SEK for the usual case
+    // and for anything cross-currency, the shared currency when both sides
+    // already agree on one.
+    const fuzzyAmountMatch = Math.abs(txValue - invoiceValue) <= 5.00
     const supplierName = invoice.supplier?.name
     if (fuzzyAmountMatch && supplierName) {
       const txDesc = (transaction.description || '').toLowerCase()

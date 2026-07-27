@@ -123,20 +123,152 @@ describe('buildInvoiceWriteData', () => {
     expect(result.items[0].vat_rate).toBe(0)
   })
 
-  it('rejects a VAT rate not allowed for the customer type', async () => {
+  it('rejects a VAT rate that is not a Swedish rate at all', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { vat_registered: true }, error: null })
 
-    // EU business with a validated VAT number → reverse charge, only 0% allowed.
+    // 10% is not a Swedish momssats (ML 9 kap: 25 / 12 / 6) for any customer.
     const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
     const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
       ...baseHeader,
-      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 10 }],
     })
 
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect('code' in result && result.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
+  })
+
+  // ============================================================
+  // Place of supply: huvudregeln vs taxed-where-performed (ML 6 kap.)
+  // ============================================================
+
+  it('keeps a genuine EU B2B consulting line at 0% with the reverse-charge notation', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    // Huvudregeln (ML 6 kap. 34 §): taxed where the buyer is established.
+    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Konsult', quantity: 10, unit: 'tim', unit_price: 1000, vat_rate: 0 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.vat_amount).toBe(0)
+    expect(result.invoiceFields.vat_treatment).toBe('reverse_charge')
+    expect(result.invoiceFields.moms_ruta).toBe('39')
+    expect(result.invoiceFields.reverse_charge_text).toContain('Article 196')
+    expect(result.items[0].vat_rate).toBe(0)
+  })
+
+  it('defaults an EU B2B line with no explicit rate to 0%, never to 25%', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    // Widening the permitted set must not change the default: an omitted
+    // vat_rate still falls back to getVatRules().rate === 0.
+    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.vat_amount).toBe(0)
+    expect(result.invoiceFields.vat_treatment).toBe('reverse_charge')
+    expect(result.invoiceFields.reverse_charge_text).toContain('Article 196')
+  })
+
+  it('accepts a taxed-where-performed line to an EU business and drops the RC notation', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    // Stockholm hotel night invoiced to a German company. Restaurang/hotell is
+    // taxed where performed (ML 6 kap. exception), so Swedish 12% applies even
+    // though the buyer is an EU business. This was refused outright before.
+    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Hotellnatt Stockholm', quantity: 2, unit: 'natt', unit_price: 1000, vat_rate: 12 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.vat_amount).toBe(240)
+    expect(result.invoiceFields.total).toBe(2240)
+    // Nothing on this invoice is reverse-charged: the notation would be a false
+    // statement and would tell the buyer to self-assess VAT already collected.
+    expect(result.invoiceFields.reverse_charge_text).toBeNull()
+    expect(result.invoiceFields.vat_treatment).not.toBe('reverse_charge')
+    expect(result.invoiceFields.moms_ruta).toBe('05')
+    expect(result.items[0].vat_rate).toBe(12)
+    expect(result.items[0].vat_amount).toBe(240)
+  })
+
+  it('accepts a taxed-where-performed line to a non-EU business and drops the export notation', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    // Conference admission sold to a US company; admission to cultural/sports
+    // events is taxed at the event location, so Swedish 6% applies.
+    const customer = makeCustomer({ customer_type: 'non_eu_business' })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Konferensbiljett', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 6 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.vat_amount).toBe(60)
+    expect(result.invoiceFields.reverse_charge_text).toBeNull()
+    expect(result.invoiceFields.vat_treatment).not.toBe('export')
+    expect(result.invoiceFields.moms_ruta).toBe('05')
+  })
+
+  it('keeps a non-EU business consulting line at 0% with the export notation', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'non_eu_business' })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Konsult', quantity: 5, unit: 'tim', unit_price: 1000, vat_rate: 0 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.vat_amount).toBe(0)
+    expect(result.invoiceFields.vat_treatment).toBe('export')
+    expect(result.invoiceFields.moms_ruta).toBe('40')
+    expect(result.invoiceFields.reverse_charge_text).toContain('ML 10 kap')
+  })
+
+  it('keeps the RC notation on a mixed invoice that still has zero-rated lines', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    // 0% consulting (huvudregeln, reverse charge) + 12% hotel (taxed where
+    // performed) on one invoice. The buyer IS liable for the consulting line,
+    // so the notation is required; the 12% line still carries Swedish VAT.
+    const customer = makeCustomer({ customer_type: 'eu_business', vat_number_validated: true })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 0 },
+        { description: 'Hotellnatt Stockholm', quantity: 1, unit: 'natt', unit_price: 1000, vat_rate: 12 },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.vat_amount).toBe(120)
+    expect(result.invoiceFields.vat_treatment).toBe('reverse_charge')
+    expect(result.invoiceFields.moms_ruta).toBe('39')
+    expect(result.invoiceFields.reverse_charge_text).toContain('Article 196')
+    expect(result.invoiceFields.vat_rate).toBeNull() // mixed
   })
 
   it('excludes free-text rows from totals', async () => {

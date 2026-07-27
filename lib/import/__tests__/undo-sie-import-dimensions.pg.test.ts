@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getPool } from '@/tests/pg/setup'
+import { getPool, runAsServiceRole } from '@/tests/pg/setup'
 import { seedCompany, insertDraftJournalEntry } from '@/tests/pg/fixtures'
 
 // Migration 20260702154500_dimension_import_provenance_undo_lockstep.sql:
@@ -96,10 +96,15 @@ async function insertDimensionValue(params: {
   return rows[0].id
 }
 
+// undo_sie_import honors p_user_id only for service_role callers
+// (20260727121000), and these cases assert persisted state over the plain
+// pool afterwards, so the call runs under a committing service-role context.
 async function callUndo(companyId: string, importId: string, actor: string) {
-  return getPool().query<{ deleted: number }>(
-    `SELECT public.undo_sie_import($1::uuid, $2::uuid, $3::uuid) AS deleted`,
-    [companyId, importId, actor],
+  return runAsServiceRole((client) =>
+    client.query<{ deleted: number }>(
+      `SELECT public.undo_sie_import($1::uuid, $2::uuid, $3::uuid) AS deleted`,
+      [companyId, importId, actor],
+    ),
   )
 }
 

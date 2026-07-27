@@ -271,7 +271,10 @@ function BankFileImportWizard() {
       const data = await res.json()
 
       if (!res.ok) {
-        setBankError(data.error || 'Importen misslyckades')
+        // Map the parsed body plus the status: on the thrown-error path
+        // `data.error` is the canonical envelope OBJECT (withRouteContext),
+        // which must never be stored into a rendered string state.
+        setBankError(getErrorMessage(data, { statusCode: res.status }))
         return
       }
 
@@ -872,7 +875,9 @@ function OpeningBalanceFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setObError(data.error || 'Kunde inte läsa filen')
+        // Map the parsed body plus the status, never render `data.error` raw:
+        // the thrown-error path answers with the canonical envelope OBJECT.
+        setObError(getErrorMessage(data, { statusCode: res.status }))
         return
       }
 
@@ -927,7 +932,7 @@ function OpeningBalanceFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setObError(data.error || 'Kunde inte läsa filen med de valda kolumnerna')
+        setObError(getErrorMessage(data, { statusCode: res.status }))
         return
       }
 

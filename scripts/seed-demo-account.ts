@@ -121,7 +121,10 @@ async function wipeExisting(userId: string): Promise<void> {
       ).map((r) => r.id)
     )
     await sb.from('journal_entries').delete().eq('company_id', c.id)
-    await sb.from('account_balances').delete().eq('company_id', c.id)
+    // No cached-balance table to clean: `account_balances` was dropped in
+    // 20240101000027_drop_unused_module_tables.sql and nothing replaced it.
+    // Saldon are derived from journal_entry_lines plus getOpeningBalances()
+    // on every read, so deleting the entries above is the whole cleanup.
     await sb.from('chart_of_accounts').delete().eq('company_id', c.id)
     await sb.from('fiscal_periods').delete().eq('company_id', c.id)
     await sb.from('company_settings').delete().eq('company_id', c.id)
@@ -162,7 +165,10 @@ async function setupCompany(
   settings: Record<string, unknown>,
   fiscalYears: number[]
 ): Promise<{ fpY: Record<number, string>; accounts: AccountMap }> {
-  await sb.from('company_settings').insert({
+  // The error is checked: an unknown key here makes PostgREST reject the whole
+  // insert, and swallowing that leaves the demo company with no settings row at
+  // all (which is how five phantom columns survived in this payload).
+  const { error: settingsErr } = await sb.from('company_settings').insert({
     user_id: userId,
     company_id: companyId,
     accounting_method: 'accrual',
@@ -171,10 +177,9 @@ async function setupCompany(
     is_sandbox: false,
     pays_salaries: true,
     default_voucher_series: 'A',
-    ai_flow_enabled: false,
-    ai_backfill_cancel_requested: false,
     ...settings,
   })
+  if (settingsErr) throw new Error(`company_settings: ${settingsErr.message}`)
   const { error: coaErr } = await sb.rpc('seed_chart_of_accounts', {
     p_company_id: companyId,
     p_entity_type: 'aktiebolag',
@@ -472,9 +477,6 @@ async function seedKonsultAB(userId: string): Promise<CompanyCtx> {
       invoice_prefix: 'F',
       next_invoice_number: 1,
       invoice_default_days: 30,
-      has_employees: true,
-      employee_count: 3,
-      sells_internationally: true,
       preliminary_tax_monthly: 18000,
     },
     [2025, 2026]
@@ -513,9 +515,10 @@ async function seedHoldingAB(userId: string): Promise<CompanyCtx> {
       invoice_prefix: 'H',
       next_invoice_number: 1,
       invoice_default_days: 30,
-      has_employees: false,
-      employee_count: 0,
-      sells_internationally: false,
+      // The holding runs no payroll: no employees and no salary entries are
+      // seeded for it. `pays_salaries` is the real column for that; it defaults
+      // to true in setupCompany() for the driftbolag.
+      pays_salaries: false,
     },
     [2026]
   )
@@ -1930,12 +1933,17 @@ async function seedInboxAndUncategorized(
     .single()
   if (docErr) throw new Error(`document_attachments AWS: ${docErr.message}`)
 
-  await sb.from('invoice_inbox_items').insert({
+  // status: the CHECK allows only 'received' | 'error'
+  // (20260504180000_invoice_inbox_remove_ai_columns.sql, which also collapsed
+  // every pre-existing 'ready' row to 'received'). This item is an arrived,
+  // extracted document with no supplier invoice created from it yet, which is
+  // exactly what 'received' + created_supplier_invoice_id IS NULL means in the
+  // inbox UI. 'error' is the failure state and belongs with error_message.
+  const { error: inboxErr } = await sb.from('invoice_inbox_items').insert({
     user_id: ctx.userId,
     company_id: ctx.companyId,
-    status: 'ready',
+    status: 'received',
     source: 'email',
-    document_type: 'supplier_invoice',
     email_from: 'aws-billing@amazon.com',
     email_subject: 'Your AWS Invoice: May 2026',
     email_received_at: '2026-05-05T07:34:00Z',
@@ -1954,8 +1962,8 @@ async function seedInboxAndUncategorized(
         { description: 'S3: Standard storage', amount: 48.5 },
       ],
     },
-    confidence: 0.91,
   })
+  if (inboxErr) throw new Error(`invoice_inbox_items AWS: ${inboxErr.message}`)
 
   // 5 uncategorized bank transactions, dated within 14 days of 2026-05-06
   const today = new Date('2026-05-06')

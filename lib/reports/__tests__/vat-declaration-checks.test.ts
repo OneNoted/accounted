@@ -132,6 +132,132 @@ describe('runVatDeclarationChecks', () => {
     expect(mismatch?.status).toBe('WARNING')
   })
 
+  // The finding this pair of tests exists for: ruta 48 aggregates 2641 + 2642 +
+  // 2645 + 2646 + 2647 + 2649, so ordinary debiterad ingående moms masked a
+  // completely missing RC input. 50 000 kr of RC output with nothing on 2645,
+  // next to 60 000 kr of ordinary 2641, left ruta 48 (60 000) above the RC
+  // output (50 000) and the aggregate comparison silent, while the company paid
+  // in 50 000 kr it was entitled to deduct.
+  describe('RC_INPUT_VAT_MISMATCH against the RC input accounts', () => {
+    const rcTotals = (accounts: Record<string, number>) =>
+      new Map(Object.entries(accounts).map(([acc, debit]) => [acc, { debit, credit: 0 }]))
+
+    it('warns when RC output has no 2645/2647 behind it even though ruta 48 is larger', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta21: 200000, // 50 000 / 0.25: basis correctly booked, so no FK004
+        ruta30: 50000,  // fiktiv utgående moms
+        ruta48: 60000,  // ordinary 2641 only: no RC input at all
+        ruta49: -10000,
+      }
+      const totals = rcTotals({ '2641': 60000 })
+
+      // Aggregate-only comparison: silent, which is the bug.
+      expect(
+        runVatDeclarationChecks(rutor).find((f) => f.code === 'RC_INPUT_VAT_MISMATCH'),
+      ).toBeUndefined()
+
+      const finding = runVatDeclarationChecks(rutor, totals)
+        .find((f) => f.code === 'RC_INPUT_VAT_MISMATCH')
+      expect(finding?.status).toBe('WARNING')
+      // \s, not a literal space: sv-SE groups thousands with a no-break space.
+      expect(finding?.message).toMatch(/50\s000 kr/)
+      expect(finding?.message).toMatch(/saknas/)
+    })
+
+    it('does not warn for a correct RC declaration where 2645 mirrors the output', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta21: 200000,
+        ruta30: 50000,
+        ruta48: 110000, // 60 000 ordinary 2641 + 50 000 RC input
+        ruta49: -60000,
+      }
+      const totals = rcTotals({ '2641': 60000, '2645': 50000 })
+      expect(
+        runVatDeclarationChecks(rutor, totals).find((f) => f.code === 'RC_INPUT_VAT_MISMATCH'),
+      ).toBeUndefined()
+    })
+
+    it('accepts 2647 (domestic reverse charge) as the mirror', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta24: 200000, // domestic RC services, ML 16 kap
+        ruta30: 50000,
+        ruta48: 50000,
+        ruta49: 0,
+      }
+      expect(
+        runVatDeclarationChecks(rutor, rcTotals({ '2647': 50000 }))
+          .find((f) => f.code === 'RC_INPUT_VAT_MISMATCH'),
+      ).toBeUndefined()
+    })
+
+    it('warns on a partial RC input shortfall the aggregate cannot see', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta21: 200000,
+        ruta30: 50000,
+        ruta48: 80000, // 60 000 ordinary + only 20 000 of the 50 000 RC input
+        ruta49: -30000,
+      }
+      const totals = rcTotals({ '2641': 60000, '2645': 20000 })
+      expect(
+        runVatDeclarationChecks(rutor).find((f) => f.code === 'RC_INPUT_VAT_MISMATCH'),
+      ).toBeUndefined()
+      const finding = runVatDeclarationChecks(rutor, totals)
+        .find((f) => f.code === 'RC_INPUT_VAT_MISMATCH')
+      expect(finding?.status).toBe('WARNING')
+      expect(finding?.message).toMatch(/30\s000 kr saknas/)
+    })
+
+    it('leaves a declaration with no reverse charge at all untouched', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta05: 400000,
+        ruta10: 100000,
+        ruta48: 60000, // ordinary input VAT only, no rutor 30-32
+        ruta49: 40000,
+      }
+      const totals = rcTotals({ '2641': 60000 })
+      expect(runVatDeclarationChecks(rutor, totals)).toEqual([])
+      expect(runVatDeclarationChecks(rutor)).toEqual([])
+    })
+
+    // 2649 carries the deductible portion of shared costs in general, not RC
+    // input; counting it would put the masking back.
+    it('does not count 2649 (blandad verksamhet) as reverse-charge input', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta21: 200000,
+        ruta30: 50000,
+        ruta48: 50000,
+        ruta49: 0,
+      }
+      expect(
+        runVatDeclarationChecks(rutor, rcTotals({ '2649': 50000 }))
+          .find((f) => f.code === 'RC_INPUT_VAT_MISMATCH')?.status,
+      ).toBe('WARNING')
+    })
+
+    // A credit on 2645 (e.g. a storno of the fiktiv-moms pair) must reduce the
+    // RC input, not be ignored: the debit balance is what ruta 48 receives.
+    it('nets credits on the RC input accounts against their debits', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta21: 200000,
+        ruta30: 50000,
+        ruta48: 20000,
+        ruta49: 30000,
+      }
+      const totals = new Map([['2645', { debit: 50000, credit: 30000 }]])
+      const finding = runVatDeclarationChecks(rutor, totals)
+        .find((f) => f.code === 'RC_INPUT_VAT_MISMATCH')
+      expect(finding?.status).toBe('WARNING')
+      expect(finding?.message).toMatch(/30\s000 kr saknas/)
+    })
+  })
+
   // FK009 detection: if our calculator and SKV's recomputed sum disagree
   // we flag locally so we never submit a drift.
   it('flags ERROR when ruta49 drifts from the canonical formula', () => {
@@ -241,6 +367,145 @@ describe('runVatDeclarationChecks', () => {
     const findings = runVatDeclarationChecks(rutor)
     expect(findings.find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')).toBeUndefined()
     expect(findings.find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')).toBeUndefined()
+  })
+
+  it('does not flag import checks for a mixed-rate import declaration', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 170000, // 100 000 @ 25% + 50 000 @ 12% + 20 000 @ 6%
+      ruta60: 25000,
+      ruta61: 6000,
+      ruta62: 1200,
+      ruta48: 32200,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')).toBeUndefined()
+    expect(findings.find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')).toBeUndefined()
+  })
+
+  // The binary presence test passed this: SOME import output VAT existed, so
+  // 100 000 kr of tullvärdesunderlag went out without its 25 000 kr importmoms.
+  it('flags ERROR when only part of the import base carries output VAT', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 500000, // declared base
+      ruta60: 100000, // only accounts for 400 000 kr of it
+      ruta48: 100000,
+      ruta49: 0,
+    }
+    const finding = runVatDeclarationChecks(rutor)
+      .find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toMatch(/saknar utgående moms/)
+  })
+
+  // Mirror shape, also passed by the old binary test: ruta 50 was non-zero.
+  it('flags ERROR when the import base is only partially reported', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 400000,
+      ruta60: 125000, // implies a 500 000 kr base: 100 000 kr missing
+      ruta48: 125000,
+      ruta49: 0,
+    }
+    const finding = runVatDeclarationChecks(rutor)
+      .find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toMatch(/saknas/)
+  })
+
+  // Tolerance boundary: max(1, 0.5% of the implied base) = 2 500 kr at 500 000.
+  it('does not flag import base inside the per-voucher rounding tolerance', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 497501, // 2 499 kr short of the implied 500 000
+      ruta60: 125000,
+      ruta48: 125000,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')).toBeUndefined()
+    expect(findings.find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')).toBeUndefined()
+  })
+
+  it('flags ERROR just outside the import tolerance', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 497000, // 3 000 kr short: beyond the 2 500 kr tolerance
+      ruta60: 125000,
+      ruta48: 125000,
+      ruta49: 0,
+    }
+    expect(
+      runVatDeclarationChecks(rutor).find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')?.status,
+    ).toBe('ERROR')
+  })
+
+  it('does not flag an import base excess inside the tolerance', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 502499, // 2 499 kr above the implied 500 000
+      ruta60: 125000,
+      ruta48: 125000,
+      ruta49: 0,
+    }
+    expect(
+      runVatDeclarationChecks(rutor).find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT'),
+    ).toBeUndefined()
+  })
+
+  it('flags ERROR just outside the import base excess tolerance', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 503000, // 3 000 kr above the implied 500 000: beyond the 2 500 kr tolerance
+      ruta60: 125000,
+      ruta48: 125000,
+      ruta49: 0,
+    }
+    expect(
+      runVatDeclarationChecks(rutor).find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')?.status,
+    ).toBe('ERROR')
+  })
+
+  // At a small import base the tolerance is the 1 kr floor, not 0.5% (which
+  // would be 0.50 kr on a 100 kr base). Every other import case above has a
+  // basis large enough that the percentage branch wins, so the floor branch of
+  // Math.max would otherwise go untested.
+  it('applies the 1 kr tolerance floor at a small import base', () => {
+    const withinFloor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 100.5, // 0.50 kr over the implied 100 kr: inside the 1 kr floor
+      ruta60: 25,
+      ruta48: 25,
+      ruta49: 0,
+    }
+    expect(
+      runVatDeclarationChecks(withinFloor).find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT'),
+    ).toBeUndefined()
+
+    const outsideFloor: VatDeclarationRutor = { ...withinFloor, ruta50: 102 }
+    expect(
+      runVatDeclarationChecks(outsideFloor).find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')
+        ?.status,
+    ).toBe('ERROR')
+  })
+
+  // The sales pair stays binary on purpose: rutor 07/08 have no source accounts
+  // in ACCOUNT_RUTA while their output VAT (2613/2616 etc.) still feeds ruta 10,
+  // and periodiserade invoice lines credit 29xx with the moms left on 2611. A
+  // proportional check would block filing on correct declarations.
+  it('does not flag the sales pair when output VAT exceeds what ruta 05-08 implies', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta05: 100000,
+      ruta10: 125000, // e.g. VMB (2616) or frivillig uthyrning (2613) on top
+      ruta48: 0,
+      ruta49: 125000,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'TAXABLE_SALES_WITHOUT_OUTPUT')).toBeUndefined()
+    expect(findings.find((f) => f.code === 'OUTPUT_VAT_WITHOUT_SALES_BASE')).toBeUndefined()
   })
 
   // Multiple findings should surface together so the user sees the whole picture.

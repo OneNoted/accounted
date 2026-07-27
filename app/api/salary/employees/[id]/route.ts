@@ -4,12 +4,19 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { getCompanyEntityType } from '@/lib/company/context'
-import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
+import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
+
+// Response shaping lives in the shared maskEmployeeForResponse: it drops the
+// ciphertext AND personnummer_last4 (mask + last4 reassembles the full
+// personnummer) and returns the mask under the read-only `personnummer_masked`
+// key, never the writable `personnummer` key. This route both reads and writes
+// the same object shape, so a mask under the write key would round-trip
+// 'ÅÅÅÅMMDD-XXXX' straight into the encrypt path.
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.employees.get',
@@ -27,12 +34,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
     }
 
-    return NextResponse.json({
-      data: {
-        ...employee,
-        personnummer: maskPersonnummer(decryptPersonnummer(employee.personnummer)),
-      },
-    })
+    return NextResponse.json({ data: maskEmployeeForResponse(employee) })
   },
 )
 
@@ -100,17 +102,59 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
-    // Build update object
-    const updates: Record<string, unknown> = { ...body }
+    // Build update object. `personnummer` is destructured OUT of the spread and
+    // handled explicitly below: spreading it verbatim would let any
+    // falsy-but-present value reach the row and overwrite the AES-256-GCM
+    // ciphertext with it (`if (body.personnummer)` skips the encrypt branch for
+    // an empty string, but `{ ...body }` has already put the empty string in
+    // `updates`). The only thing that stopped that today was the 12-digit regex
+    // in UpdateEmployeeSchema, i.e. a guard in another file: house style there
+    // adds `.or(z.literal(''))` to optional string fields, and one such edit
+    // would have turned this spread into a silent wipe of encrypted PII plus a
+    // stale `personnummer_last4`. The guard belongs in the write path.
+    const { personnummer: pnrInput, ...bodyWithoutPnr } = body
+    const updates: Record<string, unknown> = { ...bodyWithoutPnr }
 
-    // Handle personnummer update if provided
-    if (body.personnummer) {
-      const pnrValidation = validatePersonnummer(body.personnummer)
+    // personnummer semantics on PATCH:
+    //   • key absent / undefined → identity unchanged; ciphertext and
+    //     personnummer_last4 are preserved untouched.
+    //   • '' or null             → 400. There is no "clear the personnummer"
+    //     operation: the column is NOT NULL, and AGI/KU filing (Skatteverket
+    //     FK215) cannot be produced without it. Omit the key to leave it alone.
+    //   • masked display value   → 400. Read surfaces return the mask under
+    //     `personnummer_masked` so it cannot be written back by accident, but
+    //     reject it here too so a hand-built round-trip fails loudly instead of
+    //     encrypting 'ÅÅÅÅMMDD-XXXX' as somebody's identity. Note that
+    //     validatePersonnummer() strips non-digits, so a decorated value
+    //     carrying 12 real digits would otherwise pass.
+    //   • 12 digits              → validate (format, date range, Luhn) and
+    //     re-encrypt, refreshing personnummer_last4 in the same update.
+    const rawPnr: unknown = pnrInput
+    if (rawPnr !== undefined) {
+      if (typeof rawPnr !== 'string' || rawPnr.trim() === '') {
+        return NextResponse.json(
+          {
+            error:
+              'Personnummer kan inte tömmas. Utelämna fältet för att lämna det oförändrat.',
+          },
+          { status: 400 },
+        )
+      }
+      if (/x/i.test(rawPnr)) {
+        return NextResponse.json(
+          {
+            error:
+              'Maskerat personnummer kan inte sparas. Skicka hela personnummret (12 siffror) eller utelämna fältet.',
+          },
+          { status: 400 },
+        )
+      }
+      const pnrValidation = validatePersonnummer(rawPnr)
       if (!pnrValidation.valid) {
         return NextResponse.json({ error: pnrValidation.error }, { status: 400 })
       }
-      updates.personnummer = encryptPersonnummer(body.personnummer)
-      updates.personnummer_last4 = extractLast4(body.personnummer)
+      updates.personnummer = encryptPersonnummer(rawPnr)
+      updates.personnummer_last4 = extractLast4(rawPnr)
     }
 
     const { data: updated, error } = await supabase
@@ -128,12 +172,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
-    return NextResponse.json({
-      data: {
-        ...updated,
-        personnummer: maskPersonnummer(decryptPersonnummer(updated.personnummer)),
-      },
-    })
+    return NextResponse.json({ data: maskEmployeeForResponse(updated) })
   },
   { requireWrite: true },
 )

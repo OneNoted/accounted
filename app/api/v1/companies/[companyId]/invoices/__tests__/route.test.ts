@@ -1277,7 +1277,10 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
-  it('rejects forbidden fields (items / currency / customer_id)', async () => {
+  it('rejects forbidden structural fields (currency / customer_id)', async () => {
+    // `items` used to belong here but is now a supported full-replace field
+    // (see the [id]/__tests__/route.test.ts suite); customer_id and currency
+    // remain immutable on PATCH.
     withInvoiceWriteScope()
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -1289,7 +1292,6 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
       makePatchInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`, {
         customer_id: CUSTOMER_ID,
         currency: 'EUR',
-        items: [{ description: 'no', quantity: 1, unit: 'st', unit_price: 1 }],
       }),
       detailParams(COMPANY_ID, INVOICE_ID),
     )

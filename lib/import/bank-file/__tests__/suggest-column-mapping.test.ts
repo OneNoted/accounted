@@ -47,19 +47,96 @@ describe('suggestColumnMapping', () => {
     expect(result.balance).toBe(3) // remaining (all-positive) numeric column
   })
 
-  it('handles the Handelsbanken private layout (Reskontra + Transaktionsdatum + Text)', () => {
+  it('handles the Handelsbanken private layout: picks Reskontradatum (booking), not Transaktionsdatum', () => {
+    // The two date columns deliberately DIFFER here: a card purchase swiped the
+    // 14th and booked the 16th. The dedicated Handelsbanken parser emits
+    // Reskontradatum (formats/handelsbanken.ts primaryDateIdx), so the manual
+    // "Annan CSV" mapping must pre-select the same column, otherwise the same
+    // statement dates the same affärshändelse two days apart depending on which
+    // upload path the user took, and the Saldo column no longer ties to the row.
     const headers = ['Reskontradatum', 'Transaktionsdatum', 'Text', 'Belopp', 'Saldo']
     const dataRows = [
-      ['2024-01-15', '2024-01-15', 'SPOTIFY AB', '-99,00', '12345,67'],
-      ['2024-01-14', '2024-01-14', 'HEMKÖP', '-432,50', '12444,67'],
+      ['2024-01-16', '2024-01-14', 'SPOTIFY AB', '-99,00', '12345,67'],
+      ['2024-01-15', '2024-01-13', 'HEMKÖP', '-432,50', '12444,67'],
     ]
 
     const result = suggestColumnMapping(headers, dataRows)
 
-    expect(result.date).toBe(1) // prefers transaktionsdatum over reskontradatum
+    expect(result.date).toBe(0) // Reskontradatum (booking), NOT 1 (Transaktionsdatum)
     expect(result.description).toBe(2) // Text
     expect(result.amount).toBe(3) // Belopp, NOT 4 (Saldo)
     expect(result.balance).toBe(4)
+  })
+
+  it('handles the Länsförsäkringar layout: picks Bokföringsdag, not the leading Datum', () => {
+    // Matches formats/lansforsakringar.ts, which resolves Bokföringsdag (field 1)
+    // and only falls back to Datum when no booking column exists.
+    const headers = ['Datum', 'Bokföringsdag', 'Typ', 'Text', 'Belopp', 'Saldo']
+    const dataRows = [
+      ['2024-01-14', '2024-01-16', 'Kortköp', 'SPOTIFY AB', '-99,00', '12345,67'],
+      ['2024-01-13', '2024-01-15', 'Kortköp', 'HEMKÖP', '-432,50', '12444,67'],
+    ]
+
+    const result = suggestColumnMapping(headers, dataRows)
+
+    expect(result.date).toBe(1) // Bokföringsdag, NOT 0 (Datum)
+    expect(result.description).toBe(3) // Text
+    expect(result.amount).toBe(4)
+    expect(result.balance).toBe(5)
+  })
+
+  it('handles the Swedbank layout: picks the abbreviated Bokfdag over Transdag and Valutadag', () => {
+    // Swedbank is the decisive precedent: Transdag is present in the file and
+    // formats/swedbank.ts deliberately resolves Bokfdag. Matching by label also
+    // makes this deterministic instead of depending on Bokfdag happening to be
+    // the leftmost date-shaped column.
+    const headers = [
+      'Radnr', 'Clnr', 'Kontonr', 'Produkt', 'Valuta',
+      'Bokfdag', 'Transdag', 'Valutadag', 'Referens', 'Text', 'Belopp', 'Saldo',
+    ]
+    const dataRows = [
+      ['1', '8327', '1234567890', 'Företagskonto', 'SEK',
+        '2024-01-16', '2024-01-14', '2024-01-16', 'HEMKÖP', 'Kortköp', '-432.50', '12444.67'],
+      ['2', '8327', '1234567890', 'Företagskonto', 'SEK',
+        '2024-01-15', '2024-01-15', '2024-01-15', 'LÖN', 'Insättning', '25000.00', '12877.17'],
+    ]
+
+    const result = suggestColumnMapping(headers, dataRows)
+
+    expect(result.date).toBe(5) // Bokfdag, NOT 6 (Transdag) and NOT 7 (Valutadag)
+    expect(result.amount).toBe(10) // Belopp
+    expect(result.balance).toBe(11) // Saldo
+  })
+
+  it('FALLBACK: maps Transaktionsdatum when the export carries no booking date', () => {
+    // transaktionsdatum is demoted to the last tier, not removed: a file that
+    // only ever carried a transaction date must still map without user input.
+    const headers = ['Transaktionsdatum', 'Text', 'Belopp']
+    const dataRows = [
+      ['2024-01-14', 'SPOTIFY AB', '-99,00'],
+      ['2024-01-13', 'HEMKÖP', '-432,50'],
+    ]
+
+    const result = suggestColumnMapping(headers, dataRows)
+
+    expect(result.date).toBe(0) // Transaktionsdatum: the only date column there is
+    expect(result.description).toBe(1)
+    expect(result.amount).toBe(2)
+  })
+
+  it('FALLBACK: maps a bare Datum column when that is the only date column', () => {
+    // Nordea / Skandia / Nordea Business format D shape.
+    const headers = ['Datum', 'Transaktion', 'Belopp', 'Saldo']
+    const dataRows = [
+      ['2024-01-15', 'SPOTIFY AB', '-99,00', '12345,67'],
+      ['2024-01-14', 'HEMKÖP', '-432,50', '12444,67'],
+    ]
+
+    const result = suggestColumnMapping(headers, dataRows)
+
+    expect(result.date).toBe(0)
+    expect(result.amount).toBe(2)
+    expect(result.balance).toBe(3)
   })
 
   it('does not invent a balance column when the file has none', () => {

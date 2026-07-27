@@ -25,6 +25,8 @@ vi.mock('@/lib/auth/require-auth', () => ({
 
 import { GET } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
+import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -159,6 +161,65 @@ describe('GET /api/reports/vat-declaration', () => {
       'get_vat_declaration_totals',
       expect.objectContaining({ p_start: '2026-07-01', p_end: '2026-07-31' }),
     )
+  })
+
+  // The declaration is what the momsdeklaration UI runs its local
+  // "Kontroll av underlaget" checks on, and that client has no ledger access of
+  // its own. Without the 2645/2647 pair on the response it could only compare
+  // rutor 30-32 against the ruta 48 aggregate, where ordinary debiterad ingående
+  // moms on 2641 hides a missing beräknad ingående moms completely.
+  describe('rcInputAccountTotals travels with the response', () => {
+    /** The masking ledger: 50 000 kr RC output, underlag booked, no 2645/2647. */
+    function maskedRcPayload() {
+      return {
+        totals: [
+          { account_number: '4535', debit: 200000, credit: 0 }, // ruta 21 basis
+          { account_number: '2614', debit: 0, credit: 50000 },  // ruta 30
+          { account_number: '2641', debit: 60000, credit: 0 },  // ordinary input VAT
+        ],
+        settlement_shaped_entries: [],
+        source_type_counts: {},
+      }
+    }
+
+    async function fetchDeclaration() {
+      const res = await GET(
+        makeRequest('?periodType=monthly&year=2026&period=1'),
+        { params: Promise.resolve({}) },
+      )
+      expect(res.status).toBe(200)
+      return (await res.json()).data
+    }
+
+    it('carries both accounts, zeros included, on an ordinary SEK period', async () => {
+      const data = await fetchDeclaration()
+      // The default fixture has no reverse charge at all: the pair is still
+      // present, so a client can tell "no RC activity" from "field missing".
+      expect(data.rcInputAccountTotals).toEqual({
+        '2645': { debit: 0, credit: 0 },
+        '2647': { debit: 0, credit: 0 },
+      })
+      expect(runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data))).toEqual([])
+    })
+
+    it('lets the client run the sharp RC input check off the response alone', async () => {
+      mockSupabase.rpc.mockResolvedValue({ data: maskedRcPayload(), error: null })
+      const data = await fetchDeclaration()
+
+      expect(data.rutor.ruta30).toBe(50000)
+      expect(data.rutor.ruta48).toBe(60000)
+      expect(data.rcInputAccountTotals['2645']).toEqual({ debit: 0, credit: 0 })
+
+      // Same call the momsdeklaration view makes.
+      const checks = runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data))
+      const mismatch = checks.find((c) => c.code === 'RC_INPUT_VAT_MISMATCH')
+      expect(mismatch?.status).toBe('WARNING')
+      // \s, not a literal space: sv-SE groups thousands with a no-break space.
+      expect(mismatch?.message).toMatch(/50\s000 kr saknas/)
+
+      // Ruta 48 alone: silent, which is the state the wiring replaced.
+      expect(runVatDeclarationChecks(data.rutor)).toEqual([])
+    })
   })
 
   it('returns the VAT_REPORT_GENERATION_FAILED envelope when the RPC errors', async () => {

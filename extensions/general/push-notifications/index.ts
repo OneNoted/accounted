@@ -50,19 +50,28 @@ async function getSettingsViaCtx(ctx: ExtensionContext): Promise<PushNotificatio
   return { ...DEFAULT_SETTINGS, ...(stored || {}) }
 }
 
-/** Get settings for external callers (settings routes, cron jobs) */
-export async function getSettings(userId: string): Promise<PushNotificationSettings> {
+/**
+ * Get settings for external callers (settings routes, event handlers).
+ *
+ * Returns null when the settings row exists but CANNOT BE READ: consent
+ * polarity requires every caller to treat that as "do not notify" (and the
+ * settings routes to surface an error) instead of falling back to the
+ * defaults, which are mostly enabled. A genuinely absent row (maybeSingle
+ * with no error) means the user never touched the toggles: defaults apply.
+ */
+export async function getSettings(userId: string): Promise<PushNotificationSettings | null> {
   const { createClient } = await import('@/lib/supabase/server')
   const supabase = await createClient()
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('notification_settings')
     .select(
       'period_locked_enabled, period_year_closed_enabled, invoice_sent_enabled, receipt_extracted_enabled, receipt_matched_enabled, missing_underlag_enabled'
     )
-    .eq('company_id', userId)
-    .single()
+    .eq('user_id', userId)
+    .maybeSingle()
 
+  if (error) return null
   if (!data) return { ...DEFAULT_SETTINGS }
   return {
     periodLockedEnabled: data.period_locked_enabled ?? DEFAULT_SETTINGS.periodLockedEnabled,
@@ -77,8 +86,11 @@ export async function getSettings(userId: string): Promise<PushNotificationSetti
 export async function saveSettings(
   userId: string,
   partial: Partial<PushNotificationSettings>
-): Promise<PushNotificationSettings> {
+): Promise<PushNotificationSettings | null> {
   const current = await getSettings(userId)
+  // Unreadable current settings: merging the partial into defaults would
+  // silently overwrite the user's stored opt-outs. Refuse the save.
+  if (!current) return null
   const merged = { ...current, ...partial }
 
   const { createClient } = await import('@/lib/supabase/server')
@@ -112,8 +124,9 @@ async function handlePeriodLocked(
 ): Promise<void> {
   const { period, userId } = payload
 
+  // getSettings() returns null when the row is unreadable: do not notify.
   const settings = ctx ? await getSettingsViaCtx(ctx) : await getSettings(userId)
-  if (!settings.periodLockedEnabled) return
+  if (!settings?.periodLockedEnabled) return
 
   const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
   const notificationPayload = createPeriodLockedPayload(period.name, period.id)
@@ -138,7 +151,7 @@ async function handleYearClosed(
   const { period, userId } = payload
 
   const settings = ctx ? await getSettingsViaCtx(ctx) : await getSettings(userId)
-  if (!settings.periodYearClosedEnabled) return
+  if (!settings?.periodYearClosedEnabled) return
 
   const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
   const notificationPayload = createYearClosedPayload(period.name, period.id)
@@ -163,7 +176,7 @@ async function handleInvoiceSent(
   const { invoice, userId } = payload
 
   const settings = ctx ? await getSettingsViaCtx(ctx) : await getSettings(userId)
-  if (!settings.invoiceSentEnabled) return
+  if (!settings?.invoiceSentEnabled) return
 
   const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
   const notificationPayload = createInvoiceSentPayload(
@@ -191,7 +204,7 @@ async function handleReceiptExtracted(
   const { receipt, userId } = payload
 
   const settings = ctx ? await getSettingsViaCtx(ctx) : await getSettings(userId)
-  if (!settings.receiptExtractedEnabled) return
+  if (!settings?.receiptExtractedEnabled) return
 
   const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
   const notificationPayload = createReceiptExtractedPayload(
@@ -219,7 +232,7 @@ async function handleReceiptMatched(
   const { receipt, transaction, userId } = payload
 
   const settings = ctx ? await getSettingsViaCtx(ctx) : await getSettings(userId)
-  if (!settings.receiptMatchedEnabled) return
+  if (!settings?.receiptMatchedEnabled) return
 
   const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
   const notificationPayload = createReceiptMatchedPayload(receipt.id, transaction.id)
