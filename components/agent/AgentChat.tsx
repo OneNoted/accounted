@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import Link from 'next/link'
 import {
   Send,
@@ -25,6 +25,7 @@ import ApprovalCard from './ApprovalCard'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
+import { sendFeedback, type FeedbackSentiment } from './feedback-client'
 
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
@@ -196,6 +197,21 @@ export default function AgentChat({
   const firstTurnFiredRef = useRef(false)
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [])
+  // Read by the announcement effect, which must not re-run on every token: a
+  // `messages` dependency would fire it hundreds of times per turn. Written in
+  // an effect rather than during render: React may replay a render, and a
+  // render-phase ref write can therefore leave the announcement reading a
+  // snapshot the user never saw. Declared BEFORE the announcement effect so it
+  // is already current when that one runs for the same commit.
+  const messagesRef = useRef(messages)
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+  // Where the current turn's messages start. Without it the announcement
+  // searches the whole thread, so a turn that produces no text of its own (a
+  // tool-only turn, an error) finds the PREVIOUS answer and reads it out as
+  // though it were the new one.
+  const turnStartRef = useRef(0)
   const hasAi = useCapability(CAPABILITY.ai)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -204,13 +220,21 @@ export default function AgentChat({
   // erroring, aborting or being stopped, and a channel that misses one of
   // those leaves the trigger claiming the agent is still working forever.
   const turnOpenRef = useRef(false)
+  // Screen-reader announcement for the turn. Deliberately NOT the streaming
+  // text: a live region over token deltas re-announces on every delta and
+  // renders the chat unusable with a screen reader. Announce the two states
+  // that matter instead, and the finished answer once, when it is finished.
+  const [announcement, setAnnouncement] = useState('')
   useEffect(() => {
     if (streaming) {
       turnOpenRef.current = true
+      turnStartRef.current = messagesRef.current.length
       onStatus?.({ type: 'turn_start' })
+      setAnnouncement('Assistenten skriver ett svar.')
     } else if (turnOpenRef.current) {
       turnOpenRef.current = false
       onStatus?.({ type: 'turn_end' })
+      setAnnouncement(announceableAnswer(messagesRef.current.slice(turnStartRef.current)))
     }
   }, [streaming, onStatus])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -715,8 +739,27 @@ export default function AgentChat({
     }
   }
 
+  // A vote needs the thread it belongs to. Without a conversation id there is
+  // nothing to attach the report to, so the buttons stay inert rather than
+  // posting a vote the backlog cannot trace to an answer.
+  const handleVote = useCallback(
+    async (sentiment: FeedbackSentiment) => {
+      const id = conversationIdRef.current
+      if (!id) return false
+      return sendFeedback({ conversationId: id, sentiment })
+    },
+    [],
+  )
+
   return (
     <div className="relative flex flex-col h-full min-h-0">
+      {/* The chat had no live region at all, so a screen-reader user got no
+          signal that the assistant had answered: the reply simply appeared for
+          people who could see it. role="status" is the polite variant, which
+          waits for a pause rather than interrupting. */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </div>
       {/* The pill is positioned against THIS box, not the whole component: the
           composer below grows as the user types, and a fixed offset from the
           bottom would slide the pill under it. */}
@@ -744,6 +787,7 @@ export default function AgentChat({
               }
               onRegenerate={handleRegenerate}
               onCorrection={handleCorrection}
+              onVote={handleVote}
             />
           </div>
         ))}
@@ -839,12 +883,14 @@ function MessageBubble({
   showRegenerate,
   onRegenerate,
   onCorrection,
+  onVote,
 }: {
   message: ChatMessage
   streamingTail: boolean
   showRegenerate?: boolean
   onRegenerate?: () => void
   onCorrection?: (message: string) => void
+  onVote?: (sentiment: FeedbackSentiment) => Promise<boolean>
 }) {
   const isUser = message.role === 'user'
   // An assistant turn that contains only tool calls (no text, no streaming
@@ -962,6 +1008,7 @@ function MessageBubble({
         <MessageActions
           text={message.text}
           onRegenerate={showRegenerate ? onRegenerate : undefined}
+          onVote={onVote}
         />
       )}
     </div>
@@ -971,20 +1018,36 @@ function MessageBubble({
 /**
  * Hover row under a finished assistant answer: copy, feedback, regenerate.
  *
- * Feedback is deliberately fire-and-forget and local-only for now: the point of
- * this row is that the affordances exist where users look for them. Wiring the
- * thumbs to gnubok_feedback is a follow-up, and a failed vote must never
- * interrupt reading an answer.
+ * The thumbs used to be local-only: they lit up and the vote died in component
+ * state. They now report to /api/agent/feedback, and the pressed state is set
+ * only once the server has accepted the vote, so the button never claims a
+ * report that did not happen.
+ *
+ * A vote does not toggle off. It emits an append-only telemetry event, and
+ * there is no un-emitting one, so offering an undo would be a control that
+ * lies. Changing your mind sends the other sentiment, which is a thing the
+ * backlog can actually see.
  */
 function MessageActions({
   text,
   onRegenerate,
+  onVote,
 }: {
   text: string
   onRegenerate?: () => void
+  onVote?: (sentiment: FeedbackSentiment) => Promise<boolean>
 }) {
   const [copied, setCopied] = useState(false)
   const [vote, setVote] = useState<'up' | 'down' | null>(null)
+  const [voting, setVoting] = useState(false)
+
+  async function handleVote(next: 'up' | 'down') {
+    if (voting || vote === next || !onVote) return
+    setVoting(true)
+    const ok = await onVote(next === 'up' ? 'positive' : 'negative')
+    setVoting(false)
+    if (ok) setVote(next)
+  }
 
   useEffect(() => {
     if (!copied) return
@@ -1013,8 +1076,9 @@ function MessageActions({
       </button>
       <button
         type="button"
-        onClick={() => setVote(vote === 'up' ? null : 'up')}
-        className={cn(btn, vote === 'up' && 'text-foreground')}
+        onClick={() => handleVote('up')}
+        disabled={voting || !onVote}
+        className={cn(btn, vote === 'up' && 'text-foreground', voting && 'opacity-60')}
         title="Bra svar"
         aria-pressed={vote === 'up'}
       >
@@ -1023,8 +1087,9 @@ function MessageActions({
       </button>
       <button
         type="button"
-        onClick={() => setVote(vote === 'down' ? null : 'down')}
-        className={cn(btn, vote === 'down' && 'text-foreground')}
+        onClick={() => handleVote('down')}
+        disabled={voting || !onVote}
+        className={cn(btn, vote === 'down' && 'text-foreground', voting && 'opacity-60')}
         title="Dåligt svar"
         aria-pressed={vote === 'down'}
       >
@@ -1283,4 +1348,33 @@ export function normalizeStoredMessages(
     })
   }
   return out
+}
+
+/**
+ * What to read out when a turn finishes.
+ *
+ * Takes only the CURRENT turn's messages: given the whole thread, a turn that
+ * produced no text of its own would find the previous answer and announce it
+ * again as if it were new.
+ *
+ * The cap exists because a screen reader reads a live region straight through:
+ * a 900-word bokslut explanation announced in one uninterruptible burst is
+ * worse than not announcing it. It covers the WHOLE announcement, suffix
+ * included, so the promise the constant makes is the one the output keeps.
+ */
+export const ANNOUNCEMENT_LIMIT = 400
+const CONTINUES = '… Svaret fortsätter i meddelandet.'
+
+export function announceableAnswer(messages: ChatMessage[]): string {
+  const last = [...messages].reverse().find((m) => m.role === 'assistant')
+
+  // Stop leaves the partial text in place with a visible marker. Reading it
+  // out as a finished answer would tell a screen-reader user the opposite of
+  // what the marker tells everyone else.
+  if (last?.interrupted) return 'Assistenten avbröts. Ett ofullständigt svar står i meddelandet.'
+
+  const text = last?.text?.trim()
+  if (!text) return 'Assistenten är klar.'
+  if (text.length <= ANNOUNCEMENT_LIMIT) return text
+  return text.slice(0, ANNOUNCEMENT_LIMIT - CONTINUES.length).trimEnd() + CONTINUES
 }

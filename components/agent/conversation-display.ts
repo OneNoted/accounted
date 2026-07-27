@@ -62,27 +62,40 @@ export function relativeTime(iso: string | null | undefined): string {
   return new Date(iso).toLocaleDateString('sv-SE', { month: 'short', day: 'numeric' })
 }
 
-export function intentLabel(intentId: string): string {
-  switch (intentId) {
-    case 'general.help':
-      return 'Fråga din assistent'
-    case 'transaction.categorization':
-      return 'Hjälp med transaktion'
-    case 'invoice.draft':
-      return 'Hjälp med faktura'
-    case 'supplier_invoice.review':
-      return 'Granska leverantörsfaktura'
-    case 'vat.review':
-      return 'Granska moms­deklaration'
-    case 'bokslut.step':
-      return 'Hjälp med bokslut'
-    case 'verifikation.draft':
-      return 'Hjälp med verifikation'
-    case 'kpi.explain':
-      return 'Förklara nyckeltal'
-    default:
-      return intentId
-  }
+/**
+ * One label per intent, for every surface that names a conversation.
+ *
+ * There were two of these: this map and an intentToTitle in AgentSheet. They
+ * had already drifted, so the panel opened on the bokslut wizard titled
+ * "Fråga Anna" while the same thread in the history list read "Hjälp med
+ * bokslut", and this one's fallback returned the raw intent id, putting
+ * "bokslut.step" in front of the user as the name of their own conversation.
+ */
+// Null-prototype: a plain literal inherits from Object.prototype, so
+// intentLabel('toString') would resolve to a FUNCTION, pass the truthiness
+// check, and be handed to React as a title. intent_id comes from the database.
+const INTENT_LABELS: Record<string, string> = Object.assign(Object.create(null), {
+  'transaction.categorization': 'Hjälp med transaktion',
+  'invoice.draft': 'Hjälp med faktura',
+  'supplier_invoice.review': 'Granska leverantörsfaktura',
+  'vat.review': 'Granska moms\u00addeklaration',
+  'bokslut.step': 'Hjälp med bokslut',
+  'verifikation.draft': 'Hjälp med verifikation',
+  'kpi.explain': 'Förklara nyckeltal',
+  'settings.help': 'Hjälp med inställningar',
+  'inbox.bulk-book': 'Bokför från inkorgen',
+})
+
+/**
+ * `agentName` personalises the general-help and unknown cases ("Fråga Anna").
+ * Omit it where the agent's name is not to hand: the wording stays correct,
+ * just less personal. An unknown intent NEVER falls through to its id.
+ */
+export function intentLabel(intentId: string, agentName?: string | null): string {
+  const known = INTENT_LABELS[intentId]
+  if (known) return known
+  const name = agentName?.trim()
+  return name ? `Fråga ${name}` : 'Fråga din assistent'
 }
 
 // Group a flat (already server-sorted: pinned first, then last_message_at desc)

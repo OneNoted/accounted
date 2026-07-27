@@ -49,7 +49,7 @@ import {
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
-import { clearRecaptIdentity } from '@/lib/recapt'
+import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { SupportLink } from '@/components/ui/support-link'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import UserMenu from '@/components/dashboard/UserMenu'
@@ -356,7 +356,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   }
 
   const handleLogout = async () => {
-    clearRecaptIdentity()
+    resetAnalyticsIdentity()
     await supabase.auth.signOut()
     router.push(isSandbox ? '/sandbox' : '/login')
   }

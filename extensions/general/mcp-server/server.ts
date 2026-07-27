@@ -13,6 +13,7 @@ import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mappi
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
@@ -6589,7 +6590,16 @@ export const tools: McpTool[] = [
           // searches the ENTRY description only (documented in the
           // schema); the two-leg line+entry union query_journal runs is
           // overkill for a write filter.
-          const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+          //
+          // Backslash is escaped FIRST, and the order matters: `\` is LIKE's
+          // own escape character, so an unescaped one in the search term
+          // swallows the character after it (searching `a\b` matched rows
+          // containing `ab`). Escaping it last would instead double the
+          // backslashes the % / _ rules just added.
+          const escaped = text
+            .replace(/\\/g, '\\\\')
+            .replace(/%/g, '\\%')
+            .replace(/_/g, '\\_')
           e = e.ilike('description', `%${escaped}%`)
         }
         return e
@@ -7262,7 +7272,16 @@ export const tools: McpTool[] = [
         // separator. The .ilike() path passes the pattern as a parameterised
         // filter operand where `,` is a literal: stripping would mangle
         // searches for real commas in line descriptions.
-        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+        //
+        // Backslash is escaped FIRST, and the order matters: `\` is LIKE's own
+        // escape character, so an unescaped one in the search term swallows the
+        // character after it (searching `a\b` matched rows containing `ab`).
+        // Escaping it last would instead double the backslashes the % / _ rules
+        // just added.
+        const escaped = text
+          .replace(/\\/g, '\\\\')
+          .replace(/%/g, '\\%')
+          .replace(/_/g, '\\_')
         const pattern = `%${escaped}%`
 
         // Fetch up to 2× limit per leg to reduce global-ordering loss when
@@ -12665,7 +12684,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_approve_supplier_invoice',
     title: 'Approve Supplier Invoice',
-    description: 'Stage approval of a registered supplier invoice (registered → approved). High-risk, always staged.',
+    description: 'Stage approval of a supplier invoice that has not been attested yet (registered or overdue). An invoice that is still past its due date keeps the overdue label after approval. High-risk, always staged.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -12680,10 +12699,14 @@ export const tools: McpTool[] = [
 
       const { data: inv } = await supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, total, currency, status, supplier:suppliers(name)')
+        .select('id, supplier_invoice_number, invoice_date, total, currency, status, approved_at, supplier:suppliers(name)')
         .eq('id', id).eq('company_id', companyId).single()
       if (!inv) throw new Error('Supplier invoice not found')
-      if (inv.status !== 'registered') throw new Error('Kan bara godkänna registrerade fakturor')
+      // 'overdue' is approvable: the daily cron puts unbooked invoices there
+      // just by aging (#1206). approved_at is the durable attest marker.
+      if (!canApproveSupplierInvoice(inv)) {
+        throw new Error('Fakturan är redan godkänd eller kan inte godkännas i nuvarande status')
+      }
 
       return stagePendingOperation(supabase, companyId, userId, 'approve_supplier_invoice',
         `Godkänn leverantörsfaktura ${inv.supplier_invoice_number}`,

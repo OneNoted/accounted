@@ -1151,8 +1151,22 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
   },
   SI_APPROVE_NOT_REGISTERED: {
     httpStatus: 400,
-    message_sv: 'Endast registrerade fakturor kan godkännas.',
-    message_en: 'Only invoices in registered status can be approved.',
+    message_sv: 'Fakturan är redan godkänd eller kan inte godkännas i nuvarande status.',
+    message_en: 'The invoice is already approved, or cannot be approved in its current status.',
+  },
+  SI_EDIT_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörsfakturan ändrades av någon annan (eller av den dagliga förfallokontrollen) medan du redigerade. Ladda om fakturan och försök igen.',
+    message_en:
+      'The supplier invoice changed elsewhere (or in the daily overdue check) while you were editing. Reload the invoice and try again.',
+  },
+  SI_EDIT_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv:
+      'Bara obetalda leverantörsfakturor kan redigeras. Betalda, krediterade och återförda fakturor rättas genom kreditfaktura eller storno.',
+    message_en:
+      'Only unsettled supplier invoices can be edited. Paid, credited and reversed invoices are corrected with a credit note or a storno.',
   },
   SI_APPROVE_UPDATE_FAILED: {
     httpStatus: 500,

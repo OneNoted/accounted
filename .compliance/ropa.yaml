@@ -535,3 +535,65 @@ processing_activities:
       - webhook_secret_constant_time_validation
       - rls_company_scoped
       - immutable_status_machine_trigger
+
+  - id: product.analytics
+    name: Produktanalys, sessionsinspelning, felrapportering, enkäter och supportärenden (PostHog)
+    purpose: >-
+      Förstå hur tjänsten faktiskt används (var användare fastnar i
+      onboarding, vilka flöden som avbryts), fånga klientfel och serverfel så
+      de kan åtgärdas, och ställa riktade produktfrågor. Endast hostad drift:
+      self-hosted-installationer laddar aldrig PostHog (isAnalyticsEnabled()
+      kortsluter på NEXT_PUBLIC_SELF_HOSTED, och ingen token bakas in i
+      Docker-imagen). Sandbox-/demoföretag identifieras aldrig.
+    lawful_basis: art_6_1_f   # legitimate interest (produktförbättring och felsökning)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: posthog-eu
+    data_subjects:
+      - business_owner
+      - company_member
+    data_categories:
+      - user.contact.email    # person property via identify(), aldrig i event-properties
+      - user.name             # profiles.full_name
+      - user.behavior         # sidvisningar, klick, händelser, sessionsinspelning
+      - user.device           # user agent, skärmstorlek, IP (trunkeras av PostHog)
+      # Supportärenden: fritext som användaren SJÄLV skriver till supporten via
+      # in-app-dialogen (components/ui/support-link.tsx). Till skillnad från
+      # analysdata bär ärendet meddelandetexten, eftersom det är hela poängen
+      # med att skriva till supporten. Kan i praktiken innehålla bokförings-
+      # detaljer som användaren väljer att beskriva. Widgeten är avstängd:
+      # endast vår egen dialog kan öppna ärenden.
+      - user.content.support  # fritext i supportmeddelanden, användarinitierat
+      # EJ organisationsnummer: för enskild firma ÄR orgnr innehavarens
+      # personnummer. buildGroupProperties() vägrar skicka det och ett
+      # enhetstest låser fast beteendet.
+    recipients:
+      - name: PostHog
+        country: DE
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: >-
+        PostHog Cloud EU (Frankfurt). EU-baserat biträde; ingen
+        tredjelandsöverföring. DPA tecknat; SCCs gäller för eventuella
+        underbiträden utanför EES.
+    retention:
+      duration: posthog_project_retention
+      basis: processor_configured   # sätts i PostHog-projektet, ej i denna kodbas
+      stored_in:
+        - posthog_eu   # externt hos biträdet; inget lagras i vår databas
+    security_measures:
+      - session_replay_masks_all_text        # maskTextSelector '*' utöver maskAllInputs
+      - session_replay_masks_all_inputs
+      - org_number_never_transmitted         # låst av test i lib/analytics/__tests__
+      - no_pii_in_event_properties           # PII endast som person properties via identify()
+      - no_device_storage                    # persistence: 'memory', inga kakor, ingen consent-banner krävs
+      - same_origin_reverse_proxy            # /rl-rewrite; ingen tredjepartsvärd i CSP
+      - sandbox_companies_never_identified
+      - disabled_entirely_when_self_hosted
+      - server_side_payloads_redacted_before_send   # lib/observability/redact.ts
+      - support_widget_disabled                    # endast egen UI via conversations-API
+      - support_ticket_identity_hmac_signed        # POSTHOG_SECRET_API_KEY, serverside
+      - support_message_body_never_in_event_properties  # breadcrumb bär endast subject
+      - email_remains_the_delivery_guarantee       # ärendet är ett komplement, ej leveransväg

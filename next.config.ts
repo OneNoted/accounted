@@ -29,14 +29,14 @@ const supabaseWsUrl =
 
 const cspDirectives = [
   "default-src 'self'",
-  // Recapt: scoped to the two specific hosts the SDK actually contacts:
-  // `cdn.recapt.app` for the script bundle and `api.recapt.app` for
-  // ingestion. The previous wildcard (`https://*.recapt.app`) allowed
-  // exfiltration to any subdomain of recapt.app and is intentionally
-  // narrowed.
-  `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com https://api.recapt.app https://cdn.recapt.app`,
+  // No analytics hosts here on purpose. PostHog replaced Recapt and is
+  // routed through the same-origin `/rl` rewrite below, so ingestion is
+  // covered by `connect-src 'self'` and its lazy-loaded replay/survey
+  // bundles by `script-src 'self'`. Adding `*.posthog.com` back would
+  // re-widen the policy for no benefit and undo the ad-blocker resistance.
+  `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com`,
   `style-src 'self' 'unsafe-inline' https://*.enablebanking.com`,
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com https://cdn.recapt.app`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com`,
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
@@ -65,8 +65,41 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
+  // PostHog sends trailing-slash API requests; without this Next 308s them
+  // and the events are lost. Required by the reverse proxy below.
+  skipTrailingSlashRedirect: true,
   experimental: {
     optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
+  },
+  // PostHog reverse proxy. Keeping analytics same-origin buys three things:
+  // the strict CSP below needs NO posthog hosts (`connect-src 'self'` already
+  // covers ingestion, `script-src 'self'` the lazy-loaded replay/survey
+  // bundles), tracking blockers have no third-party host to match, and the
+  // Recapt host allowlist is replaced by nothing at all.
+  //
+  // `/rl` is deliberately meaningless: PostHog's own guidance is that obvious
+  // prefixes (/analytics, /tracking, /telemetry, /posthog, and increasingly
+  // /ingest) are on blocker filter lists. It must stay in sync with `api_host`
+  // in instrumentation-client.ts AND with the matcher exclusion in proxy.ts,
+  // or middleware redirects the ingestion POSTs to /login.
+  //
+  // Both /static/* and /array/* must point at the ASSETS origin, not the
+  // ingestion origin: array/ serves the config bundle and is easy to miss.
+  async rewrites() {
+    return [
+      {
+        source: '/rl/static/:path*',
+        destination: 'https://eu-assets.i.posthog.com/static/:path*',
+      },
+      {
+        source: '/rl/array/:path*',
+        destination: 'https://eu-assets.i.posthog.com/array/:path*',
+      },
+      {
+        source: '/rl/:path*',
+        destination: 'https://eu.i.posthog.com/:path*',
+      },
+    ]
   },
   async redirects() {
     const appUrlForRedirect = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, '')

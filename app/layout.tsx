@@ -9,8 +9,6 @@ import { Toaster } from "@/components/ui/toaster";
 import { DeployReloadPrompt } from "@/components/system/DeployReloadPrompt";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
-import { RecaptLoader } from "@/components/RecaptLoader";
-import { RecaptHideWidget } from "@/components/RecaptHideWidget";
 import { ScrollbarReveal } from "@/components/ScrollbarReveal";
 import { ensureInitialized } from "@/lib/init";
 import { getBranding } from "@/lib/branding/service";
@@ -77,7 +75,6 @@ export default async function RootLayout({
     <html lang={locale} suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable}`}>
       <head>
         <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
-        <RecaptLoader />
       </head>
       <body
         className="antialiased"
@@ -95,7 +92,6 @@ export default async function RootLayout({
               {children}
               <Toaster />
               <DeployReloadPrompt />
-              <RecaptHideWidget />
               <ScrollbarReveal />
             </SWRProvider>
           </ThemeProvider>

@@ -151,14 +151,26 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2">SCCs (standardavtalsklausuler)</td>
                   </tr>
                   <tr className="border-b">
-                    <td className="py-2 pr-4 font-medium">Recapt</td>
+                    <td className="py-2 pr-4 font-medium">PostHog</td>
                     <td className="py-2 pr-4">
-                      Produktanalys och användarfeedback. Laddas endast för
-                      inloggade användare (ej sandbox/demo). Överförda
-                      uppgifter: användar-ID, e-postadress och företagsnamn.
+                      Produktanalys, sessionsinspelning, felrapportering,
+                      enkäter och supportärenden. Överförda uppgifter:
+                      användar-ID, e-postadress, namn och företagsnamn. Om du
+                      själv skriver till supporten i appen skickas även ditt
+                      meddelande dit som ett ärende, så att vi kan svara. All text i
+                      sessionsinspelningar maskeras: vi spelar in var i
+                      gränssnittet du klickar, aldrig vad som står i din
+                      bokföring. Organisationsnummer överförs aldrig.
+                      Identifiering sker endast för inloggade användare (ej
+                      sandbox/demo). Inga kakor eller annan lagring på din
+                      enhet används för analysen; enkäter sparar enbart en
+                      lokal markering om att du redan sett dem.
                     </td>
-                    <td className="py-2 pr-4">EU</td>
-                    <td className="py-2">SCCs vid eventuella underbiträden utanför EES</td>
+                    <td className="py-2 pr-4">EU (Frankfurt)</td>
+                    <td className="py-2">
+                      EU-baserad: ingen tredjelandsöverföring. DPA, SCCs vid
+                      eventuella underbiträden utanför EES.
+                    </td>
                   </tr>
                 </tbody>
               </table>
