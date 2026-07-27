@@ -162,9 +162,13 @@ export default function PrivacyPolicyPage() {
                       gränssnittet du klickar, aldrig vad som står i din
                       bokföring. Organisationsnummer överförs aldrig.
                       Identifiering sker endast för inloggade användare (ej
-                      sandbox/demo). Inga kakor eller annan lagring på din
-                      enhet används för analysen; enkäter sparar enbart en
-                      lokal markering om att du redan sett dem.
+                      sandbox/demo). Inga kakor används, och själva analysdatan
+                      lagras inte på din enhet. Två små tekniska värden sparas
+                      dock lokalt: en markering om vilka enkäter du redan sett,
+                      så att du inte får samma fråga igen, och ett
+                      slumpmässigt ärende-ID som gör att du hittar tillbaka
+                      till ditt supportärende i samma webbläsare. Inget av dem
+                      innehåller personuppgifter.
                     </td>
                     <td className="py-2 pr-4">EU (Frankfurt)</td>
                     <td className="py-2">

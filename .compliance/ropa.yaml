@@ -588,7 +588,15 @@ processing_activities:
       - session_replay_masks_all_inputs
       - org_number_never_transmitted         # låst av test i lib/analytics/__tests__
       - no_pii_in_event_properties           # PII endast som person properties via identify()
-      - no_device_storage                    # persistence: 'memory', inga kakor, ingen consent-banner krävs
+      # persistence: 'memory' -> ingen analysdata och inga kakor på enheten.
+      # TVÅ undantag, båda funktionell UI-state utan personuppgifter, båda
+      # skrivna direkt till localStorage av PostHogs egna moduler förbi
+      # persistence-inställningen: seenSurvey_<id> ("visa inte igen") och
+      # ph_conv_<token> = {"widgetSessionId": uuid} (hitta tillbaka till sitt
+      # eget ärende i samma webbläsare). ph_conv skapas vid sidladdning, alltså
+      # innan användaren faktiskt kontaktar supporten. Verifierat i prod.
+      - no_analytics_data_or_cookies_on_device
+      - only_functional_ui_state_persisted   # seenSurvey_*, ph_conv_* (uuid, ingen PII)
       - same_origin_reverse_proxy            # /rl-rewrite; ingen tredjepartsvärd i CSP
       - sandbox_companies_never_identified
       - disabled_entirely_when_self_hosted
