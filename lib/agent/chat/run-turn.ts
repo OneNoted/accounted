@@ -1,5 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getAnthropic, SONNET_MODEL } from '@/lib/agent/composer/client'
+import {
+  getAnthropic,
+  MAX_TOKENS_DEEP,
+  MAX_TOKENS_NO_THINKING,
+  MAX_TOKENS_STANDARD,
+  SONNET_MODEL,
+} from '@/lib/agent/composer/client'
 import type { AgentIntent } from '@/lib/agent/intents/types'
 import { agentToolRegistry } from '@/lib/agent/tools/registry'
 import type { AgentTool, AgentActorContext, StagedOperationResult } from '@/lib/agent/tools/types'
@@ -242,13 +248,28 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
   // Extended thinking ("tänka längre"): when the intent opts in, every model
   // call in the loop gets a reasoning channel so the agent reasons BEFORE it
   // answers or commits to a tool, instead of narrating its steps in the
-  // visible reply. budget_tokens must be ≥ 1024 and strictly below max_tokens,
-  // so the normal 4096 output budget is added on top. The reasoning streams to
-  // the client as reasoning_delta and renders in a collapsible "Tänkte…" block.
+  // visible reply. The reasoning streams to the client as reasoning_delta and
+  // renders in a collapsible "Tänkte…" block.
+  //
+  // display:'summarized' is load-bearing, not cosmetic. The default is
+  // 'omitted', which still emits thinking blocks but with empty text: measured
+  // on this account at xhigh effort, summarized returned ~1k characters of
+  // reasoning and the default returned none. Without it the collapsible
+  // "Tänker …" block in the chat would silently never populate.
+  //
+  // max_tokens now covers thinking and the reply together, so the ceiling
+  // follows what the intent opted into. An intent with no thinking keeps its
+  // reply-sized cap: giving it the reasoning tier's headroom would let a plain
+  // answer run four times longer for no reason.
   const thinking = intent.thinking
-    ? { type: 'enabled' as const, budget_tokens: intent.thinking.budgetTokens }
+    ? { type: 'adaptive' as const, display: 'summarized' as const }
     : undefined
-  const maxTokens = (intent.thinking?.budgetTokens ?? 0) + 4096
+  const outputConfig = intent.thinking ? { effort: intent.thinking.effort } : undefined
+  const maxTokens = !intent.thinking
+    ? MAX_TOKENS_NO_THINKING
+    : intent.thinking.effort === 'xhigh' || intent.thinking.effort === 'max'
+      ? MAX_TOKENS_DEEP
+      : MAX_TOKENS_STANDARD
 
   // 4 + 5 + 6: iterate until the model stops requesting tools.
   while (iterations < MAX_TOOL_ITERATIONS) {
@@ -266,6 +287,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
       messages,
       tools: tools.length > 0 ? tools.map(toAnthropicTool) : undefined,
       ...(thinking ? { thinking } : {}),
+      ...(outputConfig ? { output_config: outputConfig } : {}),
     })
 
     stream.on('text', (delta) => {
