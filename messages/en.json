@@ -2137,6 +2137,7 @@
     "copy_aria": "Copy",
     "copy_failed": "Could not copy. Select the text above and copy it manually.",
     "connect_mcp_title": "Connect MCP client",
+    "works_with_ai": "Works with Claude, ChatGPT, and other AI assistants.",
     "recommended_badge": "Recommended",
     "claude_ai_instructions": "Go to <path>Settings → Connectors → Add custom connector</path> and paste the MCP server URL. You sign in via your {connectorName} account: no API key needed.",
     "claude_code_cursor": "Claude Code / Cursor",

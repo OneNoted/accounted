@@ -15,6 +15,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { formatDateLong } from '@/lib/utils'
 import { BillingActions } from '@/components/settings/BillingActions'
+import { ILLUSTRATIONS, illustrationSrc } from '@/components/onboarding/onboarding-illustrations'
 
 // What the paid tier unlocks (mirrors lib/entitlements PAID_CAPABILITIES).
 const INCLUDED = [
@@ -47,6 +48,36 @@ interface BillingView {
   chargeDeferred: boolean
   paidJustNow: boolean
   isDemo: boolean
+}
+
+/**
+ * Decorative masthead: the marketing site's halftone Stockholm skyline as a
+ * quiet wide banner, echoing the onboarding backdrop so the paid surface
+ * feels like the same product. Purely decorative (aria-hidden, empty alt),
+ * no text, one gesture.
+ */
+function BillingHero() {
+  const art = ILLUSTRATIONS['about-stockholm']
+  return (
+    <div
+      aria-hidden
+      className="relative mt-6 h-40 overflow-hidden rounded-lg border border-border bg-frame"
+    >
+      {/* Anchored so the skyline's waterline sits on the strip's bottom edge
+          (the water reflection falls below it), spires reaching up into the
+          strip: same physics as the onboarding backdrop. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={illustrationSrc('about-stockholm')}
+        width={art.w}
+        height={art.h}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        className="absolute bottom-0 left-1/2 w-full min-w-[640px] -translate-x-1/2 translate-y-[51%] opacity-70 dark:opacity-40 dark:invert"
+      />
+    </div>
+  )
 }
 
 function FeatureList({ heading, items }: { heading: string; items: string[] }) {
@@ -149,7 +180,12 @@ export function BillingSettingsContent() {
     return () => { active = false }
   }, [reloadKey, errorLocale])
 
-  const header = <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
+  const header = (
+    <>
+      <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
+      <BillingHero />
+    </>
+  )
 
   if (!view) {
     return (
