@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import Link from 'next/link'
 import {
   Send,
@@ -25,6 +25,7 @@ import ApprovalCard from './ApprovalCard'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
+import { sendFeedback, type FeedbackSentiment } from './feedback-client'
 
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
@@ -738,6 +739,18 @@ export default function AgentChat({
     }
   }
 
+  // A vote needs the thread it belongs to. Without a conversation id there is
+  // nothing to attach the report to, so the buttons stay inert rather than
+  // posting a vote the backlog cannot trace to an answer.
+  const handleVote = useCallback(
+    async (sentiment: FeedbackSentiment) => {
+      const id = conversationIdRef.current
+      if (!id) return false
+      return sendFeedback({ conversationId: id, sentiment })
+    },
+    [],
+  )
+
   return (
     <div className="relative flex flex-col h-full min-h-0">
       {/* The chat had no live region at all, so a screen-reader user got no
@@ -774,6 +787,7 @@ export default function AgentChat({
               }
               onRegenerate={handleRegenerate}
               onCorrection={handleCorrection}
+              onVote={handleVote}
             />
           </div>
         ))}
@@ -869,12 +883,14 @@ function MessageBubble({
   showRegenerate,
   onRegenerate,
   onCorrection,
+  onVote,
 }: {
   message: ChatMessage
   streamingTail: boolean
   showRegenerate?: boolean
   onRegenerate?: () => void
   onCorrection?: (message: string) => void
+  onVote?: (sentiment: FeedbackSentiment) => Promise<boolean>
 }) {
   const isUser = message.role === 'user'
   // An assistant turn that contains only tool calls (no text, no streaming
@@ -992,6 +1008,7 @@ function MessageBubble({
         <MessageActions
           text={message.text}
           onRegenerate={showRegenerate ? onRegenerate : undefined}
+          onVote={onVote}
         />
       )}
     </div>
@@ -1001,20 +1018,36 @@ function MessageBubble({
 /**
  * Hover row under a finished assistant answer: copy, feedback, regenerate.
  *
- * Feedback is deliberately fire-and-forget and local-only for now: the point of
- * this row is that the affordances exist where users look for them. Wiring the
- * thumbs to gnubok_feedback is a follow-up, and a failed vote must never
- * interrupt reading an answer.
+ * The thumbs used to be local-only: they lit up and the vote died in component
+ * state. They now report to /api/agent/feedback, and the pressed state is set
+ * only once the server has accepted the vote, so the button never claims a
+ * report that did not happen.
+ *
+ * A vote does not toggle off. It emits an append-only telemetry event, and
+ * there is no un-emitting one, so offering an undo would be a control that
+ * lies. Changing your mind sends the other sentiment, which is a thing the
+ * backlog can actually see.
  */
 function MessageActions({
   text,
   onRegenerate,
+  onVote,
 }: {
   text: string
   onRegenerate?: () => void
+  onVote?: (sentiment: FeedbackSentiment) => Promise<boolean>
 }) {
   const [copied, setCopied] = useState(false)
   const [vote, setVote] = useState<'up' | 'down' | null>(null)
+  const [voting, setVoting] = useState(false)
+
+  async function handleVote(next: 'up' | 'down') {
+    if (voting || vote === next || !onVote) return
+    setVoting(true)
+    const ok = await onVote(next === 'up' ? 'positive' : 'negative')
+    setVoting(false)
+    if (ok) setVote(next)
+  }
 
   useEffect(() => {
     if (!copied) return
@@ -1043,8 +1076,9 @@ function MessageActions({
       </button>
       <button
         type="button"
-        onClick={() => setVote(vote === 'up' ? null : 'up')}
-        className={cn(btn, vote === 'up' && 'text-foreground')}
+        onClick={() => handleVote('up')}
+        disabled={voting || !onVote}
+        className={cn(btn, vote === 'up' && 'text-foreground', voting && 'opacity-60')}
         title="Bra svar"
         aria-pressed={vote === 'up'}
       >
@@ -1053,8 +1087,9 @@ function MessageActions({
       </button>
       <button
         type="button"
-        onClick={() => setVote(vote === 'down' ? null : 'down')}
-        className={cn(btn, vote === 'down' && 'text-foreground')}
+        onClick={() => handleVote('down')}
+        disabled={voting || !onVote}
+        className={cn(btn, vote === 'down' && 'text-foreground', voting && 'opacity-60')}
         title="Dåligt svar"
         aria-pressed={vote === 'down'}
       >
