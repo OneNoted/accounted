@@ -104,9 +104,11 @@ BEGIN
   -- 0. Tenant guard (mirrors 20260611140000): anon/authenticated may only act
   --    on their own companies; service_role / direct access bypasses. The
   --    NULL-safe caller_is_company_member() form (20260703180000), not the
-  --    raw `NOT IN (SELECT public.user_company_ids())` pattern: the raw shape
-  --    skips the deny branch on UNKNOWN and is banned by the pg-real ratchet
-  --    (tests/pg/null-safe-tenant-guards.pg.test.ts).
+  --    raw NOT-IN-over-user_company_ids() shape: that one skips the deny
+  --    branch on UNKNOWN and is banned by the pg-real ratchet
+  --    (tests/pg/null-safe-tenant-guards.pg.test.ts, which scans prosrc:
+  --    comments included, so the banned shape must not even be spelled out
+  --    here).
   IF v_jwt_role IN ('anon', 'authenticated') THEN
     IF NOT public.caller_is_company_member(p_company_id) THEN
       RETURN jsonb_build_object('ok', false, 'code', 'LINK_VOUCHER_INVOICE_NOT_FOUND');

@@ -94,8 +94,13 @@ describe('maskCustomerRow', () => {
   })
 
   it('passes through rows without a personal number', () => {
-    expect(maskCustomerRow({ id: 'c1', personal_number: null }).personal_number).toBeNull()
-    expect(maskCustomerRow({ id: 'c1' }).personal_number).toBeNull()
+    const withNull: { id: string; personal_number: string | null } = {
+      id: 'c1',
+      personal_number: null,
+    }
+    const withoutKey: { id: string; personal_number?: string | null } = { id: 'c1' }
+    expect(maskCustomerRow(withNull).personal_number).toBeNull()
+    expect(maskCustomerRow(withoutKey).personal_number).toBeNull()
   })
 })
 

@@ -19,40 +19,25 @@
  *     address local parts masked; body_html, body_text and bcc_addresses are
  *     never in the result shape at all.
  *
- * The role-claim simulation technique (set request.jwt.claims + SET LOCAL ROLE)
- * follows tests/pg/gl_lines_rpc_tenant_guard.pg.test.ts.
+ * The service-role simulation is the shared runAsServiceRole helper
+ * (tests/pg/setup.ts). A claims-JSON-only simulation (the
+ * gl_lines_rpc_tenant_guard technique) is NOT enough here: that guard parses
+ * `request.jwt.claims` itself, while this function asks auth.role(), which in
+ * the CI image's legacy auth shim reads only `request.jwt.claim.role`. The
+ * helper sets both GUC styles and fails loudly if auth.role() does not
+ * resolve.
  */
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import type { PoolClient } from 'pg'
-import { getPool, withUserContext } from './setup'
+import { getPool, runAsServiceRole, withUserContext } from './setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
 
 const FN = `SELECT * FROM public.list_invoice_delivery_summaries_for_service($1, $2, $3)`
 
-// Run `fn` with service-role claims and the service_role DB role, inside a
-// rolled-back transaction: the same simulation withUserContext uses for
-// authenticated sessions, but for the server-controlled service path.
-async function withServiceRoleContext<T>(
-  fn: (client: PoolClient) => Promise<T>,
-): Promise<T> {
-  const client = await getPool().connect()
-  try {
-    await client.query('BEGIN')
-    await client.query(
-      `SELECT set_config('request.jwt.claims', '{"role":"service_role"}', true)`,
-    )
-    await client.query('SET LOCAL ROLE service_role')
-    const result = await fn(client)
-    await client.query('ROLLBACK')
-    return result
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {})
-    throw err
-  } finally {
-    client.release()
-  }
-}
+// All calls inside the service context are reads (seeding happens over the
+// plain pool), so the shared helper's commit-on-success semantics are
+// equivalent to the rolled-back local helper this file used to carry.
+const withServiceRoleContext = runAsServiceRole
 
 async function insertInvoice(params: {
   userId: string

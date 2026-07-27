@@ -52,14 +52,14 @@ beforeEach(() => {
 describe('GET /api/export/customers', () => {
   it('returns 401 when unauthenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
-    const res = await GET(createMockRequest('/api/export/customers'))
+    const res = await GET(createMockRequest('/api/export/customers'), { params: Promise.resolve({}) })
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(401)
   })
 
   it('returns an xlsx customer register', async () => {
     enqueue({ data: { company_name: 'Acme AB' } })
-    const res = await GET(createMockRequest('/api/export/customers'))
+    const res = await GET(createMockRequest('/api/export/customers'), { params: Promise.resolve({}) })
 
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toContain('spreadsheetml')
@@ -75,7 +75,7 @@ describe('GET /api/export/customers', () => {
 
   it('returns a CSV with BOM when format=csv', async () => {
     enqueue({ data: { company_name: 'Acme AB' } })
-    const res = await GET(createMockRequest('/api/export/customers', { searchParams: { format: 'csv' } }))
+    const res = await GET(createMockRequest('/api/export/customers', { searchParams: { format: 'csv' } }), { params: Promise.resolve({}) })
 
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toContain('text/csv')
@@ -102,7 +102,7 @@ describe('GET /api/export/customers', () => {
     ])
     enqueue({ data: { company_name: 'Acme AB' } })
 
-    const res = await GET(createMockRequest('/api/export/customers'))
+    const res = await GET(createMockRequest('/api/export/customers'), { params: Promise.resolve({}) })
     expect(res.status).toBe(200)
 
     const buf = Buffer.from(await res.arrayBuffer())
@@ -134,7 +134,7 @@ describe('GET /api/export/customers', () => {
     ])
     enqueue({ data: { company_name: 'Acme AB' } })
 
-    const res = await GET(createMockRequest('/api/export/customers', { searchParams: { format: 'csv' } }))
+    const res = await GET(createMockRequest('/api/export/customers', { searchParams: { format: 'csv' } }), { params: Promise.resolve({}) })
     expect(res.status).toBe(200)
 
     const text = Buffer.from(await res.arrayBuffer()).toString('utf-8')
@@ -146,7 +146,7 @@ describe('GET /api/export/customers', () => {
     // Org numbers are public registry data: they export untouched, and the
     // masking branch only engages when org_number is absent.
     enqueue({ data: { company_name: 'Acme AB' } })
-    const res = await GET(createMockRequest('/api/export/customers', { searchParams: { format: 'csv' } }))
+    const res = await GET(createMockRequest('/api/export/customers', { searchParams: { format: 'csv' } }), { params: Promise.resolve({}) })
     const text = Buffer.from(await res.arrayBuffer()).toString('utf-8')
     expect(text).toContain('5560217780')
   })

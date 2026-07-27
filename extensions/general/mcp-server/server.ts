@@ -117,6 +117,12 @@ import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '@/lib/salary/personnummer'
+import {
+  deriveAgiFilingState,
+  resolveRunAgiKvittensnummer,
+  resolveRunAgiSubmission,
+  type AgiSubmissionState,
+} from '@/lib/salary/agi-submission-state'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
@@ -133,7 +139,7 @@ import {
   validateVoucherForSupplierInvoiceLink,
 } from '@/lib/invoices/supplier-voucher-matching'
 import { findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
-import { closePeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { closePeriod, countUnbookedInPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
@@ -628,6 +634,13 @@ async function resolveJournalEntryRef(
 
 // ── Shared categorization logic ──────────────────────────────
 
+// ── Lock-period staging guard ────────────────────────────────────────────────
+//
+// The staging pre-check runs the exact same countUnbookedInPeriod the commit
+// path (lockPeriod) enforces, imported from period-service so the two legal
+// guards cannot drift apart. See the DECISIONS.md 2026-07-26 lock-guard entry
+// for the predicate semantics.
+
 async function categorizeTransactionCore(
   txId: string,
   category: TransactionCategory,
@@ -1095,10 +1108,22 @@ const SKV_AGI_STATUS_OUTPUT_SCHEMA = {
   properties: {
     salary_run_id: { type: 'string' },
     period: { type: 'string', description: 'YYYYMM' },
-    local_state: { type: ['object', 'null'], description: 'Locally cached submission state' },
+    filing_state: {
+      type: 'string',
+      enum: ['none', 'generated', 'underlag_submitted', 'awaiting_signing', 'signed'],
+      description: "Run-scoped: a correction run reports its own state, never the superseded original run's.",
+    },
+    kvittensnummer: {
+      type: ['string', 'null'],
+      description: "Kvittens for THIS run's signed AGI; null until signed.",
+    },
+    local_state: {
+      type: ['object', 'null'],
+      description: 'Run-scoped cached submission record; null when the period record belongs to a sibling run.',
+    },
     kvittenser: { type: ['array', 'null'], description: 'Signed receipts from Skatteverket, or null when unavailable' },
   },
-  required: ['salary_run_id', 'period', 'local_state', 'kvittenser'],
+  required: ['salary_run_id', 'period', 'filing_state', 'kvittensnummer', 'local_state', 'kvittenser'],
 } as const
 
 // ── VAT report computation (shared by gnubok_get_vat_report + gnubok_vat_review_widget) ──
@@ -9938,7 +9963,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_employees',
     title: 'List Employees',
-    description: 'List employees for the active company. Personnummer is returned masked under personnummer_masked (YYYYMMDD-XXXX); the full value is never exposed on this surface.',
+    description: 'List employees for the active company. Personnummer is returned masked as personnummer_masked (YYYYMMDD-XXXX).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -10534,7 +10559,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_agi_status',
     title: 'AGI Declaration Status (Arbetsgivardeklaration)',
-    description: 'Fetch AGI filing status for a salary run: local submission state plus live Skatteverket kvittenser (signed receipts) when available. Returns kvittensnummer/signeradTid once the AGI has been signed.',
+    description: "Fetch AGI filing status for a salary run: run-scoped filing_state and kvittensnummer (a correction run never inherits the superseded original's receipt), plus live Skatteverket kvittenser.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -10553,7 +10578,9 @@ export const tools: McpTool[] = [
       try {
         const { data: run } = await supabase
           .from('salary_runs')
-          .select('id, period_year, period_month')
+          // agi_generated_at / agi_submitted_at feed the run-scoped filing
+          // resolution below.
+          .select('id, period_year, period_month, agi_generated_at, agi_submitted_at')
           .eq('id', salaryRunId)
           .eq('company_id', companyId)
           .maybeSingle()
@@ -10568,10 +10595,27 @@ export const tools: McpTool[] = [
           .eq('extension_id', 'skatteverket')
           .eq('key', `agi_submission_${period}`)
           .maybeSingle()
-        let localState: unknown = null
+        let periodRecord: AgiSubmissionState | null = null
         if (localRow?.value) {
-          try { localState = JSON.parse(localRow.value as string) } catch { localState = null }
+          try { periodRecord = JSON.parse(localRow.value as string) as AgiSubmissionState } catch { periodRecord = null }
         }
+        // Run-scope the period-keyed record (lib/salary/agi-submission-state.ts,
+        // same resolution AGIPanel and the run page use). salary_runs is unique
+        // per period only for non-corrected runs (partial index, migration
+        // 20260414130000), so a correction run coexists with the run it
+        // corrects and the two share one agi_submission_{period} record.
+        // Returning that record raw rendered a correction as already filed
+        // with the ORIGINAL run's kvittens, hiding the filing action: a
+        // correction is a complete resubmission for the same
+        // redovisningsperiod that gets its own kvittens.
+        const runForFiling = {
+          id: run.id as string,
+          agi_generated_at: (run as { agi_generated_at?: string | null }).agi_generated_at ?? null,
+          agi_submitted_at: (run as { agi_submitted_at?: string | null }).agi_submitted_at ?? null,
+        }
+        const ownSubmission = resolveRunAgiSubmission(runForFiling, periodRecord)
+        const filingState = deriveAgiFilingState(runForFiling, periodRecord)
+        const kvittensnummer = resolveRunAgiKvittensnummer(runForFiling, periodRecord)
         // Live kvittenser (read-only). A non-ok read (e.g. nothing filed yet)
         // leaves kvittenser null rather than hard-failing the status check;
         // auth errors throw and map to SKATTEVERKET_NOT_CONNECTED.
@@ -10582,7 +10626,16 @@ export const tools: McpTool[] = [
           outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
         })
         if (res.ok) kvittenser = res.data.kvittenser
-        return { salary_run_id: salaryRunId, period, local_state: localState, kvittenser }
+        return {
+          salary_run_id: salaryRunId,
+          period,
+          filing_state: filingState,
+          kvittensnummer,
+          // Run-scoped: null when the period record belongs to another run
+          // (the agent must not read a sibling run's receipt as this one's).
+          local_state: ownSubmission,
+          kvittenser,
+        }
       } catch (err) {
         throw mapSkatteverketError(err)
       }
@@ -11598,7 +11651,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_lock_period',
     title: 'Lock Fiscal Period',
-    description: 'Stage period lock: blocks new entries. Requires zero unbooked business transactions. High-risk, always staged.',
+    description: 'Stage period lock: blocks new entries. Requires zero untriaged or unbooked business transactions in the period. High-risk, always staged.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11629,18 +11682,47 @@ export const tools: McpTool[] = [
       if (period.is_closed) throw new Error('Period is already closed')
       if (period.locked_at) throw new Error('Period is already locked')
 
-      const { count: unbookedCount } = await supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null)
-        .eq('is_business', true)
-        .gte('date', period.period_start)
-        .lte('date', period.period_end)
-
-      if (unbookedCount && unbookedCount > 0) {
+      // Same predicate the commit path (lockPeriod in period-service.ts)
+      // enforces, so the approval card can never claim zero unbooked while
+      // the period holds untriaged or unbooked business transactions. Fail
+      // closed: a guard that cannot run must not wave the staging through.
+      let unbooked: { untriaged: number; businessUnbooked: number }
+      try {
+        unbooked = await countUnbookedInPeriod(
+          supabase, companyId, period.period_start, period.period_end,
+        )
+      } catch (err) {
+        log.error('lock-period staging guard failed, refusing to stage', {
+          companyId,
+          fiscalPeriodId,
+          reason: err instanceof Error ? err.message : String(err),
+        })
+        // Deliberately matches NEITHER of the two load-bearing phrases below:
+        // an unreachable DB must not send an agent off remediating
+        // transactions (mirrors period-service.ts).
         throw new Error(
-          `Kan inte låsa period: ${unbookedCount} affärstransaktion(er) saknar bokföring. Bokför alla transaktioner först.`
+          'Kunde inte kontrollera obokförda banktransaktioner i perioden. Ingen låsning har föreslagits. Försök igen.'
+        )
+      }
+
+      const blockingCount = unbooked.untriaged + unbooked.businessUnbooked
+      if (blockingCount > 0) {
+        // Wording mirrors lockPeriod in period-service.ts and is load-bearing:
+        // "saknar bokföring" and /Kan inte låsa period:.*affärstransaktion/
+        // both feed matchers (inferCode in lib/errors/get-structured-error.ts
+        // derives PERIOD_HAS_UNBOOKED_TRANSACTIONS for the MCP surface).
+        const breakdown = [
+          unbooked.untriaged > 0 ? `${unbooked.untriaged} ej hanterade` : null,
+          unbooked.businessUnbooked > 0
+            ? `${unbooked.businessUnbooked} markerade som affärshändelse men utan verifikat`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(', ')
+        throw new Error(
+          `Kan inte låsa period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
+            `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden låses. ` +
+            `Bokför dem eller markera dem som privata eller ignorerade, och lås perioden därefter.`
         )
       }
 
@@ -11651,7 +11733,10 @@ export const tools: McpTool[] = [
           period_name: period.name,
           period_start: period.period_start,
           period_end: period.period_end,
+          // Both guard legs verified zero above; the commit path re-checks via
+          // lockPeriod, so this figure can never silently go stale.
           unbooked_business_transactions: 0,
+          untriaged_transactions: 0,
         },
         actor,
         {

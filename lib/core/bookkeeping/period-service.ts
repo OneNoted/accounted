@@ -35,7 +35,7 @@ const log = createLogger('period-service')
  * public.is_transaction_booked(uuid); this helper reproduces all three
  * locations so the guard does not block on already-booked rows.
  */
-interface UnbookedInPeriod {
+export interface UnbookedInPeriod {
   /** Never triaged: is_business IS NULL AND is_ignored = false. */
   untriaged: number
   /** Triaged as a business event but anchored to no verifikat at all. */
@@ -50,7 +50,7 @@ const ANCHOR_LOOKUP_CHUNK = 200
  * would strand. Throws on any query failure so the caller can fail closed:
  * never return 0 for a check that did not actually run.
  */
-async function countUnbookedInPeriod(
+export async function countUnbookedInPeriod(
   supabase: SupabaseClient,
   companyId: string,
   periodStart: string,

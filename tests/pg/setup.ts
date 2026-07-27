@@ -70,6 +70,17 @@ export async function withUserContext<T>(
 // success: the SIE bulk-delete suites assert persisted effects over the plain
 // pool afterwards. SET LOCAL scopes the claims and role to the transaction,
 // so the pooled connection is clean again after COMMIT/ROLLBACK either way.
+//
+// BOTH claim GUC styles are set, for the same reason withUserContext sets
+// both `request.jwt.claims` and `request.jwt.claim.sub`: the CI image
+// (supabase/postgres:15.8.1.060) ships the LEGACY auth shim, where
+// auth.role() reads ONLY `request.jwt.claim.role` (init-scripts/
+// 00000000000001-auth-schema.sql; no in-image migration redefines it), while
+// hosted Supabase runs the newer coalesce definition that also reads the
+// `request.jwt.claims` JSON. Setting only the JSON works against hosted-style
+// shims and silently leaves auth.role() NULL in CI, which is exactly the
+// failure mode that broke the service-actor suites. Functions that parse
+// `request.jwt.claims` themselves (the gl-lines guard shape) get the JSON.
 export async function runAsServiceRole<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
@@ -79,7 +90,23 @@ export async function runAsServiceRole<T>(
     await client.query(
       `SELECT set_config('request.jwt.claims', '{"role":"service_role"}', true)`,
     )
+    await client.query(
+      `SELECT set_config('request.jwt.claim.role', 'service_role', true)`,
+    )
     await client.query('SET LOCAL ROLE service_role')
+    // Fail loudly if the simulation did not land: otherwise every
+    // service-gated RPC raises 42501 and the real test failure points at an
+    // unrelated assertion (same rationale as the withUserContext check).
+    const check = await client.query<{ role: string | null; uid: string | null }>(
+      `SELECT auth.role()::text AS role, auth.uid()::text AS uid`,
+    )
+    if (check.rows[0]?.role !== 'service_role' || check.rows[0]?.uid !== null) {
+      throw new Error(
+        `runAsServiceRole: auth.role() resolved to ${check.rows[0]?.role ?? 'NULL'} ` +
+          `and auth.uid() to ${check.rows[0]?.uid ?? 'NULL'}; expected service_role/NULL. ` +
+          'Check which GUCs this harness auth shim reads.',
+      )
+    }
     const result = await fn(client)
     await client.query('COMMIT')
     return result

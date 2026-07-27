@@ -181,6 +181,104 @@ describe('gnubok_agi_submit', () => {
   })
 })
 
+describe('gnubok_agi_status: run-scoped filing state', () => {
+  // The period-keyed extension_data record is shared by every salary run of
+  // the month (a correction coexists with the run it corrects, migration
+  // 20260414130000). The tool must resolve it per run via
+  // lib/salary/agi-submission-state.ts, exactly like AGIPanel: a correction
+  // run reports unfiled-for-this-run even though the ORIGINAL's record says
+  // 'signed', so the filing action stays visible.
+  const ORIGINAL_RECORD = {
+    status: 'signed',
+    kvittensnummer: 'KV-ORIG-1',
+    salaryRunId: 'sr-original',
+    signeradTid: '2026-07-01T09:00:00Z',
+    updatedAt: '2026-07-01T09:00:00Z',
+  }
+
+  function enqueueStatusReads(
+    enqueue: (r: { data?: unknown; error?: unknown }) => void,
+    run: Record<string, unknown>,
+    record: Record<string, unknown> | null,
+  ) {
+    enqueue({ data: run }) // salary_runs
+    enqueue({ data: record ? { value: JSON.stringify(record) } : null }) // extension_data
+  }
+
+  beforeEach(() => {
+    mockResolveRedovisare.mockResolvedValue('165560000000')
+    // Nothing retrievable live: the run-scoping under test is purely local.
+    mockKvittenser.mockResolvedValue({ ok: false, status: 404 })
+  })
+
+  it('a correction run reports generated (unfiled) although the period record is the original run\'s signed receipt', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueStatusReads(enqueue, {
+      id: 'sr-correction',
+      period_year: 2026,
+      period_month: 6,
+      agi_generated_at: '2026-07-05T10:00:00Z',
+      agi_submitted_at: null,
+    }, ORIGINAL_RECORD)
+
+    const result = (await agiStatus.execute(
+      { salary_run_id: 'sr-correction' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as {
+      filing_state: string
+      kvittensnummer: string | null
+      local_state: Record<string, unknown> | null
+    }
+
+    // The correction has its own XML but no submission of its own: the
+    // original's receipt must not render it as filed.
+    expect(result.filing_state).toBe('generated')
+    expect(result.kvittensnummer).toBeNull()
+    expect(result.local_state).toBeNull()
+  })
+
+  it('the run that owns the record reports signed with its kvittensnummer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueStatusReads(enqueue, {
+      id: 'sr-original',
+      period_year: 2026,
+      period_month: 6,
+      agi_generated_at: '2026-06-28T08:00:00Z',
+      agi_submitted_at: '2026-07-01T09:00:00Z',
+    }, ORIGINAL_RECORD)
+
+    const result = (await agiStatus.execute(
+      { salary_run_id: 'sr-original' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as {
+      filing_state: string
+      kvittensnummer: string | null
+      local_state: Record<string, unknown> | null
+    }
+
+    expect(result.filing_state).toBe('signed')
+    expect(result.kvittensnummer).toBe('KV-ORIG-1')
+    expect(result.local_state).toMatchObject({ status: 'signed', salaryRunId: 'sr-original' })
+  })
+
+  it('a run with neither XML nor record reports none', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueStatusReads(enqueue, {
+      id: 'sr-fresh',
+      period_year: 2026,
+      period_month: 6,
+      agi_generated_at: null,
+      agi_submitted_at: null,
+    }, null)
+
+    const result = (await agiStatus.execute(
+      { salary_run_id: 'sr-fresh' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { filing_state: string; kvittensnummer: string | null; local_state: unknown }
+
+    expect(result.filing_state).toBe('none')
+    expect(result.kvittensnummer).toBeNull()
+    expect(result.local_state).toBeNull()
+  })
+})
+
 describe('Skatteverket tools: scopes', () => {
   it('maps the five tools to the right scopes', () => {
     expect(TOOL_SCOPE_MAP.gnubok_vat_declaration_validate).toBe('compliance:read')

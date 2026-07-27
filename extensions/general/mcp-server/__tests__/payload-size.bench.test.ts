@@ -136,9 +136,18 @@ describe('tools/list payload size guard', () => {
     //     discovery round-trips. Schema prose trimmed to the floor first;
     //     headroom before the change was ~15 tokens, and the remainder is
     //     the wire contract agents read the loadout through.
+    //   * 57.5K → 58K with the run-scoped AGI filing contract on
+    //     gnubok_agi_status (filing_state enum + kvittensnummer + run-scoped
+    //     local_state): a correction run must be able to tell, from the wire
+    //     contract alone, that it is unfiled for this run even though the
+    //     period record holds the superseded original's receipt (a correction
+    //     is a full resubmission with its own kvittens). Descriptions were
+    //     trimmed to the floor first (agi_status, lock_period, list_employees
+    //     gave back ~100 tokens); the ~90-token remainder is the contract
+    //     agents read the filing state through.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(57_500)
+    expect(approxTokens).toBeLessThan(58_000)
   })
 })
