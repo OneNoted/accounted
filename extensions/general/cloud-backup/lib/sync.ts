@@ -9,30 +9,25 @@ import { buildDriveFolderReadme } from '@/lib/reports/archive-readme'
 import { getBranding } from '@/lib/branding/service'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import {
-  getOAuthEnv,
-  refreshAccessToken,
-  GoogleTokenRefreshError,
-} from './google-oauth'
-import {
-  DriveFileGoneError,
-  ensureFolder,
-  getFileMeta,
-  updateFile,
-  uploadFile,
-  type UploadResult,
-} from './google-drive'
+import { CloudTokenRefreshError, type CloudStorageProvider } from './cloud-provider'
+import { googleDriveProvider } from './google-provider'
 import { decryptToken } from './crypto'
 import type {
-  DriveFileState,
-  GoogleDriveConnection,
-  GoogleDriveLastSync,
+  CloudConnection,
+  CloudFileState,
+  CloudLastSync,
 } from '../types'
 
+export { ROOT_FOLDER_NAME } from './folder-names'
+
+/**
+ * Google Drive's storage keys, re-exported for the call sites that predate
+ * multi-provider support. Provider-aware code reads `provider.keys` instead:
+ * Dropbox owns `dropbox_*` records alongside these.
+ */
 export const CONNECTION_KEY = 'google_drive_connection'
 export const LAST_SYNC_KEY = 'google_drive_last_sync'
 export const SCHEDULE_KEY = 'google_drive_schedule'
-export const ROOT_FOLDER_NAME = 'gnubok'
 /**
  * Per-FILE ceiling, not per-backup: the backup splits into one archive per
  * räkenskapsår plus Grunddata.zip, and uploads are resumable/chunked. The
@@ -62,8 +57,8 @@ export type SyncFailureReason =
 export type PerformSyncResult =
   | {
       ok: true
-      lastSync: GoogleDriveLastSync
-      /** Link to the company's backup folder in Drive. */
+      lastSync: CloudLastSync
+      /** Link to the company's backup folder at the provider. */
       webViewLink: string
       uploadedCount: number
       skippedCount: number
@@ -89,11 +84,17 @@ interface PerformSyncParams {
    * off and lets the user choose via a dialog.
    */
   allowDocumentFallback?: boolean
+  /**
+   * Destination. Defaults to Google Drive, which is what every caller meant
+   * before Dropbox existed. Each provider keeps its own connection, last-sync
+   * and schedule records, so syncing one never disturbs the other.
+   */
+  provider?: CloudStorageProvider
 }
 
 interface PlannedFile {
   key: string
-  kind: DriveFileState['kind']
+  kind: CloudFileState['kind']
   periodId?: string
   name: string
   contentType: string
@@ -111,14 +112,17 @@ interface PeriodRow {
 /**
  * Run the end-to-end cloud backup sync against the per-fiscal-year layout:
  *
- *   gnubok/<company>/Arkiv <år>.zip   one per räkenskapsår
- *   gnubok/<company>/Grunddata.zip    registers, SIE originals, audit trail
- *   gnubok/<company>/LÄSMIG.txt       folder map
+ *   <company>/Arkiv <år>.zip   one per räkenskapsår
+ *   <company>/Grunddata.zip    registers, SIE originals, audit trail
+ *   <company>/LÄSMIG.txt       folder map
+ *
+ * (Google Drive nests that company folder under a `gnubok/` root; Dropbox's
+ * app folder already provides one.)
  *
  * Every file carries a fingerprint (entry/document counts + latest
  * timestamps); only files whose fingerprint changed are regenerated and
- * uploaded, in place (Drive keeps ~30 days of prior versions). State is
- * persisted after every upload, so an interrupted run resumes where it
+ * uploaded, in place (both providers keep prior versions for ~30 days). State
+ * is persisted after every upload, so an interrupted run resumes where it
  * stopped instead of re-uploading finished years.
  *
  * Settings ops use raw `extension_data` queries (not the extension context
@@ -126,6 +130,8 @@ interface PeriodRow {
  */
 export async function performSync(params: PerformSyncParams): Promise<PerformSyncResult> {
   const { supabase, companyId, userId, origin } = params
+  const provider = params.provider ?? googleDriveProvider
+  const keys = provider.keys
 
   // Archive generation reads the private `documents` bucket, whose SELECT
   // policy only covers the uploader's own folder. User-triggered syncs pass
@@ -136,37 +142,39 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
   // by the explicit companyId.
   const archiveClient = createServiceClient()
 
-  const connection = await loadExtensionData<GoogleDriveConnection>(
+  const connection = await loadExtensionData<CloudConnection>(
     supabase,
     companyId,
-    CONNECTION_KEY
+    keys.connection
   )
   if (!connection) {
-    return { ok: false, reason: 'not_connected', message: 'Google Drive not connected' }
+    return {
+      ok: false,
+      reason: 'not_connected',
+      message: `${provider.label} not connected`,
+    }
   }
 
-  const env = getOAuthEnv(origin)
   const refreshToken = decryptToken(connection.refresh_token_encrypted)
   let accessToken: string
   try {
-    const refreshed = await refreshAccessToken(env, refreshToken)
-    accessToken = refreshed.access_token
+    accessToken = await provider.refreshAccessToken(refreshToken, origin)
   } catch (err) {
-    if (err instanceof GoogleTokenRefreshError && err.isInvalidGrant) {
+    if (err instanceof CloudTokenRefreshError && err.isInvalidGrant) {
       // The refresh token is permanently dead (revoked or expired). Flag the
       // connection so the cron stops retrying it and the UI can ask the user
       // to reconnect. Other failures (network, 5xx) stay throwing: they are
       // transient and worth retrying.
-      const flagged: GoogleDriveConnection = {
+      const flagged: CloudConnection = {
         ...connection,
         status: 'needs_reauth',
         needs_reauth_at: new Date().toISOString(),
       }
-      await saveExtensionData(supabase, companyId, userId, CONNECTION_KEY, flagged)
+      await saveExtensionData(supabase, companyId, userId, keys.connection, flagged)
       return {
         ok: false,
         reason: 'needs_reauth',
-        message: 'Google Drive authorization expired; reconnect required',
+        message: `${provider.label} authorization expired; reconnect required`,
       }
     }
     throw err
@@ -174,39 +182,16 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
 
   const company = await fetchCompanyInfo(supabase, companyId)
 
-  let rootFolderId = connection.root_folder_id
-  let companyFolderId = connection.company_folder_id
-  // Revalidate cached folder ids: files created inside a trashed folder are
-  // purged with it, so a folder the user trashed or deleted must never
-  // receive uploads. `trashed` is inherited from parents, so checking the
-  // company folder covers a trashed root too; the root is only re-checked
-  // when the company folder needs recreating.
-  if (companyFolderId) {
-    const meta = await getFileMeta(accessToken, companyFolderId)
-    if (!meta || meta.trashed) companyFolderId = null
-  }
-  if (!companyFolderId && rootFolderId) {
-    const rootMeta = await getFileMeta(accessToken, rootFolderId)
-    if (!rootMeta || rootMeta.trashed) rootFolderId = null
-  }
-  if (!rootFolderId) {
-    const root = await ensureFolder(accessToken, ROOT_FOLDER_NAME, null)
-    rootFolderId = root.id
-  }
-  if (!companyFolderId) {
-    const companyFolder = await ensureFolder(accessToken, company.label, rootFolderId)
-    companyFolderId = companyFolder.id
-  }
-  if (
-    rootFolderId !== connection.root_folder_id ||
-    companyFolderId !== connection.company_folder_id ||
-    connection.status === 'needs_reauth'
-  ) {
+  const { target, connectionPatch } = await provider.prepareTarget({
+    accessToken,
+    connection,
+    companyLabel: company.label,
+  })
+  if (connectionPatch || connection.status === 'needs_reauth') {
     // A successful refresh also clears a stale needs_reauth flag.
-    await saveExtensionData(supabase, companyId, userId, CONNECTION_KEY, {
+    await saveExtensionData(supabase, companyId, userId, keys.connection, {
       ...connection,
-      root_folder_id: rootFolderId,
-      company_folder_id: companyFolderId,
+      ...connectionPatch,
       status: 'active',
       needs_reauth_at: undefined,
     })
@@ -389,25 +374,26 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
   })
 
   // ---- Execute: regenerate + upload only what changed. ----
-  const previous = await loadExtensionData<GoogleDriveLastSync>(
+  const previous = await loadExtensionData<CloudLastSync>(
     supabase,
     companyId,
-    LAST_SYNC_KEY
+    keys.lastSync
   )
-  const stateByKey = new Map<string, DriveFileState>()
+  const stateByKey = new Map<string, CloudFileState>()
   for (const file of previous?.files ?? []) {
     stateByKey.set(fileKey(file), file)
   }
 
-  const persistSnapshot = async (): Promise<GoogleDriveLastSync> => {
+  const persistSnapshot = async (): Promise<CloudLastSync> => {
     const files = [...stateByKey.values()]
-    const lastSync: GoogleDriveLastSync = {
+    const lastSync: CloudLastSync = {
       at: new Date().toISOString(),
-      folder_id: companyFolderId!,
+      folder_id: target.folderId,
+      web_view_link: target.webViewLink,
       files,
       total_size_bytes: files.reduce((sum, f) => sum + f.size_bytes, 0),
     }
-    await saveExtensionData(supabase, companyId, userId, LAST_SYNC_KEY, lastSync)
+    await saveExtensionData(supabase, companyId, userId, keys.lastSync, lastSync)
     return lastSync
   }
 
@@ -421,27 +407,18 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     }
 
     const bytes = await plan.generate()
-    let uploaded: UploadResult
-    if (prev?.file_id && prev.file_name === plan.name) {
-      try {
-        uploaded = await updateFile(accessToken, prev.file_id, bytes, plan.contentType)
-      } catch (err) {
-        if (err instanceof DriveFileGoneError) {
-          // The user deleted the file in Drive: recreate it.
-          uploaded = await uploadFile(
-            accessToken,
-            companyFolderId,
-            plan.name,
-            bytes,
-            plan.contentType
-          )
-        } else {
-          throw err
-        }
-      }
-    } else {
-      uploaded = await uploadFile(accessToken, companyFolderId, plan.name, bytes, plan.contentType)
-    }
+    const uploaded = await provider.putFile({
+      accessToken,
+      target,
+      name: plan.name,
+      // Only reuse the remote handle when it still belongs to this file name:
+      // a renamed archive (a fiscal year that changed shape) must not
+      // overwrite the file the old name points at.
+      previousId:
+        prev?.file_id && prev.file_name === plan.name ? prev.file_id : undefined,
+      data: bytes,
+      contentType: plan.contentType,
+    })
 
     stateByKey.set(plan.key, {
       kind: plan.kind,
@@ -471,13 +448,13 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
   return {
     ok: true,
     lastSync,
-    webViewLink: `https://drive.google.com/drive/folders/${companyFolderId}`,
+    webViewLink: target.webViewLink,
     uploadedCount,
     skippedCount,
   }
 }
 
-function fileKey(file: DriveFileState): string {
+function fileKey(file: CloudFileState): string {
   return file.kind === 'period' ? `period:${file.period_id}` : file.kind
 }
 

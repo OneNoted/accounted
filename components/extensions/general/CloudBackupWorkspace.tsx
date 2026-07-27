@@ -11,8 +11,8 @@ export default function CloudBackupWorkspace(_props: WorkspaceComponentProps) {
       <Cloud className="h-12 w-12 text-muted-foreground/40 mb-4" />
       <h3 className="text-lg font-medium text-foreground">Molnsynkronisering</h3>
       <p className="text-sm text-muted-foreground mt-1 max-w-md">
-        Koppla ditt Google Drive-konto under Importera/Exportera för att synka arkiv till
-        din egen molnlagring.
+        Koppla ditt Google Drive- eller Dropbox-konto under Importera/Exportera för att
+        synka arkiv till din egen molnlagring.
       </p>
       <Button asChild variant="outline" className="mt-4">
         <Link href="/import#cloud-backup">

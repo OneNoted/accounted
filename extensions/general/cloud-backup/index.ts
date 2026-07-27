@@ -1,43 +1,30 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse, after } from 'next/server'
 import {
-  buildAuthorizationUrl,
-  exchangeCodeForTokens,
-  fetchUserEmail,
-  getOAuthEnv,
-  revokeToken,
-} from './lib/google-oauth'
-import {
   createOAuthState,
   decryptToken,
   encryptToken,
   verifyOAuthState,
 } from './lib/crypto'
-import {
-  performSync,
-  CONNECTION_KEY,
-  LAST_SYNC_KEY,
-  SCHEDULE_KEY,
-} from './lib/sync'
+import { performSync } from './lib/sync'
 import { stockholmHourToUtcHour } from './lib/schedule'
+import { CLOUD_PROVIDERS, providerFromRequest } from './lib/provider-registry'
+import { googleDriveProvider } from './lib/google-provider'
+import { dropboxProvider } from './lib/dropbox-provider'
+import type { CloudStorageProvider } from './lib/cloud-provider'
 import type {
   CloudBackupStatus,
-  GoogleDriveConnection,
-  GoogleDriveLastSync,
-  GoogleDriveSchedule,
+  CloudConnection,
+  CloudLastSync,
+  CloudProviderStatus,
+  CloudSchedule,
 } from './types'
 
 function jsonError(message: string, status = 500): Response {
   return NextResponse.json({ error: message }, { status })
 }
 
-async function loadConnection(
-  ctx: ExtensionContext
-): Promise<GoogleDriveConnection | null> {
-  return ctx.settings.get<GoogleDriveConnection>(CONNECTION_KEY)
-}
-
-const DEFAULT_SCHEDULE: GoogleDriveSchedule = {
+const DEFAULT_SCHEDULE: CloudSchedule = {
   enabled: false,
   hour_utc: 3,
   hour_local: 5, // 05:00 Swedish time, DST-stable: low-traffic default
@@ -46,10 +33,150 @@ const DEFAULT_SCHEDULE: GoogleDriveSchedule = {
   last_auto_sync_error: null,
 }
 
+/**
+ * Resolve the destination a request targets. An unknown `?provider=` value is
+ * an error rather than a silent fallback: writing a company's backup to the
+ * wrong destination because of a typo must never happen quietly.
+ *
+ * `requireConfigured` is for `/connect` alone, which cannot succeed without
+ * OAuth credentials. Every other route stays open even when a deployment loses
+ * its credentials: a user must always be able to disconnect an account or
+ * switch off a schedule, and locking those behind an env var would trap them.
+ */
+function resolveProvider(
+  request: Request,
+  options: { requireConfigured?: boolean } = {}
+): { provider: CloudStorageProvider } | { error: Response } {
+  const provider = providerFromRequest(request)
+  if (!provider) {
+    return { error: jsonError('unknown_provider', 400) }
+  }
+  if (options.requireConfigured && !provider.isConfigured()) {
+    return { error: jsonError('provider_not_configured', 400) }
+  }
+  return { provider }
+}
+
+async function readProviderStatus(
+  ctx: ExtensionContext,
+  provider: CloudStorageProvider
+): Promise<CloudProviderStatus> {
+  const connection = await ctx.settings.get<CloudConnection>(provider.keys.connection)
+  const lastSync = await ctx.settings.get<CloudLastSync>(provider.keys.lastSync)
+  const schedule = await ctx.settings.get<CloudSchedule>(provider.keys.schedule)
+  return {
+    provider: provider.id,
+    configured: provider.isConfigured(),
+    connected: !!connection,
+    needs_reauth: connection?.status === 'needs_reauth',
+    account_email: connection?.account_email ?? null,
+    connected_at: connection?.connected_at ?? null,
+    last_sync: lastSync ?? null,
+    schedule: schedule ?? null,
+  }
+}
+
+/**
+ * Shared OAuth callback body. Each provider needs its own route because the
+ * redirect URI is registered with the provider, but the exchange, the state
+ * check and the first-backup kickoff are identical.
+ */
+async function handleOAuthCallback(
+  request: Request,
+  ctx: ExtensionContext | undefined,
+  provider: CloudStorageProvider
+): Promise<Response> {
+  if (!ctx) return jsonError('Missing context', 500)
+  const url = new URL(request.url)
+  const code = url.searchParams.get('code')
+  const state = url.searchParams.get('state')
+  const errorParam = url.searchParams.get('error')
+  const origin = url.origin
+  const redirect = (status: string, reason?: string) => {
+    const target = new URL('/settings/backup', origin)
+    target.searchParams.set('cloud_backup', status)
+    target.searchParams.set('provider', provider.id)
+    if (reason) target.searchParams.set('reason', reason)
+    return NextResponse.redirect(target)
+  }
+
+  if (errorParam) {
+    return redirect('error', errorParam)
+  }
+  if (!code || !state) {
+    return redirect('error', 'missing_params')
+  }
+
+  const verified = verifyOAuthState(state)
+  if (!verified) {
+    return redirect('error', 'invalid_state')
+  }
+  if (verified.userId !== ctx.userId || verified.companyId !== ctx.companyId) {
+    return redirect('error', 'state_mismatch')
+  }
+
+  try {
+    const { refreshToken, accountLabel } = await provider.exchangeCode(origin, code)
+
+    const connection: CloudConnection = {
+      refresh_token_encrypted: encryptToken(refreshToken),
+      account_email: accountLabel,
+      connected_at: new Date().toISOString(),
+      root_folder_id: null,
+      company_folder_id: null,
+      company_folder_path: null,
+    }
+    await ctx.settings.set(provider.keys.connection, connection)
+
+    // First-time connections get daily auto-sync on by default: a
+    // backup that defaults to off protects nobody. Reconnects keep
+    // whatever schedule the user had. Each provider is scheduled
+    // independently, so connecting a second one does not disturb the first.
+    const existingSchedule = await ctx.settings.get<CloudSchedule>(
+      provider.keys.schedule
+    )
+    const firstConnect = !existingSchedule
+    if (firstConnect) {
+      await ctx.settings.set(provider.keys.schedule, {
+        ...DEFAULT_SCHEDULE,
+        enabled: true,
+      })
+    }
+
+    // Kick off the first backup after the redirect response is sent, so
+    // the user lands back on the card immediately while the archive
+    // builds in the background.
+    const syncOrigin = process.env.NEXT_PUBLIC_APP_URL || origin
+    after(async () => {
+      try {
+        await performSync({
+          supabase: ctx.supabase,
+          companyId: ctx.companyId,
+          userId: ctx.userId,
+          origin: syncOrigin,
+          includeDocuments: true,
+          allowDocumentFallback: true,
+          provider,
+        })
+      } catch (err) {
+        ctx.log.error(`initial ${provider.id} sync after connect failed`, err)
+      }
+    })
+
+    return redirect(firstConnect ? 'connected_first' : 'connected')
+  } catch (err) {
+    ctx.log.error(`${provider.id} oauth callback failed`, err)
+    return redirect(
+      'error',
+      err instanceof Error ? err.message.slice(0, 80) : 'exchange_failed'
+    )
+  }
+}
+
 export const cloudBackupExtension: Extension = {
   id: 'cloud-backup',
   name: 'Molnsynkronisering',
-  version: '1.0.0',
+  version: '1.1.0',
   sector: 'general',
 
   // The canonical entry point for cloud-backup is now `/import#cloud-backup`
@@ -62,17 +189,18 @@ export const cloudBackupExtension: Extension = {
   },
 
   apiRoutes: [
-    // Kick off OAuth: return the Google consent URL.
+    // Kick off OAuth: return the provider's consent URL.
     {
       method: 'POST',
       path: '/connect',
       handler: async (request, ctx) => {
         if (!ctx) return jsonError('Missing context', 500)
+        const resolved = resolveProvider(request, { requireConfigured: true })
+        if ('error' in resolved) return resolved.error
         try {
           const origin = new URL(request.url).origin
-          const env = getOAuthEnv(origin)
           const state = createOAuthState(ctx.userId, ctx.companyId)
-          const url = buildAuthorizationUrl(env, state)
+          const url = resolved.provider.buildAuthorizationUrl(origin, state)
           return NextResponse.json({ url })
         } catch (err) {
           ctx.log.error('connect failed', err)
@@ -84,115 +212,46 @@ export const cloudBackupExtension: Extension = {
       },
     },
 
-    // Google redirects here after the user consents.
+    // Google redirects here after the user consents. The path is registered
+    // with Google as an authorised redirect URI: never rename it.
     {
       method: 'GET',
-      path: '/oauth/callback',
-      handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
-        const url = new URL(request.url)
-        const code = url.searchParams.get('code')
-        const state = url.searchParams.get('state')
-        const errorParam = url.searchParams.get('error')
-        const origin = url.origin
-        const redirect = (status: string, reason?: string) => {
-          const target = new URL('/settings/backup', origin)
-          target.searchParams.set('cloud_backup', status)
-          if (reason) target.searchParams.set('reason', reason)
-          return NextResponse.redirect(target)
-        }
-
-        if (errorParam) {
-          return redirect('error', errorParam)
-        }
-        if (!code || !state) {
-          return redirect('error', 'missing_params')
-        }
-
-        const verified = verifyOAuthState(state)
-        if (!verified) {
-          return redirect('error', 'invalid_state')
-        }
-        if (verified.userId !== ctx.userId || verified.companyId !== ctx.companyId) {
-          return redirect('error', 'state_mismatch')
-        }
-
-        try {
-          const env = getOAuthEnv(origin)
-          const tokens = await exchangeCodeForTokens(env, code)
-          const email = await fetchUserEmail(tokens.access_token)
-
-          const connection: GoogleDriveConnection = {
-            refresh_token_encrypted: encryptToken(tokens.refresh_token),
-            account_email: email,
-            connected_at: new Date().toISOString(),
-            root_folder_id: null,
-            company_folder_id: null,
-          }
-          await ctx.settings.set(CONNECTION_KEY, connection)
-
-          // First-time connections get daily auto-sync on by default: a
-          // backup that defaults to off protects nobody. Reconnects keep
-          // whatever schedule the user had.
-          const existingSchedule =
-            await ctx.settings.get<GoogleDriveSchedule>(SCHEDULE_KEY)
-          const firstConnect = !existingSchedule
-          if (firstConnect) {
-            await ctx.settings.set(SCHEDULE_KEY, {
-              ...DEFAULT_SCHEDULE,
-              enabled: true,
-            })
-          }
-
-          // Kick off the first backup after the redirect response is sent, so
-          // the user lands back on the card immediately while the archive
-          // builds in the background.
-          const syncOrigin = process.env.NEXT_PUBLIC_APP_URL || origin
-          after(async () => {
-            try {
-              await performSync({
-                supabase: ctx.supabase,
-                companyId: ctx.companyId,
-                userId: ctx.userId,
-                origin: syncOrigin,
-                includeDocuments: true,
-                allowDocumentFallback: true,
-              })
-            } catch (err) {
-              ctx.log.error('initial sync after connect failed', err)
-            }
-          })
-
-          return redirect(firstConnect ? 'connected_first' : 'connected')
-        } catch (err) {
-          ctx.log.error('oauth callback failed', err)
-          return redirect(
-            'error',
-            err instanceof Error ? err.message.slice(0, 80) : 'exchange_failed'
-          )
-        }
-      },
+      path: googleDriveProvider.callbackPath,
+      handler: (request, ctx) => handleOAuthCallback(request, ctx, googleDriveProvider),
     },
 
-    // Revoke the refresh token and clear the stored connection + schedule.
+    // Dropbox equivalent, on its own registered redirect URI.
+    {
+      method: 'GET',
+      path: dropboxProvider.callbackPath,
+      handler: (request, ctx) => handleOAuthCallback(request, ctx, dropboxProvider),
+    },
+
+    // Revoke the refresh token and clear the stored connection + schedule for
+    // one provider. The other provider's records are untouched.
     {
       method: 'POST',
       path: '/disconnect',
-      handler: async (_request, ctx) => {
+      handler: async (request, ctx) => {
         if (!ctx) return jsonError('Missing context', 500)
+        const resolved = resolveProvider(request)
+        if ('error' in resolved) return resolved.error
+        const { provider } = resolved
         try {
-          const connection = await loadConnection(ctx)
+          const connection = await ctx.settings.get<CloudConnection>(
+            provider.keys.connection
+          )
           if (connection) {
             try {
               const refreshToken = decryptToken(connection.refresh_token_encrypted)
-              await revokeToken(refreshToken)
+              await provider.revoke(refreshToken, new URL(request.url).origin)
             } catch (err) {
               ctx.log.warn('token revoke failed (continuing)', err)
             }
           }
-          await ctx.settings.clear(CONNECTION_KEY)
-          await ctx.settings.clear(LAST_SYNC_KEY)
-          await ctx.settings.clear(SCHEDULE_KEY)
+          await ctx.settings.clear(provider.keys.connection)
+          await ctx.settings.clear(provider.keys.lastSync)
+          await ctx.settings.clear(provider.keys.schedule)
           return NextResponse.json({ ok: true })
         } catch (err) {
           ctx.log.error('disconnect failed', err)
@@ -204,47 +263,59 @@ export const cloudBackupExtension: Extension = {
       },
     },
 
-    // Read-only status used by the UI to show connected/last-sync info.
+    // Read-only status used by the UI to show connected/last-sync info for
+    // every provider. The top-level fields mirror Google Drive so clients
+    // written before Dropbox existed keep working.
     {
       method: 'GET',
       path: '/status',
       handler: async (_request, ctx) => {
         if (!ctx) return jsonError('Missing context', 500)
-        const connection = await loadConnection(ctx)
-        const lastSync = await ctx.settings.get<GoogleDriveLastSync>(LAST_SYNC_KEY)
-        const schedule = await ctx.settings.get<GoogleDriveSchedule>(SCHEDULE_KEY)
+        const providers: CloudProviderStatus[] = []
+        for (const provider of CLOUD_PROVIDERS) {
+          providers.push(await readProviderStatus(ctx, provider))
+        }
+        const google =
+          providers.find((p) => p.provider === googleDriveProvider.id) ?? null
         const status: CloudBackupStatus = {
-          connected: !!connection,
-          needs_reauth: connection?.status === 'needs_reauth',
-          account_email: connection?.account_email ?? null,
-          connected_at: connection?.connected_at ?? null,
-          last_sync: lastSync ?? null,
-          schedule: schedule ?? null,
+          providers,
+          connected: google?.connected ?? false,
+          needs_reauth: google?.needs_reauth ?? false,
+          account_email: google?.account_email ?? null,
+          connected_at: google?.connected_at ?? null,
+          last_sync: google?.last_sync ?? null,
+          schedule: google?.schedule ?? null,
         }
         return NextResponse.json({ data: status })
       },
     },
 
-    // Read the auto-sync schedule. Returns the default (disabled) shape if
-    // the user has never configured one.
+    // Read one provider's auto-sync schedule. Returns the default (disabled)
+    // shape if the user has never configured one.
     {
       method: 'GET',
       path: '/schedule',
-      handler: async (_request, ctx) => {
+      handler: async (request, ctx) => {
         if (!ctx) return jsonError('Missing context', 500)
-        const schedule = await ctx.settings.get<GoogleDriveSchedule>(SCHEDULE_KEY)
+        const resolved = resolveProvider(request)
+        if ('error' in resolved) return resolved.error
+        const schedule = await ctx.settings.get<CloudSchedule>(
+          resolved.provider.keys.schedule
+        )
         return NextResponse.json({ data: schedule ?? DEFAULT_SCHEDULE })
       },
     },
 
-    // Update the auto-sync schedule. Preserves the fields the cron writes
-    // (`last_auto_sync_*`, failure counter, alert throttle): those are not
-    // user-editable.
+    // Update one provider's auto-sync schedule. Preserves the fields the cron
+    // writes (`last_auto_sync_*`, failure counter, alert throttle): those are
+    // not user-editable.
     {
       method: 'PUT',
       path: '/schedule',
       handler: async (request, ctx) => {
         if (!ctx) return jsonError('Missing context', 500)
+        const resolved = resolveProvider(request)
+        if ('error' in resolved) return resolved.error
         try {
           const body = (await request.json()) as {
             enabled?: boolean
@@ -274,8 +345,9 @@ export const cloudBackupExtension: Extension = {
             return jsonError('hour_local must be an integer between 0 and 23', 400)
           }
 
-          const existing = await ctx.settings.get<GoogleDriveSchedule>(SCHEDULE_KEY)
-          const updated: GoogleDriveSchedule = {
+          const key = resolved.provider.keys.schedule
+          const existing = await ctx.settings.get<CloudSchedule>(key)
+          const updated: CloudSchedule = {
             ...existing,
             enabled: body.enabled,
             hour_utc: hourUtc,
@@ -284,7 +356,7 @@ export const cloudBackupExtension: Extension = {
             last_auto_sync_status: existing?.last_auto_sync_status ?? null,
             last_auto_sync_error: existing?.last_auto_sync_error ?? null,
           }
-          await ctx.settings.set(SCHEDULE_KEY, updated)
+          await ctx.settings.set(key, updated)
           return NextResponse.json({ data: updated })
         } catch (err) {
           ctx.log.error('update schedule failed', err)
@@ -296,12 +368,15 @@ export const cloudBackupExtension: Extension = {
       },
     },
 
-    // Generate the archive set and sync it to Drive. Returns the sync summary.
+    // Generate the archive set and sync it to one provider. Returns the sync
+    // summary.
     {
       method: 'POST',
       path: '/sync',
       handler: async (request, ctx) => {
         if (!ctx) return jsonError('Missing context', 500)
+        const resolved = resolveProvider(request)
+        if ('error' in resolved) return resolved.error
         try {
           const body = (await request.json().catch(() => ({}))) as {
             include_documents?: boolean
@@ -316,6 +391,7 @@ export const cloudBackupExtension: Extension = {
             origin,
             includeDocuments: body.include_documents !== false,
             allowDocumentFallback: body.allow_document_fallback === true,
+            provider: resolved.provider,
           })
 
           if (!result.ok) {
