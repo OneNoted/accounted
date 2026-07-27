@@ -1521,6 +1521,11 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'SIE-importen kunde inte ersättas.',
     message_en: 'Failed to replace SIE import.',
   },
+  SIE_REPLACE_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast ägare eller administratörer kan ersätta en SIE-import.',
+    message_en: 'Only company owners and admins can replace an SIE import.',
+  },
   SIE_UNDO_FAILED: {
     httpStatus: 400,
     message_sv: 'SIE-importen kunde inte ångras.',
@@ -2744,6 +2749,13 @@ const BULK_BOOK: Record<string, StructuredErrorEntry> = {
       'Samlingsbokföring stödjer endast transaktioner i samma valuta. Välj transaktioner i en valuta åt gången.',
     message_en:
       'Bulk booking supports only single-currency batches. Select transactions in one currency at a time.',
+  },
+  BULK_BOOK_FOREIGN_CURRENCY: {
+    httpStatus: 400,
+    message_sv:
+      'Samlingsbokföring stödjer endast transaktioner i SEK. Bokför transaktioner i utländsk valuta enskilt, så att beloppet räknas om till kronor med rätt växelkurs.',
+    message_en:
+      'Bulk booking supports only SEK transactions. Book foreign-currency transactions individually so the amount is converted to kronor at the correct exchange rate.',
   },
   BULK_BOOK_INVALID_PAYLOAD: {
     httpStatus: 400,

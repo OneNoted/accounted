@@ -251,14 +251,24 @@ export async function findMatchingVouchersForInvoice(
     // Only lines actually labelled with the invoice's currency AND carrying a
     // rate can be compared to it at all; everything else is unscoreable, so
     // narrowing to them here is a strict superset of what survives scoring.
-    // The band is |amount_in_currency| <= ceil rather than [floor, ceil]:
-    // a few production rows store the foreign figure negatively, and the
-    // direction is taken from the debit/credit side anyway. NULL
-    // amount_in_currency drops out of both comparisons, which is correct.
+    // The band is floor <= |amount_in_currency| <= ceil, mirroring the SEK
+    // band below: without the floor, every small same-currency line passed
+    // the prefilter and could crowd the exact-amount voucher out of the
+    // .limit(limit * 10) cap before scoring ever ran. Both signs are kept
+    // (the .or below) because a few production rows store the foreign figure
+    // negatively, and the direction is taken from the debit/credit side
+    // anyway. NULL amount_in_currency drops out of every comparison, which
+    // is correct.
     query = query
       .eq('journal_entry_lines.currency', invoiceCurrency)
       .gte('journal_entry_lines.amount_in_currency', -amountCeil)
       .lte('journal_entry_lines.amount_in_currency', amountCeil)
+    if (amountFloor > 0) {
+      query = query.or(
+        `amount_in_currency.gte.${amountFloor},amount_in_currency.lte.${-amountFloor}`,
+        { referencedTable: 'journal_entry_lines' },
+      )
+    }
   } else {
     query = query
       .gte(`journal_entry_lines.${amountColumn}`, amountFloor)

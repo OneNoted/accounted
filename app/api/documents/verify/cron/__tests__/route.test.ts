@@ -192,6 +192,32 @@ describe('GET /api/documents/verify/cron', () => {
     expect(String(state.auditInserts[0].description)).not.toContain('DOCUMENT_OBJECT_MISSING')
   })
 
+  it('verifies via the company-scoped fallback key when a concurrent backfill re-homed the object', async () => {
+    // The batch snapshot carries a stale legacy pointer: mid-batch, the
+    // Phase B backfill copied the object to the company-scoped key and
+    // removed the source. This must NOT produce a permanent false
+    // DOCUMENT_OBJECT_MISSING audit row for a healthy document.
+    const doc = makeDoc({
+      id: 'doc-repointed',
+      storage_path: 'documents/user-1/1_receipt.pdf',
+    })
+    const hash = registerObject('documents/company-1/user-1/1_receipt.pdf', 'healthy bytes')
+    state.documents = [{ ...doc, sha256_hash: hash }]
+
+    const response = await GET(cronRequest())
+    const json = await response.json()
+
+    expect(state.auditInserts).toHaveLength(0)
+    expect(state.updates.map((u) => u.id)).toEqual(['doc-repointed'])
+    expect(json).toEqual({
+      processed: 1,
+      verified: 1,
+      failures: 0,
+      missingObjects: 0,
+      errors: 0,
+    })
+  })
+
   it('surfaces a missing storage object as an audit incident AND stamps the check', async () => {
     const missing = makeDoc({ id: 'doc-missing', storage_path: 'user-1/company-1/gone.pdf' })
     const healthy = makeDoc({ id: 'doc-healthy', storage_path: 'user-1/company-1/ok.pdf' })

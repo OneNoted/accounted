@@ -152,7 +152,20 @@ export const verifikationDraft = defineAgentIntent<
           // surface reads the exact same source of truth as the DB triggers,
           // the MCP server and the v1 REST period gate.
           try {
-            periodStatus = await resolvePeriodStatusForDate(supabase, companyId, entryDate)
+            const resolved = await resolvePeriodStatusForDate(supabase, companyId, entryDate)
+            // A soft lookup failure surfaces as { status: 'locked',
+            // lookup_failed: true }: the right fail-closed verdict for a write
+            // gate, but the wrong words for a human. Rendering it as a real
+            // lock produces "lås upp perioden under Räkenskapsår" advice for a
+            // lock that may not exist, so map it to the 'unknown' wording
+            // instead (bokslut-step handles its equivalent the same way).
+            periodStatus = resolved.lookup_failed
+              ? { period_id: null, status: 'unknown', lock_date: null }
+              : {
+                  period_id: resolved.period_id,
+                  status: resolved.status,
+                  lock_date: resolved.lock_date,
+                }
           } catch {
             // Fail closed: an unreadable period must never be presented as open.
             periodStatus = { period_id: null, status: 'unknown', lock_date: null }

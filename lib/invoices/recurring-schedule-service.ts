@@ -245,7 +245,15 @@ export async function executeRecurringSchedule(
   let vatAmountSek: number | null = null
   let totalSek: number | null = null
   if (schedule.currency !== 'SEK') {
-    const rateData = await fetchExchangeRate(schedule.currency)
+    // Same call shape as buildInvoiceWriteData: the date anchors the rate on
+    // the invoice date (the taxable event for a schedule-spawned invoice), and
+    // the supabase client routes the lookup through the shared exchange_rates
+    // cache on BOTH legs (read-through before Riksbanken, last-cached-
+    // observation fallback when Riksbanken 429s). Without them a transient
+    // rate limit left every cron-generated foreign invoice with a permanently
+    // NULL exchange_rate. A null rate still only skips the SEK columns: the
+    // cron deliberately does not fail closed here.
+    const rateData = await fetchExchangeRate(schedule.currency, new Date(invoiceDate), supabase)
     if (rateData) {
       exchangeRate = rateData.rate
       exchangeRateDate = rateData.date

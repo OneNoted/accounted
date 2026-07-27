@@ -39,8 +39,17 @@ vi.mock('@/lib/transactions/link-journal-entry', () => ({
   hasLiveJournalEntryLink: (...args: unknown[]) => mockHasLiveLink(...args),
 }))
 
-import { categorizeMatchedTransaction } from '../categorize-core'
+import { buildDuplicateBookingClaim, categorizeMatchedTransaction } from '../categorize-core'
 import { eventBus } from '@/lib/events/bus'
+
+/**
+ * The exact sv-SE prose formatting the claim builder uses: two decimals,
+ * Swedish grouping, magnitude only. Computed with the same toLocaleString
+ * call so the tests stay correct across ICU variants (the group separator is
+ * a non-breaking space in most builds).
+ */
+const sv = (n: number) =>
+  Math.abs(n).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 /** Queue-based supabase mock: each `from()` consumes the next queued result. */
 function queuedSupabase(results: Array<{ data?: unknown; error?: unknown }>) {
@@ -101,7 +110,7 @@ beforeEach(() => {
 })
 
 describe('categorizeMatchedTransaction duplicate refusal message', () => {
-  it('states a verified SEK twin as an absolute kr amount', async () => {
+  it('states a verified SEK twin as an absolute, sv-SE-formatted kr amount', async () => {
     mockDetectDup.mockResolvedValue(candidate())
     const supabase = queuedSupabase([{ data: txRow() }])
 
@@ -109,14 +118,17 @@ describe('categorizeMatchedTransaction duplicate refusal message', () => {
 
     expect(result.status).toBe(409)
     expect(result.error).toContain('verifikat A142')
-    expect(result.error).toContain('bokför redan 1616 kr')
+    expect(result.error).toContain(`bokför redan ${sv(1616)} kr`)
     expect(result.error).not.toContain('-1616')
+    // Raw JS number inside Swedish prose is the finding: '1616 kr' must be
+    // '1 616,00 kr'.
+    expect(result.error).not.toContain('1616 kr')
   })
 
   it('prints the SIBLING SEK figure for a verified FX twin, never the raw EUR number as kr', async () => {
     // A 1 000 EUR sibling whose own booking states 11 500 kr. The message must
-    // carry 11500 kr; "1000 kr" would be the original bug (foreign figure with
-    // "kr" appended) in text form.
+    // carry 11 500,00 kr; "1 000,00 kr" would be the original bug (foreign
+    // figure with "kr" appended) in text form.
     mockDetectDup.mockResolvedValue(
       candidate({ amount: -11500, currency: 'EUR', amount_in_currency: -1000 }),
     )
@@ -127,7 +139,8 @@ describe('categorizeMatchedTransaction duplicate refusal message', () => {
     const result = await categorizeMatchedTransaction(supabase, 'u1', 'c1', 'tx-1', OPTS)
 
     expect(result.status).toBe(409)
-    expect(result.error).toContain('bokför redan 11500 kr')
+    expect(result.error).toContain(`bokför redan ${sv(11500)} kr`)
+    expect(result.error).not.toContain(`${sv(1000)} kr`)
     expect(result.error).not.toContain('1000 kr')
   })
 
@@ -148,9 +161,10 @@ describe('categorizeMatchedTransaction duplicate refusal message', () => {
     const result = await categorizeMatchedTransaction(supabase, 'u1', 'c1', 'tx-1', OPTS)
 
     expect(result.status).toBe(409)
-    expect(result.error).toContain('samma belopp (1000 EUR)')
+    expect(result.error).toContain(`samma belopp (${sv(1000)} EUR)`)
     expect(result.error).toContain('kan inte fastställas')
-    // No number in the message wears a kr label.
+    // No number in the message wears a kr label (the group separator in
+    // sv-SE output is a non-breaking space, so an ASCII-space match suffices).
     expect(result.error).not.toMatch(/\d ?kr\b/)
   })
 
@@ -173,8 +187,37 @@ describe('categorizeMatchedTransaction duplicate refusal message', () => {
     const result = await categorizeMatchedTransaction(supabase, 'u1', 'c1', 'tx-1', OPTS)
 
     expect(result.status).toBe(409)
-    expect(result.error).toContain('bokför 98565 kr')
+    expect(result.error).toContain(`bokför ${sv(98565)} kr`)
     expect(result.error).toContain('beloppen kunde inte jämföras')
     expect(result.error).toContain('EUR')
+  })
+})
+
+describe('buildDuplicateBookingClaim (shared web + MCP claim builder)', () => {
+  it('never renders "null kr" for the rateless foreign sibling shape', () => {
+    const claim = buildDuplicateBookingClaim(
+      { amount: null, currency: 'EUR', amount_in_currency: -1000, amount_verified: false },
+      'EUR',
+    )
+    expect(claim).toContain(`samma belopp (${sv(1000)} EUR)`)
+    expect(claim).toContain('växelkurs saknas')
+    expect(claim).not.toContain('null')
+  })
+
+  it('uses magnitude and sv-SE formatting for the verified kr figure', () => {
+    const claim = buildDuplicateBookingClaim(
+      { amount: -11500, currency: 'EUR', amount_in_currency: -1000, amount_verified: true },
+      'EUR',
+    )
+    expect(claim).toBe(`bokför redan ${sv(11500)} kr på bankkontot`)
+  })
+
+  it('attributes the missing rate to the TARGET transaction in the unverified branch', () => {
+    const claim = buildDuplicateBookingClaim(
+      { amount: 98565, currency: null, amount_in_currency: null, amount_verified: false },
+      'EUR',
+    )
+    expect(claim).toContain(`bokför ${sv(98565)} kr`)
+    expect(claim).toContain('transaktionen är i EUR utan växelkurs')
   })
 })

@@ -237,7 +237,119 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
     expect(workedDayOps[0].verb).toBe('select')
     expect(workedDayOps[0].columns).toContain('notes')
     expect(workedDayOps[0].columns).toContain('start_time')
+    // hours must be captured too: it is what makes a destroyed row restorable
+    // when a reinsert fails after the bulk delete already ran.
+    expect(workedDayOps[0].columns).toContain('hours')
     expect(workedDayOps[1].verb).toBe('delete')
+  })
+
+  it('restores the pre-existing row when a date conflicts on the 24h cap', async () => {
+    // The conflict is reported as "nothing changed" for that date, so the row
+    // the bulk delete destroyed must be put back verbatim: original hours,
+    // notes and shift window, not the batch's values.
+    enqueuePreamble([
+      {
+        work_date: '2026-07-01',
+        hours: 5,
+        notes: 'Halvdag',
+        salary_run_employee_id: 'sre-1',
+        start_time: '08:00:00',
+        end_time: '13:00:00',
+      },
+    ])
+    enqueue({ error: { message: 'Total tid över 24h', code: '23514' } }) // insert date 1 trips the cap
+    enqueue({ data: null }) // restore of date 1
+    enqueue({ data: null }) // insert date 2
+
+    const response = await POST(post(validBatch), params)
+    const { status, body } = await parseJsonResponse<{
+      data: { inserted: number; conflicts: { date: string }[] }
+    }>(response)
+
+    expect(status).toBe(207)
+    expect(body.data.inserted).toBe(1)
+    expect(body.data.conflicts).toHaveLength(1)
+    expect(body.data.conflicts[0].date).toBe('2026-07-01')
+
+    const rows = insertedRows()
+    // 1: failed replacement attempt, 2: restore, 3: date-2 replacement.
+    expect(rows).toHaveLength(3)
+    expect(rows[1]).toMatchObject({
+      work_date: '2026-07-01',
+      hours: 5,
+      notes: 'Halvdag',
+      salary_run_employee_id: 'sre-1',
+      start_time: '08:00:00',
+      end_time: '13:00:00',
+    })
+    expect(rows[2]).toMatchObject({ work_date: '2026-07-02', hours: 8 })
+  })
+
+  it('does not attempt a restore for a conflicting date that had no prior row', async () => {
+    enqueuePreamble() // nothing stored on either date
+    enqueue({ error: { message: 'Total tid över 24h', code: '23514' } }) // insert date 1
+    enqueue({ data: null }) // insert date 2
+
+    const response = await POST(post(validBatch), params)
+    const { status, body } = await parseJsonResponse<{
+      data: { inserted: number; conflicts: unknown[] }
+    }>(response)
+
+    expect(status).toBe(207)
+    expect(body.data.inserted).toBe(1)
+    expect(body.data.conflicts).toHaveLength(1)
+    // Only the two replacement attempts: no phantom restore insert.
+    expect(insertedRows()).toHaveLength(2)
+  })
+
+  it('restores the remaining dates when an unexpected error aborts the batch', async () => {
+    // Three dates; the bulk delete destroyed all three stored rows. Date 1
+    // replaces fine, date 2 hits an unexpected error: dates 2 and 3 must be
+    // put back before the 500 goes out, otherwise their rows are simply gone.
+    const threeDates = { dates: ['2026-07-01', '2026-07-02', '2026-07-03'], hours: 8 }
+    enqueuePreamble([
+      {
+        work_date: '2026-07-02',
+        hours: 4,
+        notes: 'Halvdag',
+        salary_run_employee_id: null,
+        start_time: null,
+        end_time: null,
+      },
+      {
+        work_date: '2026-07-03',
+        hours: 6,
+        notes: 'Kundbesök',
+        salary_run_employee_id: 'sre-9',
+        start_time: '10:00:00',
+        end_time: '16:00:00',
+      },
+    ])
+    enqueue({ data: null }) // insert date 1: ok
+    enqueue({ error: { message: 'connection reset', code: '08006' } }) // insert date 2: unexpected
+    enqueue({ data: null }) // restore date 2
+    enqueue({ data: null }) // restore date 3
+
+    const response = await POST(post(threeDates), params)
+    const { status, body } = await parseJsonResponse<{ inserted: number }>(response)
+
+    expect(status).toBe(500)
+    expect(body.inserted).toBe(1)
+
+    const rows = insertedRows()
+    // 1: date-1 replacement, 2: failed date-2 attempt, 3-4: restores.
+    expect(rows).toHaveLength(4)
+    expect(rows[2]).toMatchObject({ work_date: '2026-07-02', hours: 4, notes: 'Halvdag' })
+    expect(rows[3]).toMatchObject({
+      work_date: '2026-07-03',
+      hours: 6,
+      notes: 'Kundbesök',
+      salary_run_employee_id: 'sre-9',
+      start_time: '10:00:00',
+      end_time: '16:00:00',
+    })
+    // Date 1 was successfully replaced: it must NOT be clobbered by a restore.
+    expect(rows.filter((r) => r.work_date === '2026-07-01')).toHaveLength(1)
   })
 
   it('aborts without deleting anything when the prefetch fails', async () => {

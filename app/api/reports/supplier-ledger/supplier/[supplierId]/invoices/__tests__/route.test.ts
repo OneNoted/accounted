@@ -30,12 +30,20 @@ interface QueryResult {
   error: unknown
 }
 
+/**
+ * The invoices query is paginated via fetchAllRows (.range per page), so the
+ * mock serves one page result per .range() call. A single QueryResult is a
+ * one-page company; pass an array to exercise multi-page paging.
+ */
 function buildSupabase(
   supplier: { id: string; name: string } | null,
-  invoicesResult: QueryResult,
+  invoicesResults: QueryResult | QueryResult[],
   entriesResult: QueryResult
 ) {
-  return {
+  const pages = Array.isArray(invoicesResults) ? [...invoicesResults] : [invoicesResults]
+  const rangeCalls: Array<[number, number]> = []
+  const orderCalls: unknown[][] = []
+  const supabase = {
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'suppliers') {
         return {
@@ -49,9 +57,14 @@ function buildSupabase(
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
           in: vi.fn().mockReturnThis(),
-          order: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockReturnThis(),
-          then: (resolve: (v: QueryResult) => void) => resolve(invoicesResult),
+          order: vi.fn().mockImplementation(function (this: unknown, ...args: unknown[]) {
+            orderCalls.push(args)
+            return this
+          }),
+          range: vi.fn().mockImplementation((from: number, to: number) => {
+            rangeCalls.push([from, to])
+            return Promise.resolve(pages.shift() ?? { data: [], error: null })
+          }),
         }
       }
       // journal_entries
@@ -63,6 +76,7 @@ function buildSupabase(
       }
     }),
   }
+  return Object.assign(supabase, { rangeCalls, orderCalls })
 }
 
 beforeEach(() => {
@@ -289,5 +303,67 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
     expect(byId.get('si-fx-rate')!.remaining_sek).toBe(1150)
     expect(byId.get('si-fx-rate')!.credit).toBe(1150)
     expect(body.data.unconverted_fx_count).toBe(1)
+  })
+
+  it('paginates past the old hardcoded cap and counts FX rows over the full set', async () => {
+    // 1000 SEK invoices fill page one; page two carries one more SEK invoice
+    // plus an unconvertible FX invoice. The old 500-row limit truncated both
+    // the lines AND unconverted_fx_count while next_cursor: null claimed the
+    // list was complete.
+    const makeInvoice = (i: number) => ({
+      id: `si-${i}`,
+      supplier_invoice_number: `INV-${i}`,
+      invoice_date: '2026-05-10',
+      due_date: '2026-06-10',
+      total: 100,
+      paid_amount: 0,
+      remaining_amount: 100,
+      currency: 'SEK',
+      exchange_rate: null,
+      registration_journal_entry_id: null,
+    })
+    const page1 = Array.from({ length: 1000 }, (_, i) => makeInvoice(i))
+    const page2 = [
+      makeInvoice(1000),
+      { ...makeInvoice(1001), currency: 'EUR', exchange_rate: null },
+    ]
+
+    const supabase = buildSupabase(
+      { id: 'sup-1', name: 'Volym AB' },
+      [
+        { data: page1, error: null },
+        { data: page2, error: null },
+      ],
+      { data: [], error: null }
+    )
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+
+    const res = await GET(
+      createMockRequest('/api/reports/supplier-ledger/supplier/sup-1/invoices'),
+      createMockRouteParams({ supplierId: 'sup-1' })
+    )
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      data: {
+        lines: Array<{ remaining_sek: number | null }>
+        unconverted_fx_count: number
+        next_cursor: null
+      }
+    }
+
+    // Every row made it through, not just the first page.
+    expect(body.data.lines).toHaveLength(1002)
+    expect(supabase.rangeCalls).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    // Stable paging order: invoice_date is not unique, so id must break ties.
+    expect(supabase.orderCalls).toContainEqual(['invoice_date', { ascending: true }])
+    expect(supabase.orderCalls).toContainEqual(['id', { ascending: true }])
+    // The honesty counter sees the FX row on page two.
+    expect(body.data.unconverted_fx_count).toBe(1)
+    // The shape is unchanged, and the null cursor is now truthful.
+    expect(body.data.next_cursor).toBeNull()
   })
 })

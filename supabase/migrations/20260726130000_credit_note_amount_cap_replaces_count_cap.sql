@@ -40,6 +40,16 @@
 -- rather than waiving the assert, because invoices.currency is nullable with
 -- `default 'SEK'` and waiving on NULL is how the cap would end up comparing two
 -- different units.
+--
+-- Tenancy: the trigger is SECURITY DEFINER (see below), so its read of the
+-- original invoice bypasses RLS. The lookup therefore requires
+-- o.company_id = NEW.company_id, which is the correct integrity rule anyway (a
+-- kreditfaktura corrects an invoice in its own bokföring) AND the control that
+-- stops the definer read from being aimed at another tenant: without it, an
+-- insert in the attacker's own company could FOR UPDATE-lock a victim's invoice
+-- and read its total/currency back through the exception texts. For the same
+-- reason the exception messages below never print the ORIGINAL invoice's
+-- figures, only the credit note's own.
 
 DROP INDEX IF EXISTS public.uq_invoices_company_credited_invoice;
 
@@ -98,15 +108,26 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Company match: see the tenancy note in the header. A credit note may only
+  -- reference an original in its own company; the SECURITY DEFINER read must
+  -- never lock or reveal another tenant's row.
   SELECT o.total, o.currency
     INTO v_original_total, v_original_currency
   FROM public.invoices o
   WHERE o.id = NEW.credited_invoice_id
+    AND o.company_id = NEW.company_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    -- The FK (ON DELETE SET NULL) owns this case; nothing to cap against.
-    RETURN NEW;
+    -- Not found now means "no such invoice in this company": either a
+    -- cross-tenant reference (rejected, and indistinguishable from a missing
+    -- row on purpose) or an id the FK would refuse anyway. Failing open here
+    -- would let a credit note bypass the cap entirely by pointing at a row
+    -- outside its company.
+    RAISE EXCEPTION
+      'Original invoice % not found for credit note',
+      NEW.credited_invoice_id
+      USING ERRCODE = 'check_violation';
   END IF;
 
   -- COALESCE to the column default instead of skipping the assert when either
@@ -116,11 +137,13 @@ BEGIN
   -- original in a unit nobody had agreed on. Every read path already treats a
   -- NULL currency as SEK, which is what the column default encodes, so that is
   -- the assumption to make explicit rather than to opt out of.
+  -- The message prints only the credit note's OWN currency, not the
+  -- original's: exception texts must never carry another row's figures out
+  -- of a SECURITY DEFINER read.
   IF COALESCE(NEW.currency, 'SEK') <> COALESCE(v_original_currency, 'SEK') THEN
     RAISE EXCEPTION
-      'Credit note currency (%) must match the original invoice currency (%) for invoice %',
+      'Credit note currency (%) does not match the currency of original invoice %',
       COALESCE(NEW.currency, 'SEK'),
-      COALESCE(v_original_currency, 'SEK'),
       NEW.credited_invoice_id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -152,12 +175,13 @@ BEGIN
   -- Half-oere tolerance: totals are rounded to oere, and a multi-rate original
   -- split across several partial credit notes can land a rounding step away from
   -- the original total. Matches the 0.005 tolerance used by match_batch_allocate.
+  -- The message states the credited sum (the caller's own side of the
+  -- comparison) but not the original invoice's total: see the tenancy note.
   IF v_existing_credited + v_new_credit > ABS(COALESCE(v_original_total, 0)) + 0.005 THEN
     RAISE EXCEPTION
-      'Credit notes for invoice % would total %, which exceeds the invoice total of % (ML 17 kap 22-23 SS permits partial credits, not over-crediting)',
+      'Credit notes for invoice % would total %, which exceeds the invoice total (ML 17 kap 22-23 SS permits partial credits, not over-crediting)',
       NEW.credited_invoice_id,
-      v_existing_credited + v_new_credit,
-      ABS(COALESCE(v_original_total, 0))
+      v_existing_credited + v_new_credit
       USING ERRCODE = 'check_violation';
   END IF;
 
@@ -173,6 +197,6 @@ CREATE TRIGGER check_credit_note_total_within_original
   EXECUTE FUNCTION public.enforce_credit_note_total_within_original();
 
 COMMENT ON FUNCTION public.enforce_credit_note_total_within_original() IS
-  'Caps the summed ABS(total) of all non-cancelled credit notes for one original invoice at the original ABS(total). Replaces uq_invoices_company_credited_invoice, which capped the credit-note COUNT at one and thereby forbade the partial kreditfaktura permitted by ML (2023:200) 17 kap 22-23 SS.';
+  'Caps the summed ABS(total) of all non-cancelled credit notes for one original invoice at the original ABS(total). The original is resolved within the credit note''s own company; a cross-company reference is treated as not found and rejected. Replaces uq_invoices_company_credited_invoice, which capped the credit-note COUNT at one and thereby forbade the partial kreditfaktura permitted by ML (2023:200) 17 kap 22-23 SS.';
 
 NOTIFY pgrst, 'reload schema';

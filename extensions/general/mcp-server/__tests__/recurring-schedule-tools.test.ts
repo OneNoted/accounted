@@ -230,7 +230,7 @@ describe('gnubok_create_recurring_schedule: validation and staging', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'pending_operations')
   })
 
-  it('stages an explicit auto_send=true with the flag visible in the preview', async () => {
+  it('stages an explicit auto_send=true at HIGH risk with the flag visible in the preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
     enqueue({ data: { id: 'op-recurring-2' } })
@@ -240,10 +240,17 @@ describe('gnubok_create_recurring_schedule: validation and staging', () => {
       'company-1',
       'user-1',
       supabase as never,
-    )) as { staged: boolean; preview: Record<string, unknown> }
+    )) as { staged: boolean; risk_level: string; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
     expect(result.preview.auto_send).toBe(true)
+    // Param escalation (risk-tiers paramEscalatedRisk): an auto-sending
+    // schedule is a standing order for outbound customer email with no
+    // per-send approval, the same external side-effect that puts one-off
+    // send_invoice at 'high'. The static tier stays 'medium' (asserted
+    // above); the staged operation must carry the escalated level so
+    // auto-commit can never touch it and approval requires confirmed=true.
+    expect(result.risk_level).toBe('high')
   })
 })
 
@@ -297,6 +304,24 @@ describe('gnubok_update_recurring_schedule: validation and staging', () => {
         supabase as never,
       ),
     ).rejects.toThrow(/email/i)
+  })
+
+  it('stages an update that enables auto_send at HIGH risk', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentSchedule() }) // current has auto_send: false + customer email
+    enqueue({ data: { id: 'op-recurring-4' } })
+
+    const result = (await updateTool().execute(
+      { schedule_id: SCHEDULE_ID, auto_send: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; risk_level: string }
+
+    expect(result.staged).toBe(true)
+    // Same escalation as the create tool: turning auto_send on converts the
+    // schedule into recurring outbound email, so the staged op is 'high'.
+    expect(result.risk_level).toBe('high')
   })
 
   it('stages a pause via the status field', async () => {

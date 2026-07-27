@@ -192,12 +192,16 @@ export default function DuplicateBookingDialog({
               )}
               {/* Rateless foreign sibling: the amounts matched exactly in the
                   shared currency, but no SEK value exists for it, so say that
-                  instead of printing an authoritative-looking kr figure. */}
-              {candidate.amount == null && (
+                  instead of printing an authoritative-looking kr figure.
+                  Gated on candidate.currency: the sentence names the currency,
+                  and interpolating an empty string renders broken Swedish
+                  ("samma belopp i , men..."). A null-currency candidate with a
+                  null amount already shows dialog_duplicate_amount_unknown. */}
+              {candidate.amount == null && candidate.currency && (
                 <div className="flex items-start gap-2 pt-1">
                   <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-warning-foreground leading-snug">
-                    {t('dialog_duplicate_sek_unavailable', { currency: candidate.currency ?? '' })}
+                    {t('dialog_duplicate_sek_unavailable', { currency: candidate.currency })}
                   </p>
                 </div>
               )}

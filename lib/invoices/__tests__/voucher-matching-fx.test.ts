@@ -40,6 +40,20 @@ interface RecordedFilter {
   value: unknown
 }
 
+/**
+ * A `.or('col.op.val,col.op.val', { referencedTable })` call: the conditions
+ * are ORed with each other and the whole group ANDs with the other filters,
+ * exactly as PostgREST composes it. The FX prefilter's two-sided floor band
+ * (floor <= |amount_in_currency| <= ceil) rides on this shape, so the mock has
+ * to execute it rather than swallow it.
+ */
+interface RecordedOrGroup {
+  op: 'or'
+  conditions: RecordedFilter[]
+}
+
+type AnyRecordedFilter = RecordedFilter | RecordedOrGroup
+
 interface FixtureLine {
   id: string
   account_number: string
@@ -94,6 +108,24 @@ function valueMatches(value: unknown, filter: RecordedFilter): boolean {
 
 const EMBED_PREFIX = 'journal_entry_lines.'
 
+/** Whether a recorded filter (or every branch of an or-group) targets the embed. */
+function targetsEmbeddedLines(f: AnyRecordedFilter): boolean {
+  if (f.op === 'or') return f.conditions.every((c) => c.column.startsWith(EMBED_PREFIX))
+  return f.column.startsWith(EMBED_PREFIX)
+}
+
+function stripEmbedPrefix(f: RecordedFilter): RecordedFilter {
+  return f.column.startsWith(EMBED_PREFIX)
+    ? { ...f, column: f.column.slice(EMBED_PREFIX.length) }
+    : f
+}
+
+/** One filter (or one or-group: any branch suffices) against one row. */
+function rowSatisfies(row: Record<string, unknown>, f: AnyRecordedFilter): boolean {
+  if (f.op === 'or') return f.conditions.some((c) => rowSatisfies(row, c))
+  return valueMatches(row[f.column], f)
+}
+
 /**
  * Apply the recorded filters the way PostgREST does for
  * `journal_entries?select=...,journal_entry_lines!inner(...)`:
@@ -102,22 +134,22 @@ const EMBED_PREFIX = 'journal_entry_lines.'
  * filtered away disappears from the result entirely. That last part is the
  * mechanism the bug rode in on.
  */
-function applyEntryFilters(entries: FixtureEntry[], filters: RecordedFilter[]): FixtureEntry[] {
-  const entryFilters = filters.filter((f) => !f.column.startsWith(EMBED_PREFIX))
-  const lineFilters = filters
-    .filter((f) => f.column.startsWith(EMBED_PREFIX))
-    .map((f) => ({ ...f, column: f.column.slice(EMBED_PREFIX.length) }))
+function applyEntryFilters(entries: FixtureEntry[], filters: AnyRecordedFilter[]): FixtureEntry[] {
+  const entryFilters = filters.filter((f) => !targetsEmbeddedLines(f))
+  const lineFilters = filters.filter(targetsEmbeddedLines).map((f): AnyRecordedFilter =>
+    f.op === 'or'
+      ? { ...f, conditions: f.conditions.map(stripEmbedPrefix) }
+      : stripEmbedPrefix(f)
+  )
 
   const result: FixtureEntry[] = []
   for (const entry of entries) {
     const entryOk = entryFilters.every((f) =>
-      valueMatches((entry as unknown as Record<string, unknown>)[f.column], f)
+      rowSatisfies(entry as unknown as Record<string, unknown>, f)
     )
     if (!entryOk) continue
     const lines = entry.journal_entry_lines.filter((line) =>
-      lineFilters.every((f) =>
-        valueMatches((line as unknown as Record<string, unknown>)[f.column], f)
-      )
+      lineFilters.every((f) => rowSatisfies(line as unknown as Record<string, unknown>, f))
     )
     if (lines.length === 0) continue
     result.push({ ...entry, journal_entry_lines: lines })
@@ -140,15 +172,17 @@ interface FilteringMockConfig {
  * filter strings were typed.
  */
 function createFilteringSupabase(config: FilteringMockConfig) {
-  const queries: { table: string; columns: string; filters: RecordedFilter[] }[] = []
+  const queries: { table: string; columns: string; filters: AnyRecordedFilter[] }[] = []
 
   function chainFor(table: string) {
-    const filters: RecordedFilter[] = []
+    const filters: AnyRecordedFilter[] = []
     const record = { table, columns: '', filters }
     queries.push(record)
 
     const findEntry = () => {
-      const idFilter = filters.find((f) => f.column === 'id' && f.op === 'eq')
+      const idFilter = filters.find(
+        (f): f is RecordedFilter => f.op === 'eq' && f.column === 'id'
+      )
       const entry = config.entries.find((e) => e.id === idFilter?.value)
       if (!entry) return null
       const { journal_entry_lines: _lines, ...rest } = entry
@@ -173,14 +207,16 @@ function createFilteringSupabase(config: FilteringMockConfig) {
         case 'journal_entry_lines': {
           // Second leg of the two-step fetch, plus the validators' direct read.
           const idFilter = filters.find(
-            (f) => f.column === 'journal_entry_id' && (f.op === 'eq' || f.op === 'like')
+            (f): f is RecordedFilter =>
+              f.op !== 'or' && f.column === 'journal_entry_id' && (f.op === 'eq' || f.op === 'like')
           )
           const inIds = (record as { inIds?: string[] }).inIds
           const scoped = config.entries.filter((e) =>
             idFilter ? e.id === idFilter.value : (inIds ?? [e.id]).includes(e.id)
           )
           const lineFilters = filters.filter(
-            (f) => f.column !== 'journal_entry_id' && !f.column.startsWith(EMBED_PREFIX)
+            (f): f is RecordedFilter =>
+              f.op !== 'or' && f.column !== 'journal_entry_id' && !f.column.startsWith(EMBED_PREFIX)
           )
           const lines = scoped.flatMap((e) =>
             e.journal_entry_lines
@@ -235,7 +271,25 @@ function createFilteringSupabase(config: FilteringMockConfig) {
       if (column === 'journal_entry_id') (record as { inIds?: string[] }).inIds = values
       return chain
     }
-    for (const op of ['order', 'range', 'limit', 'not', 'is', 'or']) {
+    // `.or()` is parsed and EXECUTED, not swallowed: the FX prefilter's floor
+    // band lives in an or-group, and a mock that ignores it cannot tell a
+    // correct two-sided band from no band at all.
+    chain.or = (filterString: string, opts?: { referencedTable?: string; foreignTable?: string }) => {
+      const prefix = opts?.referencedTable ?? opts?.foreignTable
+      const conditions: RecordedFilter[] = String(filterString)
+        .split(',')
+        .map((part) => {
+          const [column, op, ...valueParts] = part.split('.')
+          return {
+            op: op as FilterOp,
+            column: prefix ? `${prefix}.${column}` : column,
+            value: valueParts.join('.'),
+          }
+        })
+      filters.push({ op: 'or', conditions })
+      return chain
+    }
+    for (const op of ['order', 'range', 'limit', 'not', 'is']) {
       chain[op] = () => chain
     }
     chain.maybeSingle = () => Promise.resolve(resolveSingle())
@@ -418,7 +472,7 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
       (q) => q.table === 'journal_entries' && q.columns.includes('journal_entry_lines')
     )
     const banded = candidateQuery!.filters
-      .filter((f) => f.op === 'gte' || f.op === 'lte')
+      .filter((f): f is RecordedFilter => f.op === 'gte' || f.op === 'lte')
       .map((f) => f.column)
     expect(banded).toContain('journal_entry_lines.amount_in_currency')
     expect(banded).not.toContain('journal_entry_lines.credit_amount')
@@ -430,6 +484,92 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
     // Both FX columns must be projected or every line is unconvertible.
     expect(candidateQuery!.columns).toContain('amount_in_currency')
     expect(candidateQuery!.columns).toContain('currency')
+  })
+
+  it('applies the fuzzy floor to the FX band on both signs', async () => {
+    // The SEK path has always banded [floor, ceil]; the FX path only kept the
+    // ceiling, so every small same-currency line survived the prefilter and
+    // could crowd the exact-amount voucher out of the .limit(limit * 10) cap
+    // before scoring. The floor arrives as an or-group so negatively-stored
+    // foreign figures stay in: floor <= |amount_in_currency| <= ceil.
+    const { supabase, queries } = createFilteringSupabase({ entries: [correctEurVoucher] })
+
+    await findMatchingVouchersForInvoice(supabase as never, 'company-1', eurInvoice() as never)
+
+    const candidateQuery = queries.find(
+      (q) => q.table === 'journal_entries' && q.columns.includes('journal_entry_lines')
+    )
+    const orGroups = candidateQuery!.filters.filter(
+      (f): f is RecordedOrGroup => f.op === 'or'
+    )
+    expect(orGroups).toHaveLength(1)
+    // hi = lo = 1000 EUR, pad = min(1000 * 0.01, 500) + 0.02 → floor 989.98.
+    expect(orGroups[0].conditions).toEqual(
+      expect.arrayContaining([
+        { op: 'gte', column: 'journal_entry_lines.amount_in_currency', value: '989.98' },
+        { op: 'lte', column: 'journal_entry_lines.amount_in_currency', value: '-989.98' },
+      ])
+    )
+  })
+
+  it('keeps a negatively-stored foreign figure inside the floored band', async () => {
+    // A few production rows store amount_in_currency with a negative sign; the
+    // direction comes off the debit/credit side. The floor must not evict them.
+    const negativeStored = entry('je-negative', 18, 'Inbetalning utländsk kund', [
+      {
+        id: 'l-negative',
+        account_number: '1510',
+        debit_amount: 0,
+        credit_amount: 11500,
+        currency: 'EUR',
+        amount_in_currency: -1000,
+      },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [negativeStored] })
+
+    const result = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never
+    )
+
+    expect(result.map((c) => c.journal_entry_id)).toContain('je-negative')
+  })
+
+  it('the floor keeps a small sibling line from polluting the matched sum', async () => {
+    // One voucher whose 151x legs are the real 1000 EUR settlement plus an
+    // unrelated small 87 EUR credit. Without the floor both lines passed the
+    // prefilter, the matched sum became 1087 EUR and the one correct voucher
+    // scored as a no-match. With the floor the small line drops in SQL and the
+    // voucher matches on its 1000 EUR leg.
+    const withSmallSibling = entry('je-sibling', 19, 'Inbetalning utländsk kund', [
+      {
+        id: 'l-sib-main',
+        account_number: '1510',
+        debit_amount: 0,
+        credit_amount: 11500,
+        currency: 'EUR',
+        amount_in_currency: 1000,
+      },
+      {
+        id: 'l-sib-small',
+        account_number: '1510',
+        debit_amount: 0,
+        credit_amount: 1000.5,
+        currency: 'EUR',
+        amount_in_currency: 87,
+      },
+    ])
+    const { supabase } = createFilteringSupabase({ entries: [withSmallSibling] })
+
+    const result = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never
+    )
+
+    expect(result.map((c) => c.journal_entry_id)).toContain('je-sibling')
+    expect(result[0].ar_credit_amount).toBe(1000)
   })
 })
 
@@ -478,13 +618,18 @@ describe('findMatchingVouchersForInvoice: SEK is untouched', () => {
       (q) => q.table === 'journal_entries' && q.columns.includes('journal_entry_lines')
     )
     const banded = candidateQuery!.filters
-      .filter((f) => f.op === 'gte' || f.op === 'lte')
+      .filter((f): f is RecordedFilter => f.op === 'gte' || f.op === 'lte')
       .map((f) => f.column)
     expect(banded).toContain('journal_entry_lines.credit_amount')
     expect(banded).not.toContain('journal_entry_lines.amount_in_currency')
     expect(
-      candidateQuery!.filters.some((f) => f.column === 'journal_entry_lines.currency')
+      candidateQuery!.filters.some(
+        (f) => f.op !== 'or' && f.column === 'journal_entry_lines.currency'
+      )
     ).toBe(false)
+    // The SEK band is expressed as plain gte/lte on the ledger column: no
+    // or-group is added (the floor already sits in the gte).
+    expect(candidateQuery!.filters.some((f) => f.op === 'or')).toBe(false)
   })
 
   it('reads the SEK column even when the line is labelled with a foreign document', async () => {
@@ -535,11 +680,16 @@ describe('findMatchingVouchersForInvoice: SEK is untouched', () => {
       (q) => q.table === 'journal_entries' && q.columns.includes('journal_entry_lines')
     )
     expect(
-      candidateQuery!.filters.some((f) => f.column === 'journal_entry_lines.currency')
+      candidateQuery!.filters.some(
+        (f) => f.op !== 'or' && f.column === 'journal_entry_lines.currency'
+      )
     ).toBe(false)
     expect(
       candidateQuery!.filters.some(
-        (f) => f.column === 'journal_entry_lines.amount_in_currency'
+        (f) =>
+          (f.op === 'or' &&
+            f.conditions.some((c) => c.column === 'journal_entry_lines.amount_in_currency')) ||
+          (f.op !== 'or' && f.column === 'journal_entry_lines.amount_in_currency')
       )
     ).toBe(false)
   })
@@ -830,7 +980,9 @@ describe('findMatchingVouchersForSupplierInvoice: foreign-currency invoices', ()
 
     expect(candidate.ap_debit_amount).toBe(1000)
     const lineQuery = queries.find((q) => q.table === 'journal_entry_lines')
-    expect(lineQuery!.filters.some((f) => f.column === 'currency')).toBe(false)
+    expect(
+      lineQuery!.filters.some((f) => f.op !== 'or' && f.column === 'currency')
+    ).toBe(false)
   })
 })
 

@@ -82,10 +82,16 @@ function hasUsableRate(rate: number | null | undefined): boolean {
 
 /**
  * Fetch open foreign-currency receivables (invoices).
- * Returns invoices with status 'sent' or 'overdue' and non-SEK currency,
- * INCLUDING ones with no `exchange_rate`: filtering those out in SQL hid the
- * largest unmeasured FX exposure from the caller. The caller partitions them
- * and reports the excluded rows.
+ * Returns invoices with status 'sent', 'overdue' or 'partially_paid' and
+ * non-SEK currency, INCLUDING ones with no `exchange_rate`: filtering those
+ * out in SQL hid the largest unmeasured FX exposure from the caller. The
+ * caller partitions them and reports the excluded rows.
+ *
+ * 'partially_paid' belongs in the list: payment-sync moves a customer invoice
+ * to that status on a partial settlement, and its unpaid remainder is still a
+ * monetary item that ÅRL 4 kap. 13 § values at balansdagen. Omitting it made
+ * partially paid foreign receivables entirely invisible to the revaluation
+ * (the payables side has always included it).
  */
 export async function getOpenForeignCurrencyReceivables(
   supabase: SupabaseClient,
@@ -99,7 +105,7 @@ export async function getOpenForeignCurrencyReceivables(
         .from('invoices')
         .select('*')
         .eq('company_id', companyId)
-        .in('status', ['sent', 'overdue'])
+        .in('status', ['sent', 'overdue', 'partially_paid'])
         .neq('currency', 'SEK')
         .order('id', { ascending: true })
         .range(from, to)
@@ -174,22 +180,30 @@ export async function previewCurrencyRevaluation(
   // collect the distinct currencies of the revaluable rows.
   const currencies = new Set<Currency>()
   const unconvertedFx: UnconvertedFxItem[] = []
-  const revaluableReceivables: Invoice[] = []
+  const revaluableReceivables: Array<{ inv: Invoice; outstanding: number }> = []
   const revaluablePayables: SupplierInvoice[] = []
 
   for (const inv of receivables) {
+    // Only the OUTSTANDING amount is a monetary item at balansdagen: the paid
+    // part has already been settled at its own realized rate. Kundreskontran
+    // derives outstanding from total - paid_amount (see year-end-service),
+    // so the same definition is used here, öre-rounded.
+    const outstanding =
+      Math.round(((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)) * 100) / 100
+    // Nothing outstanding: nothing to revalue, and no exposure to report.
+    if (outstanding <= 0) continue
     if (!hasUsableRate(inv.exchange_rate)) {
       unconvertedFx.push({
         type: 'receivable',
         source_id: inv.id,
         reference: inv.invoice_number ?? '',
         currency: inv.currency,
-        amount_in_currency: inv.total,
+        amount_in_currency: outstanding,
       })
       continue
     }
     currencies.add(inv.currency)
-    revaluableReceivables.push(inv)
+    revaluableReceivables.push({ inv, outstanding })
   }
 
   for (const si of payables) {
@@ -253,12 +267,13 @@ export async function previewCurrencyRevaluation(
 
   const items: RevaluationItem[] = []
 
-  // Process receivables
-  for (const inv of revaluableReceivables) {
+  // Process receivables (use the outstanding amount for partial payments,
+  // mirroring the payables' remaining_amount below)
+  for (const { inv, outstanding } of revaluableReceivables) {
     const closingRate = rateMap.get(inv.currency)
     if (!closingRate || !inv.exchange_rate) continue
 
-    const amountInCurrency = inv.total
+    const amountInCurrency = outstanding
     const originalSek = Math.round(amountInCurrency * inv.exchange_rate * 100) / 100
     const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100
     const difference = Math.round((closingSek - originalSek) * 100) / 100

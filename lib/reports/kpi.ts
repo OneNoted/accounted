@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { IncomeStatementReport, TrialBalanceRow } from '@/types'
 import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Calculate gross margin from income statement.
@@ -136,6 +137,42 @@ export function topSupplierInvoicesQuery(
     .gte('invoice_date', periodStart)
     .lte('invoice_date', periodEnd)
     .neq('status', 'credited')
+}
+
+/**
+ * Fetch ALL supplier-invoice rows for the period, paginated past PostgREST's
+ * silent 1000-row cap. Awaiting `topSupplierInvoicesQuery` bare truncated the
+ * input to `aggregateTopSuppliers` for companies with more than 1000 supplier
+ * invoices in a fiscal year, silently corrupting the "Största leverantörer"
+ * totals in both the KPI JSON route and the xlsx export.
+ *
+ * Ordered on `id` (the PK) purely for paging stability: aggregation is
+ * order-independent, but `.range()` paging without a stable total order can
+ * duplicate or skip rows on page boundaries (see lib/supabase/fetch-all.ts).
+ *
+ * Returns the `{ data, error }` shape the two route callers already consume,
+ * so a query failure stays a reportable value rather than becoming a thrown
+ * 500 (the KPI route deliberately renders the rest of the report and logs).
+ */
+export async function fetchTopSupplierInvoices(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+  periodEnd: string
+): Promise<{ data: KpiSupplierInvoiceRow[] | null; error: { message: string } | null }> {
+  try {
+    const rows = await fetchAllRows<KpiSupplierInvoiceRow>(({ from, to }) =>
+      topSupplierInvoicesQuery(supabase, companyId, periodStart, periodEnd)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+    return { data: rows, error: null }
+  } catch (err) {
+    return {
+      data: null,
+      error: { message: err instanceof Error ? err.message : 'Unknown error' },
+    }
+  }
 }
 
 /**

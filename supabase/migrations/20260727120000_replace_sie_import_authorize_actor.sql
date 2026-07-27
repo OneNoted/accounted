@@ -23,20 +23,31 @@
 -- stop it, because the function itself turns them off. This is a cross-tenant
 -- data-destruction primitive reachable without authentication.
 --
--- Its sibling undo_sie_import already carries the sanctioned gate
--- (20260624120000_undo_sie_import_explicit_actor.sql): resolve the actor as
--- COALESCE(p_user_id, auth.uid()) and RAISE unless that actor is an owner or
--- admin of p_company_id. The gate fails CLOSED: an anon caller has no
+-- The gate: RAISE (42501 insufficient_privilege) unless the resolved actor is
+-- an owner or admin of p_company_id. It fails CLOSED: an anon caller has no
 -- company_members row, v_caller_role comes back NULL and the function raises
--- before any mutation. replace_sie_import now uses the identical shape.
+-- before any mutation.
 --
--- Why p_user_id and not auth.uid() alone: the app runs both bulk-delete RPCs
--- on the service-role client (rpcClientForBulkDelete in lib/import/sie-import.ts)
+-- Why p_user_id exists at all: the app runs both bulk-delete RPCs on the
+-- service-role client (rpcClientForBulkDelete in lib/import/sie-import.ts)
 -- to escape the authenticator role's 8s statement_timeout. That client is
 -- cookie-less, so inside the function auth.uid() is NULL. Without an explicit
 -- actor the gate could never match and replace would be permanently broken on
 -- hosted, exactly the regression 20260624120000 had to fix for undo. The
--- application now passes the authorising user as p_user_id.
+-- application passes the authorising user as p_user_id.
+--
+-- Why p_user_id is only honored for service_role: EXECUTE is granted to
+-- `authenticated`, so any signed-in user can call this RPC straight over
+-- PostgREST. A plain COALESCE(p_user_id, auth.uid()) would let such a caller
+-- pass an owner's UUID as p_user_id and impersonate them into the gate; with
+-- a known company/import/owner triple that is a cross-tenant hard delete of
+-- posted verifikationer, because the function disarms the immutability and
+-- retention triggers via gnubok.allow_delete. The actor is therefore resolved
+-- the way list_invoice_delivery_summaries_for_service (20260727100000) does
+-- it: p_user_id counts only when auth.role() = 'service_role' (the
+-- server-controlled client, which passes the human user it authenticated);
+-- every other caller is pinned to its own auth.uid() regardless of what it
+-- passes. undo_sie_import gets the identical guard in 20260727121000.
 --
 -- Signature change: the 2-arg overload is dropped rather than left in place.
 -- Keeping it would leave an unrevoked, unguarded entry point behind, and
@@ -89,18 +100,32 @@ DECLARE
   v_locked_at                 timestamptz;
   v_deleted                   integer := 0;
   v_caller_role               text;
-  v_actor                     uuid := COALESCE(p_user_id, auth.uid());
+  v_actor                     uuid;
 BEGIN
+  -- Actor resolution. p_user_id is an assertion by the caller, so it is
+  -- honored ONLY when the caller holds the service role (the cookieless
+  -- server client, where auth.uid() is NULL). Any other caller is pinned to
+  -- its own auth.uid(): otherwise an authenticated PostgREST caller could
+  -- pass an owner's UUID and walk straight through the gate below. Same
+  -- shape as list_invoice_delivery_summaries_for_service (20260727100000).
+  IF auth.role() = 'service_role' THEN
+    v_actor := COALESCE(p_user_id, auth.uid());
+  ELSE
+    v_actor := auth.uid();
+  END IF;
+
   -- Authorization gate. Fails closed: an anon/unauthenticated caller has no
   -- company_members row, so v_caller_role is NULL and we raise before any
-  -- mutation and before gnubok.allow_delete is ever set.
+  -- mutation and before gnubok.allow_delete is ever set. The errcode is
+  -- explicit so the route can map this raise to a 403.
   SELECT cm.role INTO v_caller_role
   FROM company_members cm
   WHERE cm.company_id = p_company_id
     AND cm.user_id = v_actor;
 
   IF v_caller_role IS NULL OR v_caller_role NOT IN ('owner', 'admin') THEN
-    RAISE EXCEPTION 'Only company owners and admins can replace SIE imports';
+    RAISE EXCEPTION 'Only company owners and admins can replace SIE imports'
+      USING ERRCODE = '42501';
   END IF;
 
   SELECT fiscal_period_id, opening_balance_entry_id
@@ -225,6 +250,6 @@ REVOKE EXECUTE ON FUNCTION public.replace_sie_import(uuid, uuid, uuid) FROM PUBL
 GRANT EXECUTE ON FUNCTION public.replace_sie_import(uuid, uuid, uuid) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.replace_sie_import(uuid, uuid, uuid) IS
-  'Hard-deletes a completed SIE import''s verifikationer so the period can be re-imported. Requires the actor (p_user_id, falling back to auth.uid()) to be an owner or admin of p_company_id. Not callable by anon.';
+  'Hard-deletes a completed SIE import''s verifikationer so the period can be re-imported. Requires the actor to be an owner or admin of p_company_id; p_user_id is honored only for service_role callers, every other caller resolves from its own auth.uid(). Raises 42501 otherwise. Not callable by anon.';
 
 NOTIFY pgrst, 'reload schema';

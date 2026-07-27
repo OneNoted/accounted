@@ -58,6 +58,17 @@ describe('safeReturnTo', () => {
     expect(safeReturnTo('/%2E%2E//evil.com', '/')).toBe('/')
   })
 
+  it('rejects dot segments that normalise into the /@ form', () => {
+    // The raw-input rule rejects '/@evil.com' outright, but dot-segment
+    // resolution can smuggle it past that guard: '/a/../@evil.com' starts
+    // with an innocent '/a' yet normalises to '/@evil.com'. The
+    // post-normalisation check must reject every prefix the raw check does.
+    expect(safeReturnTo('/a/../@evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/.//@evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/%2e%2e/@evil.com', '/')).toBe('/')
+    expect(safeReturnTo('/a/../@evil.com?x=1', '/')).toBe('/')
+  })
+
   it('still allows ordinary dot segments that stay on-origin', () => {
     expect(safeReturnTo('/settings/../invoices', '/')).toBe('/invoices')
     expect(safeReturnTo('/./settings/tax', '/')).toBe('/settings/tax')

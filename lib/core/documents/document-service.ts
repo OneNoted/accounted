@@ -394,8 +394,16 @@ export async function uploadDocument(
     .single()
 
   if (error) {
-    // Clean up uploaded file on record creation failure
-    await supabase.storage.from('documents').remove([storagePath])
+    // Clean up the just-uploaded object on record creation failure. The
+    // documents bucket is WORM by design: storage.objects has NO DELETE
+    // policy, so remove() on the caller's cookie-bound client is silently
+    // blocked by RLS (it reports success without deleting anything) and the
+    // object would linger as an orphan. Only the service role can actually
+    // remove it. Authorization: the key was built by this very call for the
+    // caller's own failed upload, and no DB row references it.
+    await createServiceClientNoCookies()
+      .storage.from(DOCUMENTS_BUCKET)
+      .remove([storagePath])
     throw new Error(`Failed to create document record: ${error.message}`)
   }
 
@@ -478,8 +486,15 @@ export async function createNewVersion(
   })
 
   if (rpcError) {
-    // Clean up uploaded file on RPC failure
-    await supabase.storage.from('documents').remove([storagePath])
+    // Clean up the uploaded file on RPC failure. Service-role client for the
+    // same reason as in uploadDocument: the WORM bucket has no DELETE policy,
+    // so a caller-bound remove() is silently blocked by RLS and the object
+    // would be orphaned. The original-document fetch above (user-scoped, RLS)
+    // plus the failed RPC are the authorization context; the key was created
+    // by this call and nothing references it.
+    await createServiceClientNoCookies()
+      .storage.from(DOCUMENTS_BUCKET)
+      .remove([storagePath])
     throw new Error(`Failed to create new version: ${rpcError.message}`)
   }
 
@@ -609,8 +624,16 @@ export async function deleteDocument(
     // briefly exist under the legacy and the company-scoped key at once;
     // removing only the stored pointer would leave a readable orphan copy of
     // a document the user asked to erase.
-    await supabase.storage
-      .from(DOCUMENTS_BUCKET)
+    //
+    // The removal runs on the service-role client: the documents bucket is
+    // WORM by design (storage.objects has no DELETE policy), so the caller's
+    // cookie-bound client is silently blocked by RLS and remove() reports
+    // success while both objects survive, readable by every company member
+    // under the company-scoped SELECT policy. Authorization already happened
+    // above: the company-filtered row fetch plus the row delete that just
+    // succeeded (with block_document_deletion() as the DB-level backstop).
+    await createServiceClientNoCookies()
+      .storage.from(DOCUMENTS_BUCKET)
       .remove(documentStoragePathCandidates(doc.storage_path, companyId))
   }
 

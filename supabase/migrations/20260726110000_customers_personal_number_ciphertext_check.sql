@@ -32,14 +32,23 @@
 -- invoices.deduction_personnummer_encrypted, neither of which carries a format
 -- CHECK.
 --
--- Safe to run unconditionally: there are no existing rows to re-validate.
+-- Added NOT VALID, validated in 20260726110001. On hosted there is nothing to
+-- re-validate (0 rows have ever held a non-null personal_number), but a
+-- self-hosted or forked database may still carry a legacy plaintext row from
+-- the pre-encryption era. A validating ADD CONSTRAINT would abort THIS
+-- migration on such a row (23514) and stall every migration queued behind it;
+-- NOT VALID enforces the ciphertext shape for all new writes immediately and
+-- moves the existing-row scan to its own migration, where a failure is
+-- isolated and names exactly what has to be cleaned up. Same NOT
+-- VALID/VALIDATE split as 20260727090000/20260727090001.
 
 ALTER TABLE public.customers
   DROP CONSTRAINT IF EXISTS customers_personal_number_check;
 
 ALTER TABLE public.customers
   ADD CONSTRAINT customers_personal_number_check
-  CHECK (personal_number IS NULL OR personal_number ~ '^[0-9a-f]{76,255}$');
+  CHECK (personal_number IS NULL OR personal_number ~ '^[0-9a-f]{76,255}$')
+  NOT VALID;
 
 COMMENT ON COLUMN public.customers.personal_number IS
   'Personnummer for individual customers, AES-256-GCM ciphertext (hex iv + ciphertext + auth tag). Never plaintext; read paths decrypt and mask via lib/customers/protect-personal-number.ts.';

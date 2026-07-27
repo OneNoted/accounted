@@ -373,6 +373,18 @@ export async function detectBookedDuplicateTransaction(
 /** ± days around the bank-tx date a voucher may be dated and still be "the same" movement. */
 const VOUCHER_DUPLICATE_DATE_WINDOW_DAYS = 7
 
+/**
+ * ± days a voucher may be dated from a bank line whose amount CANNOT be
+ * verified (rateless foreign target) and still be NAMED as a candidate. When
+ * the amount test is skipped, date + account + direction are the only
+ * remaining evidence, and the full ±7 day window is far too wide for that:
+ * the closest-date pick would attribute an arbitrary unrelated voucher to the
+ * bank line in the user-facing "Möjlig dubblettbokföring: verifikat ..."
+ * message. One day keeps the honest "beloppen kunde inte jämföras" warning
+ * for a genuinely adjacent booking without pointing at the wrong verifikat.
+ */
+const UNVERIFIED_VOUCHER_DATE_WINDOW_DAYS = 1
+
 /** BAS "kassa och bank" range. 1910-1919 = kassa, 1920-1949 = bank/giro. */
 const BANK_ACCOUNT_LOW = 1910
 const BANK_ACCOUNT_HIGH = 1949
@@ -402,7 +414,9 @@ const BANK_ACCOUNT_HIGH = 1949
  * 19xx leg's debit/credit column already IS the SEK figure, so it is used
  * as-is, and `line.currency` is deliberately never consulted (it labels the
  * source document, not the leg). A bank line whose SEK value cannot be
- * established does not silently pass: see `amount_verified` on the result.
+ * established does not silently pass: see `amount_verified` on the result,
+ * and note the tighter ±1 day naming window that applies to exactly that
+ * case ({@link UNVERIFIED_VOUCHER_DATE_WINDOW_DAYS}).
  *
  * Account-aware: when the bank line knows its cash account, the matching leg
  * must be on that account's ledger account; otherwise any 19xx leg matches
@@ -515,15 +529,23 @@ export async function detectLedgerDuplicateVoucher(
   // value there is nothing to test with, so the test is SKIPPED rather than
   // failed: failing it would drop every survivor and return null, and a null
   // here reads as "go ahead", which is how one affärshändelse ends up with two
-  // verifikationer. The survivors are reported as unverified instead.
+  // verifikationer. The survivors are reported as unverified instead: BUT only
+  // those within ±1 day of the bank line. Without an amount comparison, date
+  // proximity is the only evidence left, and naming the closest voucher in a
+  // ±7 day window would attribute an unrelated verifikat to this bank line in
+  // the user-facing warning (the lowest-id pick is deterministic, not right).
   //
   // The EXISTENCE half of the question still holds without any currency: the
   // direction, settlement-account, date-window and posted filters above are all
   // unit-free, so an empty `sameMovement` really does mean there is no ledger
   // twin, and returning null there is a verified pass, not a silent one.
+  const unverifiedWindowMs = UNVERIFIED_VOUCHER_DATE_WINDOW_DAYS * 24 * 3600 * 1000
   const candidates =
     targetSek === null
-      ? sameMovement
+      ? sameMovement.filter((l) => {
+          const legMs = new Date(l.journal_entry.entry_date).getTime()
+          return Number.isFinite(legMs) && Math.abs(legMs - dateMs) <= unverifiedWindowMs
+        })
       : sameMovement.filter((l) => {
           const legSek = roundOre(Number(inbound ? l.debit_amount : l.credit_amount))
           return Math.abs(legSek - targetSek) < 0.01

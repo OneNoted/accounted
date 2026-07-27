@@ -856,6 +856,161 @@ describe('foreign currency without an exchange rate is refused, not relabelled',
   })
 })
 
+/**
+ * The no-items header fallback and the payment entry used to convert through
+ * the lenient resolveSekAmount ladder (READ-ONLY CODE ONLY per currency-utils):
+ * a rate-less foreign invoice booked via a caller without hydrated items posted
+ * its raw foreign number as kronor (1 250 EUR → 1 250 kr on 1510), balanced and
+ * undetectable. They now refuse with the same INVOICE_FX_RATE_MISSING code as
+ * the item-driven generators. Rows that DO carry *_sek or a usable rate keep
+ * byte-identical numbers.
+ */
+describe('header fallback and payment path: strict FX conversion', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function eurHeaderOnlyInvoice(overrides: Partial<Invoice> = {}): Invoice {
+    return makeInvoice({
+      currency: 'EUR',
+      exchange_rate: null,
+      subtotal: 1000,
+      subtotal_sek: null,
+      vat_amount: 250,
+      vat_amount_sek: null,
+      total: 1250,
+      total_sek: null,
+      vat_treatment: 'standard_25',
+      items: [],
+      ...overrides,
+    })
+  }
+
+  it('createInvoiceJournalEntry (no items, no rate, no *_sek) refuses instead of posting 1 250 EUR as 1 250 kr', async () => {
+    await expect(
+      createInvoiceJournalEntry(null as never, 'company-1', 'user-1', eurHeaderOnlyInvoice())
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING', currency: 'EUR' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('createInvoiceJournalEntry (no items) books from *_sek columns even without a rate', async () => {
+    // Header rows carry SEK twins; those ARE an honest SEK source, so nothing
+    // changes for them: 11 500 + 2 875 credits, 14 375 debit on 1510.
+    const invoice = eurHeaderOnlyInvoice({
+      subtotal_sek: 11500,
+      vat_amount_sek: 2875,
+      total_sek: 14375,
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '3001')?.credit_amount).toBe(11500)
+    expect(input.lines.find((l) => l.account_number === '2611')?.credit_amount).toBe(2875)
+    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(14375)
+
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(Math.round(totalDebit * 100)).toBe(Math.round(totalCredit * 100))
+  })
+
+  it('createInvoiceJournalEntry (no items) with a rate books converted, balanced lines', async () => {
+    // 1 000 EUR + 250 EUR moms at 11,50: 11 500 + 2 875 = 14 375 on 1510.
+    const invoice = eurHeaderOnlyInvoice({ exchange_rate: 11.5 })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '3001')?.credit_amount).toBe(11500)
+    expect(input.lines.find((l) => l.account_number === '2611')?.credit_amount).toBe(2875)
+    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(14375)
+  })
+
+  it('createInvoiceCashEntry (no items, no rate) refuses too', async () => {
+    await expect(
+      createInvoiceCashEntry(null as never, 'company-1', 'user-1', eurHeaderOnlyInvoice(), '2024-07-01')
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('createCreditNoteJournalEntry (no items, no rate) refuses too', async () => {
+    const creditNote = eurHeaderOnlyInvoice({
+      invoice_number: 'KR-1001',
+      credited_invoice_id: 'inv-original',
+      subtotal: -1000,
+      vat_amount: -250,
+      total: -1250,
+    })
+
+    await expect(
+      createCreditNoteJournalEntry(null as never, 'company-1', 'user-1', creditNote)
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('createInvoicePaymentJournalEntry (full, no rate, no total_sek) refuses instead of clearing 1510 with a mislabelled number', async () => {
+    await expect(
+      createInvoicePaymentJournalEntry(
+        null as never, 'company-1', 'user-1', eurHeaderOnlyInvoice(), '2024-07-15'
+      )
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING', currency: 'EUR' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('createInvoicePaymentJournalEntry (partial, no rate) refuses: paymentAmount is in EUR and has no SEK source', async () => {
+    await expect(
+      createInvoicePaymentJournalEntry(
+        null as never, 'company-1', 'user-1', eurHeaderOnlyInvoice(), '2024-07-15',
+        undefined, undefined, 400,
+      )
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('createInvoicePaymentJournalEntry (partial, with rate) converts the partial amount: 400 EUR at 11,50 = 4 600,00', async () => {
+    const invoice = eurHeaderOnlyInvoice({ exchange_rate: 11.5 })
+
+    await createInvoicePaymentJournalEntry(
+      null as never, 'company-1', 'user-1', invoice, '2024-07-15',
+      undefined, undefined, 400,
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines).toHaveLength(2)
+    expect(input.lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(4600)
+    expect(input.lines.find((l) => l.account_number === '1510')?.credit_amount).toBe(4600)
+  })
+
+  it('createInvoicePaymentJournalEntry keeps identical numbers when total_sek is present without a rate', async () => {
+    const invoice = eurHeaderOnlyInvoice({ total_sek: 11500 })
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '1930')?.debit_amount).toBe(11500)
+    expect(input.lines.find((l) => l.account_number === '1510')?.credit_amount).toBe(11500)
+  })
+
+  it('a SEK invoice without items or rate is completely unaffected', async () => {
+    const invoice = makeInvoice({
+      currency: 'SEK',
+      exchange_rate: null,
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      items: [],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(1250)
+    expect(totalDebit).toBe(totalCredit)
+  })
+})
+
 describe('BFL-compliant descriptions with counterparty names', () => {
   beforeEach(() => {
     vi.clearAllMocks()

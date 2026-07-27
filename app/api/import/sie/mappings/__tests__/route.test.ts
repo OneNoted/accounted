@@ -171,10 +171,44 @@ describe('/api/import/sie/mappings', () => {
     })
 
     const response = await POST(request, emptyParams)
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: string; type: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Invalid mappings data')
+    expect(body.type).toBe('validation_error')
+    expect(saveMappingsMock).not.toHaveBeenCalled()
+  })
+
+  it('POST rejects wrongly-typed mapping elements with 400 instead of a Postgres 500', async () => {
+    // Element-level payloads used to be unvalidated: a numeric sourceAccount
+    // or a string confidence sailed through to Postgres and surfaced as 500.
+    const badElements = [
+      [{ sourceAccount: 1920, targetAccount: '1930' }], // number, not string
+      [{ sourceAccount: '1920', targetAccount: '1930', confidence: 'high' }],
+      [{ sourceAccount: '1920', targetAccount: '1930', matchType: 'guess' }],
+      [{ sourceAccount: '', targetAccount: '1930' }], // empty source key
+      ['not-an-object'],
+    ]
+    for (const mappings of badElements) {
+      const response = await POST(
+        createMockRequest('/api/import/sie/mappings', { method: 'POST', body: { mappings } }),
+        emptyParams,
+      )
+      expect(response.status, `payload ${JSON.stringify(mappings)} must be a 400`).toBe(400)
+    }
+    expect(saveMappingsMock).not.toHaveBeenCalled()
+  })
+
+  it('POST accepts unmapped elements (no targetAccount): saveMappings filters them', async () => {
+    const mappings = [
+      { sourceAccount: '1920', targetAccount: '1930' },
+      { sourceAccount: '8888' }, // not yet mapped: valid on the wire
+    ]
+    const response = await POST(
+      createMockRequest('/api/import/sie/mappings', { method: 'POST', body: { mappings } }),
+      emptyParams,
+    )
+    expect(response.status).toBe(200)
+    expect(saveMappingsMock).toHaveBeenCalledWith(supabase, 'company-1', mappings, 'user-1')
   })
 
   it('POST saves the mappings under the active company', async () => {
@@ -275,6 +309,24 @@ describe('/api/import/sie/mappings', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
+  })
+
+  it('PUT rejects wrongly-typed fields with 400 instead of a Postgres 500', async () => {
+    const badBodies = [
+      { sourceAccount: '1920', targetAccount: 1930 }, // number, not string
+      { sourceAccount: 1920, targetAccount: '1930' },
+      { sourceAccount: '1920', targetAccount: '1930', sourceName: 42 },
+      { sourceAccount: '1920', targetAccount: '' }, // empty target
+    ]
+    for (const body of badBodies) {
+      const response = await PUT(
+        createMockRequest('/api/import/sie/mappings', { method: 'PUT', body }),
+        emptyParams,
+      )
+      const { status, body: parsed } = await parseJsonResponse<{ type?: string }>(response)
+      expect(status, `body ${JSON.stringify(body)} must be a 400`).toBe(400)
+      expect(parsed.type).toBe('validation_error')
+    }
   })
 
   it('PUT upserts a single mapping', async () => {

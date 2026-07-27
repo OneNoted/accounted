@@ -493,6 +493,10 @@ describe('detectDuplicatePaymentVoucher', () => {
     expect(result!.journal_entry_id).toBe('je-unverifiable')
     expect(result!.amount_verified).toBe(false)
     expect(result!.unverified_reason).toBe('transaction_missing_sek_value')
+    // The amount test never ran, so the reason must not claim an amount match:
+    // 'exact_amount_*' here made the dialog render "på samma belopp" for a
+    // candidate whose amounts were never compared.
+    expect(result!.reason).toBe('date_window_only')
     // The leg's SEK figure, never the bank line's foreign 100.
     expect(result!.amount).toBe(1150)
   })

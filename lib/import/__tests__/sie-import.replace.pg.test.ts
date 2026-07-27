@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getPool, withUserContext } from '@/tests/pg/setup'
+import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
 import { seedCompany, insertAuthUser, insertCompanyMember } from '@/tests/pg/fixtures'
 
 // Covers the Fortnox re-sync flow:
@@ -15,13 +15,17 @@ import { seedCompany, insertAuthUser, insertCompanyMember } from '@/tests/pg/fix
 //     so the next re-import restarts the series. User-created entries
 //     (source_type='manual', 'bank_transaction', etc.) are left intact.
 //  3. Since 20260727120000 the RPC takes a third argument, p_user_id, and
-//     gates on owner/admin membership resolved from
-//     COALESCE(p_user_id, auth.uid()). Before that migration the function was
+//     gates on owner/admin membership. Before that migration the function was
 //     SECURITY DEFINER with EXECUTE held by `anon` and no authorization check
 //     at all, while it set gnubok.allow_delete: an unauthenticated caller
-//     could hard-delete any tenant's imported verifikationer. These tests run
-//     over the raw pool (auth.uid() is NULL), which is exactly the situation
-//     the service-role client creates, so every call must pass an owner actor.
+//     could hard-delete any tenant's imported verifikationer.
+//  4. p_user_id is honored ONLY when auth.role() = 'service_role' (the
+//     cookieless server client); every other caller is pinned to its own
+//     auth.uid(). A plain COALESCE(p_user_id, auth.uid()) would have let any
+//     authenticated PostgREST caller pass an owner's UUID and impersonate
+//     them into the gate. These tests therefore run the RPC under a simulated
+//     service-role context (runAsServiceRole), which is how the app's
+//     rpcClientForBulkDelete path presents.
 
 async function insertSIEImport(params: {
   companyId: string
@@ -132,13 +136,17 @@ async function insertDocumentAttachment(params: {
   return id
 }
 
-// Every call goes through the 3-arg shape with an explicit actor: the pool
-// connection has no JWT, so auth.uid() is NULL and the owner/admin gate can
-// only resolve through p_user_id.
+// Every call goes through the 3-arg shape with an explicit actor, under the
+// service-role context: auth.uid() is NULL there, so the owner/admin gate can
+// only resolve through p_user_id, which the function honors for service_role
+// alone. Commits on success (the assertions below read persisted state over
+// the plain pool); a raise aborts and rolls back.
 async function callReplace(companyId: string, importId: string, actor: string | null) {
-  return getPool().query<{ deleted: number }>(
-    `SELECT public.replace_sie_import($1::uuid, $2::uuid, $3::uuid) AS deleted`,
-    [companyId, importId, actor],
+  return runAsServiceRole((client) =>
+    client.query<{ deleted: number }>(
+      `SELECT public.replace_sie_import($1::uuid, $2::uuid, $3::uuid) AS deleted`,
+      [companyId, importId, actor],
+    ),
   )
 }
 
@@ -568,7 +576,7 @@ describe('replace_sie_import: owner/admin authorization gate', () => {
       fiscalPeriodId,
     })
 
-    // Explicit NULL p_user_id, auth.uid() NULL over the raw pool.
+    // Explicit NULL p_user_id, auth.uid() NULL under the service role.
     await expect(callReplace(companyId, importId, null)).rejects.toThrow(
       /owners and admins/i,
     )
@@ -576,11 +584,58 @@ describe('replace_sie_import: owner/admin authorization gate', () => {
     // 2-arg shape (p_user_id defaults to NULL): this is the exact call the
     // pre-fix function accepted from anon, and it must now raise.
     await expect(
-      getPool().query(
-        `SELECT public.replace_sie_import($1::uuid, $2::uuid)`,
-        [companyId, importId],
+      runAsServiceRole((client) =>
+        client.query(
+          `SELECT public.replace_sie_import($1::uuid, $2::uuid)`,
+          [companyId, importId],
+        ),
       ),
     ).rejects.toThrow(/owners and admins/i)
+
+    await expectUntouched(companyId, importId, importEntry)
+  })
+
+  it('ignores a spoofed p_user_id from an authenticated (non-service) caller', async () => {
+    // The impersonation hole this migration closes: EXECUTE is granted to
+    // `authenticated`, so any signed-in user can call the RPC over PostgREST.
+    // A viewer passing the OWNER's UUID as p_user_id must still be pinned to
+    // their own auth.uid(), rejected with 42501, and nothing may be deleted:
+    // otherwise a known company/import/owner triple is a cross-tenant hard
+    // delete of posted verifikationer.
+    const { companyId, userId: ownerId, fiscalPeriodId } = await seedCompany()
+    const viewerId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewerId, role: 'viewer' })
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+
+    const importEntry = await insertPostedEntry({
+      userId: ownerId, companyId, fiscalPeriodId, sourceType: 'import', voucherNumber: 1,
+    })
+    const importId = await insertSIEImport({
+      companyId,
+      userId: ownerId,
+      fileHash: `hash-${randomUUID()}`,
+      status: 'completed',
+      fiscalPeriodId,
+    })
+
+    for (const spoofer of [viewerId, memberId]) {
+      await withUserContext(spoofer, async (client) => {
+        let raised: (Error & { code?: string }) | null = null
+        try {
+          await client.query(
+            `SELECT public.replace_sie_import($1::uuid, $2::uuid, $3::uuid)`,
+            [companyId, importId, ownerId],
+          )
+        } catch (err) {
+          raised = err as Error & { code?: string }
+        }
+        expect(raised, 'spoofed p_user_id must not authorize').not.toBeNull()
+        expect(raised!.message).toMatch(/owners and admins/i)
+        // Explicit errcode so the route can map the raise to a 403.
+        expect(raised!.code).toBe('42501')
+      })
+    }
 
     await expectUntouched(companyId, importId, importEntry)
   })

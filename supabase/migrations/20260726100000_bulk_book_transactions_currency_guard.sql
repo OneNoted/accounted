@@ -21,8 +21,18 @@
 -- everywhere. It is COALESCEd before comparison so a NULL/SEK selection is
 -- not treated as a currency mix and stays bookable.
 --
+-- A HOMOGENEOUS non-SEK batch is refused as well (BULK_BOOK_FOREIGN_CURRENCY).
+-- journal_entry_lines.debit_amount / credit_amount are ALWAYS kronor
+-- (lib/bookkeeping/currency-utils.ts: `currency` on a line labels the
+-- underlying document, never the unit of the ledger columns), and this RPC
+-- carries no exchange rate to convert with: booking two EUR transactions of
+-- 100 + 200 would write 300 into the SEK columns, and balansräkning,
+-- momsdeklaration and SIE export would all read that as kronor. Foreign
+-- transactions belong in the FX-aware flows that resolve a rate and book the
+-- kursdifferens (7960/3960), one transaction at a time.
+--
 -- Body is otherwise identical to 20260702230000_dimensions_generated_column_cutover.sql:
--- only the v_currency declarations and the guard inside the tx loop are new.
+-- only the v_currency declarations and the two currency guards are new.
 
 CREATE OR REPLACE FUNCTION public.bulk_book_transactions(
   p_tx_ids uuid[],
@@ -157,6 +167,17 @@ BEGIN
   IF v_tx_count <> COALESCE(array_length(p_tx_ids, 1), 0) THEN
     RETURN jsonb_build_object('ok', false, 'code', 'BULK_BOOK_TXS_NOT_FOUND',
       'details', jsonb_build_object('expected', array_length(p_tx_ids, 1), 'found', v_tx_count));
+  END IF;
+
+  -- A homogeneous foreign batch is refused too. The debit/credit columns
+  -- written below are ALWAYS kronor and this function has no exchange rate:
+  -- letting a EUR selection through would post its foreign magnitudes as SEK
+  -- and every downstream reader (balansräkning, moms, SIE) would state an
+  -- amount matching no affärshändelse. Foreign transactions are booked one at
+  -- a time through the FX-aware flows instead.
+  IF COALESCE(v_currency, 'SEK') <> 'SEK' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'BULK_BOOK_FOREIGN_CURRENCY',
+      'details', jsonb_build_object('currency', v_currency));
   END IF;
 
   v_total_amount_abs := ABS(v_total_amount);
@@ -390,7 +411,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.bulk_book_transactions(uuid[], uuid, jsonb, uuid) IS
-  'Bulk-book N bank transactions sharing the same date AND the same currency into a single combined verifikat (samlingsverifikation per BFL 5 kap 6§). Mixed-currency selections are refused with BULK_BOOK_MIXED_CURRENCY: one redovisningsvaluta per BFL 4 kap 6§. Dimensions PR9: lines write the dimensions bag only: cost_center/project are GENERATED columns derived from keys 1/6.';
+  'Bulk-book N SEK bank transactions sharing the same date into a single combined verifikat (samlingsverifikation per BFL 5 kap 6§). Mixed-currency selections are refused with BULK_BOOK_MIXED_CURRENCY (one redovisningsvaluta per BFL 4 kap 6§) and homogeneous non-SEK selections with BULK_BOOK_FOREIGN_CURRENCY (the ledger columns are always kronor and this RPC has no exchange rate). Dimensions PR9: lines write the dimensions bag only: cost_center/project are GENERATED columns derived from keys 1/6.';
 
 REVOKE ALL ON FUNCTION public.bulk_book_transactions(uuid[], uuid, jsonb, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.bulk_book_transactions(uuid[], uuid, jsonb, uuid) TO authenticated;

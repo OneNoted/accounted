@@ -1,10 +1,15 @@
 /**
  * Tests for the payroll MCP read tools (payroll gap-closure 1.6):
- * gnubok_get_employee, gnubok_get_payslip, gnubok_list_absence.
+ * gnubok_get_employee, gnubok_get_payslip, gnubok_list_absence, plus the
+ * personnummer contract on gnubok_list_employees and gnubok_get_salary_run.
  *
  * PII rule under test: personnummer is ALWAYS masked on the MCP surface
  * (LLM context is a leak surface); there is no full-value drill-in here,
- * unlike v1's GET /employees/{id}.
+ * unlike v1's GET /employees/{id}. The mask is YYYYMMDD-XXXX, so
+ * personnummer_last4 must never ride along in the same payload: mask + last4
+ * reconstructs the full personnummer by concatenation. Responses expose only
+ * personnummer_masked (via maskEmployeeForResponse), never the ciphertext,
+ * never last4, and never a mask under the writable `personnummer` key.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -15,6 +20,8 @@ const getEmployee = tools.find((t) => t.name === 'gnubok_get_employee')!
 const getPayslip = tools.find((t) => t.name === 'gnubok_get_payslip')!
 const listAbsence = tools.find((t) => t.name === 'gnubok_list_absence')!
 const getVacationBalance = tools.find((t) => t.name === 'gnubok_get_vacation_balance')!
+const listEmployees = tools.find((t) => t.name === 'gnubok_list_employees')!
+const getSalaryRun = tools.find((t) => t.name === 'gnubok_get_salary_run')!
 
 // Synthetic fixture personnummer (year 1900, zero suffix): must not look
 // like production-format PII.
@@ -92,6 +99,112 @@ describe('gnubok_get_employee', () => {
     await expect(
       getEmployee.execute({ employee_id: 'nope' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
     ).rejects.toThrow(/not found/i)
+  })
+})
+
+describe('gnubok_list_employees: personnummer contract', () => {
+  it('strips personnummer + personnummer_last4 and exposes only personnummer_masked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The fixture deliberately carries personnummer_last4 even though the
+    // select no longer requests it: the helper must strip it regardless, so
+    // a projection regression can never leak it again.
+    enqueue({
+      data: [
+        {
+          id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          first_name: 'Anna',
+          last_name: 'Andersson',
+          personnummer: SAMPLE_PERSONNUMMER,
+          personnummer_last4: '0000',
+          employment_type: 'employee',
+          monthly_salary: 35000,
+          hourly_rate: null,
+          employment_degree: 100,
+          tax_table_number: 33,
+          tax_column: 1,
+          salary_type: 'monthly',
+          default_dimensions: {},
+          is_active: true,
+        },
+      ],
+    })
+
+    const result = (await listEmployees.execute(
+      {}, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { employees: Array<Record<string, unknown>>; count: number }
+
+    expect(result.count).toBe(1)
+    const emp = result.employees[0]
+    expect(emp.personnummer_masked).toBe('19000101-XXXX')
+    expect(emp.first_name).toBe('Anna')
+    expect(emp.monthly_salary).toBe(35000)
+    // Neither the ciphertext key nor last4 survives, and the mask never goes
+    // out under the writable `personnummer` key.
+    expect(emp).not.toHaveProperty('personnummer')
+    expect(emp).not.toHaveProperty('personnummer_last4')
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain(SAMPLE_PERSONNUMMER)
+    expect(serialized).not.toContain('personnummer_last4')
+  })
+})
+
+describe('gnubok_get_salary_run: personnummer contract', () => {
+  it('masks the embedded employee and never returns last4 or ciphertext', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'run-1',
+        status: 'draft',
+        period_year: 2026,
+        period_month: 6,
+        total_gross: 35000,
+        total_net: 26800,
+      },
+    })
+    enqueue({
+      data: [
+        {
+          id: 'sre-1',
+          salary_run_id: 'run-1',
+          employee_id: 'emp-1',
+          gross_salary: 35000,
+          net_salary: 26800,
+          // Fixture carries last4 on purpose: the helper must strip it even
+          // if the embed projection ever regresses to include it.
+          employee: {
+            first_name: 'Anna',
+            last_name: 'Andersson',
+            personnummer: SAMPLE_PERSONNUMMER,
+            personnummer_last4: '0000',
+          },
+        },
+      ],
+    })
+
+    const result = (await getSalaryRun.execute(
+      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { employees: Array<{ employee: Record<string, unknown> | null }> }
+
+    const emp = result.employees[0].employee!
+    expect(emp.personnummer_masked).toBe('19000101-XXXX')
+    expect(emp.first_name).toBe('Anna')
+    expect(emp).not.toHaveProperty('personnummer')
+    expect(emp).not.toHaveProperty('personnummer_last4')
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain(SAMPLE_PERSONNUMMER)
+    expect(serialized).not.toContain('personnummer_last4')
+  })
+
+  it('keeps a null employee embed as null', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft' } })
+    enqueue({ data: [{ id: 'sre-1', salary_run_id: 'run-1', employee_id: 'emp-1', employee: null }] })
+
+    const result = (await getSalaryRun.execute(
+      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { employees: Array<{ employee: unknown }> }
+
+    expect(result.employees[0].employee).toBeNull()
   })
 })
 

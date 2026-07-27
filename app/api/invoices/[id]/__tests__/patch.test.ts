@@ -154,6 +154,7 @@ describe('PATCH /api/invoices/[id]', () => {
     enqueue({ data: makeCustomer({ id: 'customer-1', customer_type: 'swedish_business' }), error: null }) // customer
     enqueue({ data: { vat_registered: true }, error: null }) // company_settings.vat_registered
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // update ... select('id')
+    enqueue({ data: [], error: null }) // snapshot existing invoice_items
     enqueue({ data: [], error: null }) // delete invoice_items
     enqueue({ data: null, error: null }) // insert invoice_items
     enqueue({

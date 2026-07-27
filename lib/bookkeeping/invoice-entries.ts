@@ -1,5 +1,5 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
-import { resolveSekAmount, resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
+import { resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
 import {
   coerceDimensionsBag,
@@ -50,6 +50,10 @@ export const INVOICE_FX_RATE_MISSING = 'INVOICE_FX_RATE_MISSING' as const
  *
  * Refusing instead of guessing follows the `match_batch_allocate` RPC
  * (BATCH_FX_RATE_MISSING) and `toSekOrThrow()` in supplier-invoice-entries.ts.
+ *
+ * The same refusal covers the header-level fallbacks (no-items bookings and
+ * the payment entry) via `headerToSekOrThrow` below: those paths DO honour a
+ * populated `*_sek` column, so only rows with no SEK source at all refuse.
  */
 export class InvoiceFxRateMissingError extends Error {
   readonly code = INVOICE_FX_RATE_MISSING
@@ -76,6 +80,32 @@ function itemToSekOrThrow(
   exchangeRate: number | null | undefined
 ): number {
   const sek = resolveSekAmountOrNull(amount, null, currency, exchangeRate)
+  if (sek === null) throw new InvoiceFxRateMissingError(currency || 'okänd valuta')
+  return sek
+}
+
+/**
+ * Convert an invoice-level (header) amount to SEK for a journal entry line.
+ *
+ * Same refusal contract as `itemToSekOrThrow`, but honours a pre-computed
+ * `*_sek` column when the row carries one: header amounts (subtotal /
+ * vat_amount / total) have SEK twins that items lack. Rows that DO carry a
+ * `*_sek` value or a usable rate convert exactly as before; only the "foreign
+ * amount with no SEK source at all" case changes, from silently relabelling
+ * the foreign number as kronor (the lenient `resolveSekAmount` ladder, which
+ * currency-utils marks READ-ONLY CODE ONLY) to the same INVOICE_FX_RATE_MISSING
+ * refusal the item-driven generators raise. Without this, a rate-less foreign
+ * invoice booked through a caller without hydrated items posted its raw
+ * foreign number as kronor (1 250 EUR → 1 250 kr on 1510): balanced, so no
+ * trigger fired, and undetectable downstream.
+ */
+function headerToSekOrThrow(
+  amount: number,
+  amountSek: number | null | undefined,
+  currency: string | null | undefined,
+  exchangeRate: number | null | undefined
+): number {
+  const sek = resolveSekAmountOrNull(amount, amountSek, currency, exchangeRate)
   if (sek === null) throw new InvoiceFxRateMissingError(currency || 'okänd valuta')
   return sek
 }
@@ -433,9 +463,11 @@ export async function createInvoiceJournalEntry(
       { deferAccruals: true, defaultDimensions }
     ))
   } else {
-    // Fallback: no items available, use invoice-level amounts
+    // Fallback: no items available, use invoice-level amounts. Strict
+    // conversion: a rate-less foreign header must refuse exactly like the
+    // item-driven path, not post the raw foreign number as kronor.
     const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
-    const subtotalSek = resolveSekAmount(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
+    const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
 
     creditLines.push({
       account_number: revenueAccount,
@@ -447,7 +479,7 @@ export async function createInvoiceJournalEntry(
 
     if (invoice.vat_amount > 0) {
       if (isForeign) {
-        const vatSek = resolveSekAmount(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
+        const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
         const vatAccount = getOutputVatAccount(invoice.vat_treatment)
         creditLines.push({
           account_number: vatAccount,
@@ -483,7 +515,7 @@ export async function createInvoiceJournalEntry(
   const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
   const debitAmount = isForeign
     ? Math.round(totalCredits * 100) / 100
-    : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
+    : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
   const arAmount = Math.round((debitAmount - rotRut.totalSek) * 100) / 100
 
   lines.push({
@@ -556,10 +588,14 @@ export async function createInvoicePaymentJournalEntry(
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
   // When paymentAmount is provided, use it for the 1930/1510 line amounts.
-  // Otherwise use the full invoice total (backward compatible).
+  // Otherwise use the full invoice total (backward compatible). Strict
+  // conversion on both: a rate-less foreign payment would otherwise clear
+  // 1510 with the raw foreign number relabelled as kronor (balanced against
+  // an equally wrong 1930 debit, so nothing downstream could catch it).
+  // Rows carrying total_sek or a usable rate convert exactly as before.
   const bookedSekAmount = isPartial
-    ? resolveSekAmount(paymentAmount, null, invoice.currency, invoice.exchange_rate)
-    : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
+    ? headerToSekOrThrow(paymentAmount, null, invoice.currency, invoice.exchange_rate)
+    : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
 
   const lines: CreateJournalEntryLineInput[] = []
 
@@ -696,10 +732,12 @@ export async function createCreditNoteJournalEntry(
       })
     }
   } else {
-    // Fallback: invoice-level amounts
+    // Fallback: invoice-level amounts. Same strict conversion as the
+    // createInvoiceJournalEntry fallback: a rate-less foreign credit note
+    // must refuse, not reverse the receivable with a mislabelled number.
     const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType)
-    const absSubtotal = Math.abs(resolveSekAmount(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate))
-    const absVat = Math.abs(resolveSekAmount(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate))
+    const absSubtotal = Math.abs(headerToSekOrThrow(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate))
+    const absVat = Math.abs(headerToSekOrThrow(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate))
 
     debitLines.push({
       account_number: revenueAccount,
@@ -804,9 +842,10 @@ export async function createInvoiceCashEntry(
       { defaultDimensions }
     ))
   } else {
-    // Fallback: invoice-level amounts
+    // Fallback: invoice-level amounts. Strict conversion, same rationale as
+    // the createInvoiceJournalEntry fallback above.
     const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
-    const subtotalSek = resolveSekAmount(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
+    const subtotalSek = headerToSekOrThrow(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
 
     creditLines.push({
       account_number: revenueAccount,
@@ -817,7 +856,7 @@ export async function createInvoiceCashEntry(
     })
 
     if (invoice.vat_amount > 0) {
-      const vatSek = resolveSekAmount(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
+      const vatSek = headerToSekOrThrow(invoice.vat_amount, invoice.vat_amount_sek, invoice.currency, invoice.exchange_rate)
       const vatAccount = getOutputVatAccount(invoice.vat_treatment)
       creditLines.push({
         account_number: vatAccount,
@@ -842,7 +881,7 @@ export async function createInvoiceCashEntry(
   const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
   const cashDebit = isForeign
     ? Math.round(totalCredits * 100) / 100
-    : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
+    : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
   const bankAmount = Math.round((cashDebit - rotRut.totalSek) * 100) / 100
   lines.push({
     account_number: settlementAccountNumber,

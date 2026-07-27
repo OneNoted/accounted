@@ -28,7 +28,11 @@ import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-ent
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { detectBookingDuplicate, type BookingDuplicateExclusions } from '@/lib/transactions/booking-duplicate-detection'
+import {
+  detectBookingDuplicate,
+  type BookedDuplicateCandidate,
+  type BookingDuplicateExclusions,
+} from '@/lib/transactions/booking-duplicate-detection'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger } from '@/lib/logger'
@@ -65,6 +69,53 @@ export interface CategorizeMatchedTransactionOpts {
    * registry at staging time (MCP) or picked in the UI.
    */
   dimensions?: Record<string, string>
+}
+
+// ── Helper: duplicate-guard claim text ───────────────────────────────
+
+/**
+ * Swedish two-decimal amount for running prose ("11 500,00"). sv-SE grouping
+ * so a raw JS number ("11500.5") never lands inside Swedish text. Magnitude
+ * only: direction is the bank line's own, and a minus sign in running Swedish
+ * prose reads as a typo.
+ */
+function formatProseAmount(n: number): string {
+  return Math.abs(n).toLocaleString('sv-SE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
+/**
+ * The claim half of the duplicate-guard refusal message: what the candidate
+ * verifikat already books on the bank account. Shared by the web/agent
+ * categorize refusal below and the MCP `gnubok_categorize_transaction` guard
+ * so the two surfaces can never drift (the MCP copy used to print
+ * "bokför null kr" for a rateless foreign sibling and misattributed the
+ * missing rate to the target row).
+ *
+ * Three branches:
+ *   - `amount === null`: foreign sibling that matched EXACTLY in its own
+ *     currency but carries no stored rate. State the match in that currency
+ *     rather than fabricating kronor (the match itself is undiminished).
+ *   - verified: the candidate's SEK figure, "kr"-labelled. `dup.amount` is
+ *     always a SEK figure or null, never the raw foreign number, so "kr" is
+ *     correct wherever it prints.
+ *   - unverified with a kr figure (ledger-voucher path): the leg's own SEK
+ *     amount is real, but no comparison against the TARGET was possible
+ *     because the target is foreign without a rate. Say so.
+ */
+export function buildDuplicateBookingClaim(
+  dup: Pick<BookedDuplicateCandidate, 'amount' | 'currency' | 'amount_in_currency' | 'amount_verified'>,
+  transactionCurrency: string | null | undefined,
+): string {
+  return dup.amount == null
+    ? `bokför redan samma belopp (${formatProseAmount(dup.amount_in_currency ?? 0)} ${dup.currency}) på bankkontot, ` +
+      `men värdet i kronor kan inte fastställas eftersom växelkurs saknas`
+    : dup.amount_verified
+      ? `bokför redan ${formatProseAmount(dup.amount)} kr på bankkontot`
+      : `bokför ${formatProseAmount(dup.amount)} kr på bankkontot, och beloppen kunde inte jämföras: ` +
+        `transaktionen är i ${transactionCurrency} utan växelkurs, så vi kan inte avgöra om det är samma affärshändelse`
 }
 
 // ── Helper: ensure a fiscal period covers the date ──────────────────
@@ -206,23 +257,10 @@ export async function categorizeMatchedTransaction(
     }
     if (dup) {
       const voucher = dup.voucher_label ? `verifikat ${dup.voucher_label}` : 'en befintlig verifikation'
-      // dup.amount is always a SEK figure or null, never the raw foreign
-      // number, so "kr" is correct wherever it prints. Printing the
-      // transaction's own amount instead would label a foreign number as
-      // kronor.
-      // Magnitudes, like the pre-FX message: direction is the bank line's own
-      // and a minus sign in running Swedish prose reads as a typo.
-      const claim =
-        dup.amount == null
-          ? // Foreign sibling that matched EXACTLY in its own currency but
-            // carries no stored rate: state the match in that currency rather
-            // than fabricating kronor (the match itself is undiminished).
-            `bokför redan samma belopp (${Math.abs(dup.amount_in_currency ?? 0)} ${dup.currency}) på bankkontot, ` +
-            `men värdet i kronor kan inte fastställas eftersom växelkurs saknas`
-          : dup.amount_verified
-            ? `bokför redan ${Math.abs(dup.amount)} kr på bankkontot`
-            : `bokför ${Math.abs(dup.amount)} kr på bankkontot, och beloppen kunde inte jämföras: ` +
-              `transaktionen är i ${transaction.currency} utan växelkurs, så vi kan inte avgöra om det är samma affärshändelse`
+      // Shared three-branch claim (see buildDuplicateBookingClaim above): SEK
+      // figure when verified, foreign amount when the sibling has no SEK
+      // value, explicit "could not compare" otherwise.
+      const claim = buildDuplicateBookingClaim(dup, transaction.currency)
       return {
         error:
           `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) ${claim}. ` +

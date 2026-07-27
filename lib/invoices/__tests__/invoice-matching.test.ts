@@ -609,3 +609,111 @@ describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
     expect(result).toHaveLength(1)
   })
 })
+
+// ============================================================
+// findInvoiceMatchCandidates: currency normalization
+// ============================================================
+//
+// `invoices.currency` and `transactions.currency` are both nullable with
+// DEFAULT 'SEK', so a legacy NULL (or a lowercase code) means kronor. The raw
+// `invoice.currency === transaction.currency` comparison sent those rows down
+// the cross-currency branch, where `total_sek` (DEFAULT 0) is never usable, so
+// legacy NULL-currency invoices were excluded from ALL matching with no
+// exclusion report either (isUnconvertedForeignInvoice required a truthy
+// currency). Both helpers now normalize through normalizeCurrencyCode.
+
+describe('findInvoiceMatchCandidates: currency normalization', () => {
+  function enqueueSingleInvoice(inv: unknown) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [inv], error: null })
+    // Status-leak guard's invoice_payments lookup.
+    enqueue({ data: [], error: null })
+    return supabase
+  }
+
+  it('matches a legacy NULL-currency invoice against a SEK bank row', async () => {
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({
+        total: 12500,
+        remaining_amount: 12500,
+        status: 'sent',
+        currency: null as unknown as Invoice['currency'],
+        total_sek: 0,
+      }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].confidence).toBe(0.80)
+    // NULL means SEK per the column default: never an FX exclusion.
+    expect(result.unconvertedFxCount).toBe(0)
+    expect(result.unconvertedFxInvoices).toEqual([])
+  })
+
+  it('compares currency codes case-insensitively', async () => {
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({
+        total: 12500,
+        remaining_amount: 12500,
+        status: 'sent',
+        currency: 'sek' as unknown as Invoice['currency'],
+      }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.unconvertedFxCount).toBe(0)
+  })
+
+  it('never reports a NULL-currency invoice as an unconverted FX exclusion', async () => {
+    // Amounts deliberately do not line up: no match, but the miss is an
+    // ordinary amount miss, not a swallowed FX exclusion.
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({
+        total: 999,
+        remaining_amount: 999,
+        status: 'sent',
+        currency: null as unknown as Invoice['currency'],
+        total_sek: 0,
+      }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+
+    expect(result.matches).toEqual([])
+    expect(result.unconvertedFxCount).toBe(0)
+    expect(result.unconvertedFxInvoices).toEqual([])
+  })
+
+  it('falls back to the stored exchange_rate when total_sek was never written', async () => {
+    // Same SEK-resolution as duplicate-guard-currency.ts#invoiceAmountSek (one
+    // definition): total_sek 0 means "not stored", the booked exchange_rate is
+    // still a STORED conversion and makes the invoice comparable.
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({
+        total: 1000,
+        remaining_amount: 1000,
+        status: 'sent',
+        currency: 'EUR',
+        total_sek: 0,
+        exchange_rate: 11.5,
+      }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 11500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].confidence).toBe(0.80)
+    expect(result.unconvertedFxCount).toBe(0)
+  })
+})

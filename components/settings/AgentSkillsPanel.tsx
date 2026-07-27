@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocale } from 'next-intl'
 import { ChevronDown, GraduationCap, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -74,40 +74,54 @@ export function AgentSkillsPanel() {
   const [bodies, setBodies] = useState<Record<string, string>>({})
   const [loadingBody, setLoadingBody] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoadError(null)
-    try {
-      const res = await fetch('/api/agent/skills')
-      if (!res.ok) {
-        // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
-        // getErrorMessage falls back to the status map.
-        const json = await res.json().catch(() => null)
-        const sessionGone = res.status === 401 || res.status === 403
-        setAtoms(null)
-        setLoadError({
-          detail: sessionGone
-            ? getErrorMessage(json, { statusCode: res.status, locale: errorLocale })
-            : null,
-        })
-        return
-      }
-      // A 200 whose body will not parse throws into the catch below; a 200
-      // without the list is a failed read too. Neither may become a
-      // fabricated "Inga kunskapsområden ännu".
-      const json = await res.json()
-      if (!Array.isArray(json?.data)) {
-        setAtoms(null)
-        setLoadError({ detail: null })
-        return
-      }
-      setAtoms(json.data as AtomMeta[])
-    } catch {
-      setAtoms(null)
-      setLoadError({ detail: null })
-    }
-  }, [errorLocale])
+  // The cancelled closure is the same idiom every sibling panel uses
+  // (TeamPanel, AccountDangerZone): a response that lands after unmount, or
+  // after a newer load superseded this one, must not setState.
+  useEffect(() => {
+    let cancelled = false
 
-  useEffect(() => { void load() }, [load, reloadKey])
+    async function load() {
+      setLoadError(null)
+      try {
+        const res = await fetch('/api/agent/skills')
+        if (!res.ok) {
+          // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+          // getErrorMessage falls back to the status map.
+          const json = await res.json().catch(() => null)
+          if (cancelled) return
+          const sessionGone = res.status === 401 || res.status === 403
+          setAtoms(null)
+          setLoadError({
+            detail: sessionGone
+              ? getErrorMessage(json, { statusCode: res.status, locale: errorLocale })
+              : null,
+          })
+          return
+        }
+        // A 200 whose body will not parse throws into the catch below; a 200
+        // without the list is a failed read too. Neither may become a
+        // fabricated "Inga kunskapsområden ännu".
+        const json = await res.json()
+        if (cancelled) return
+        if (!Array.isArray(json?.data)) {
+          setAtoms(null)
+          setLoadError({ detail: null })
+          return
+        }
+        setAtoms(json.data as AtomMeta[])
+      } catch {
+        if (!cancelled) {
+          setAtoms(null)
+          setLoadError({ detail: null })
+        }
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [reloadKey, errorLocale])
 
   const grouped = useMemo(() => {
     const map: Record<Tier, AtomMeta[]> = { horizontal: [], vertical: [], modifier: [] }

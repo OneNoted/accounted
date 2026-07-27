@@ -216,6 +216,8 @@ function companyParams(companyId: string) {
 function postInvoice(opts: {
   key?: string
   dryRunQuery?: boolean
+  /** Raw value for the ?dry_run= query param (case-sensitivity matrix). */
+  dryRunQueryValue?: string
   dryRunHeader?: boolean
 }): Request {
   const headers: Record<string, string> = {
@@ -224,7 +226,13 @@ function postInvoice(opts: {
   }
   if (opts.key) headers['Idempotency-Key'] = opts.key
   if (opts.dryRunHeader) headers['X-Dry-Run'] = 'true'
-  return new Request(opts.dryRunQuery ? `${INVOICES_URL}?dry_run=true` : INVOICES_URL, {
+  const url =
+    opts.dryRunQueryValue !== undefined
+      ? `${INVOICES_URL}?dry_run=${opts.dryRunQueryValue}`
+      : opts.dryRunQuery
+        ? `${INVOICES_URL}?dry_run=true`
+        : INVOICES_URL
+  return new Request(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(REQUEST_BODY),
@@ -351,6 +359,57 @@ describe('withApiV1: idempotent replay of real commits (must not regress)', () =
     expect(res.status).toBe(409)
     expect((await res.json()).error.code).toBe('IDEMPOTENCY_KEY_REUSE')
     expect(committed).toEqual(['inv-1'])
+  })
+})
+
+describe('withApiV1: dry-run query flag is case-insensitive', () => {
+  // '?dry_run=True' used to fall through the exact-match check and COMMIT for
+  // real while the caller believed it previewed: the one direction this flag
+  // must never fail in.
+  it('previews on ?dry_run=True (mis-cased flag must never commit)', async () => {
+    const { route, committed, previews } = makeInvoiceRoute()
+
+    const res = await route(
+      postInvoice({ key: 'key-10', dryRunQueryValue: 'True' }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.dry_run).toBe(true)
+    expect(previews).toHaveLength(1)
+    expect(committed).toEqual([])
+    expect(mockStoreIdempotency).not.toHaveBeenCalled()
+  })
+
+  it('previews on ?dry_run=TRUE as well', async () => {
+    const { route, committed } = makeInvoiceRoute()
+
+    const res = await route(
+      postInvoice({ key: 'key-11', dryRunQueryValue: 'TRUE' }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.dry_run).toBe(true)
+    expect(committed).toEqual([])
+  })
+
+  it('still commits on non-true values (?dry_run=1, ?dry_run=false)', async () => {
+    const { route, committed, previews } = makeInvoiceRoute()
+
+    const one = await route(
+      postInvoice({ key: 'key-12', dryRunQueryValue: '1' }),
+      companyParams(COMPANY_ID),
+    )
+    const falsy = await route(
+      postInvoice({ key: 'key-13', dryRunQueryValue: 'false' }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(one.status).toBe(201)
+    expect(falsy.status).toBe(201)
+    expect(previews).toHaveLength(0)
+    expect(committed).toEqual(['inv-1', 'inv-2'])
   })
 })
 

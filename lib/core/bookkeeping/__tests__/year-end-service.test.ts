@@ -681,6 +681,39 @@ describe('validateYearEndReadiness: open FX items at balansdagen (ÅRL 4 kap. 13
     expect(result.warnings.find(revaluationWarning)).toContain('1 post(er)')
   })
 
+  it('counts a partially paid FX invoice: its unpaid remainder was open on balansdagen', async () => {
+    // payment-sync sets 'partially_paid' on partial settlements. The old
+    // status list ('sent'/'overdue'/'paid') never matched it, so the readiness
+    // check reported no exposure for a receivable whose 600 EUR remainder
+    // still had to be valued at balansdagskurs (ÅRL 4 kap. 13 §).
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        invoices: [
+          fxInvoice({
+            id: 'inv-partial',
+            status: 'partially_paid',
+            total: 1000,
+            paid_amount: 400,
+            remaining_amount: 600,
+          }),
+        ],
+        invoice_payments: [
+          {
+            id: 'pay-partial',
+            company_id: 'company-1',
+            invoice_id: 'inv-partial',
+            amount: 400,
+            payment_date: '2024-12-01',
+          },
+        ],
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.warnings.find(revaluationWarning)).toContain('1 post(er)')
+  })
+
   it('ignores an invoice issued after balansdagen even though it is open today', async () => {
     // The mirror image: open now, did not exist on the balance sheet date.
     const supabase = makeFilteringClient(

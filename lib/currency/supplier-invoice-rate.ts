@@ -69,6 +69,15 @@ const SUPPORTED_CURRENCIES: ReadonlySet<string> = new Set([
   'DKK',
 ])
 
+/**
+ * Upper plausibility bound for a caller-supplied rate. Same value as the
+ * module-local MAX_PLAUSIBLE_FX_RATE in lib/bookkeeping/invoice-payment-lines.ts
+ * (which mirrors the match_batch_allocate RPC's 0 < rate < 100000 guard): a
+ * rate that far out is as unusable as NULL, and accepting it here would store
+ * total_sek at an absurd multiple that the booking path then posts verbatim.
+ */
+const MAX_PLAUSIBLE_FX_RATE = 100000
+
 export interface ResolvedSupplierInvoiceRate {
   /** Normalised ISO code actually used ('SEK' when the caller omitted one). */
   currency: string
@@ -113,9 +122,10 @@ export interface SupplierInvoiceRateInput {
  *
  * Order:
  *   1. SEK invoice        → rate 1, no stored exchange_rate.
- *   2. Caller supplied a positive rate → trust it (the web form pre-fills it
- *      from /api/currency/rate, and a user who read the rate off the invoice
- *      must be able to override us).
+ *   2. Caller supplied a positive rate below MAX_PLAUSIBLE_FX_RATE → trust it
+ *      (the web form pre-fills it from /api/currency/rate, and a user who read
+ *      the rate off the invoice must be able to override us). A rate at or
+ *      above the bound is refused, not silently replaced by a fetch.
  *   3. Otherwise          → fetch from Riksbanken for the invoice date, WITH
  *      the supabase client so the shared `exchange_rates` cache is consulted
  *      and populated. Same call shape as lib/transactions/ingest.ts.
@@ -147,6 +157,14 @@ export async function resolveSupplierInvoiceExchangeRate(
 
   const supplied = input.suppliedRate
   if (supplied != null && Number.isFinite(supplied) && supplied > 0) {
+    // Implausibly large rates are refused outright rather than silently
+    // replaced by a fetched one: the caller explicitly stated a rate, so a
+    // fat-fingered 100000+ must bounce back for correction, not be swapped
+    // for a number the user never saw. Non-positive/absent values keep the
+    // existing fall-through-to-fetch behaviour (the web form's empty field).
+    if (supplied >= MAX_PLAUSIBLE_FX_RATE) {
+      return { ok: false, currency, invoiceDate: input.invoiceDate }
+    }
     return {
       ok: true,
       rate: {

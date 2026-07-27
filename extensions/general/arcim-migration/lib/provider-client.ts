@@ -186,10 +186,15 @@ export async function deleteConsent(consentId: string): Promise<void> {
  * (not the previous 16 hex chars of a UUID) because this value is now the only
  * thing standing between an attacker and binding their provider account to
  * someone else's consent.
+ *
+ * Default lifetime is 10 minutes: the state only has to survive the redirect
+ * to the provider's login page and back. OAuth guidance puts state/OTC
+ * lifetimes at 5-10 minutes; every extra minute widens the window in which a
+ * leaked or phished state can still be consumed.
  */
 export async function generateOtc(
   consentId: string,
-  expiresInMinutes: number = 60,
+  expiresInMinutes: number = 10,
 ): Promise<OtcResponse> {
   const supabase = createServiceClient()
 

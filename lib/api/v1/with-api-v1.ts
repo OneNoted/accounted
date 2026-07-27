@@ -201,7 +201,13 @@ function extractForensicContext(request: Request, log: Logger): { ip: string | u
 }
 
 function isDryRun(request: Request, url: URL): boolean {
-  if (url.searchParams.get('dry_run') === 'true') return true
+  // Case-insensitive on BOTH surfaces. The header was always lowercased, but
+  // the query flag used to require exactly 'true', so '?dry_run=True'
+  // committed for real while the caller believed it previewed: the worst
+  // possible parse of a preview flag. Any other value ('1', 'yes', 'false')
+  // stays non-dry-run, unchanged.
+  const queryVal = url.searchParams.get('dry_run')
+  if (queryVal !== null && queryVal.toLowerCase() === 'true') return true
   const headerVal = request.headers.get(DRY_RUN_HEADER)
   if (headerVal && headerVal.toLowerCase() === 'true') return true
   return false

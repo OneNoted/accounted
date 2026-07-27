@@ -23,11 +23,16 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
  * PostgREST, and lib/pending-operations/commit.ts passes tx_ids straight
  * through.
  *
+ * A HOMOGENEOUS non-SEK batch is refused too (BULK_BOOK_FOREIGN_CURRENCY):
+ * journal_entry_lines.debit_amount / credit_amount are ALWAYS kronor, and the
+ * RPC has no exchange rate, so two EUR transactions of 100 + 200 would post a
+ * verifikat whose 300 reads as kronor in balansräkning, moms and SIE export.
+ *
  * Cases:
  *   - create-new path refuses a mixed-currency selection
  *   - link-existing path refuses the same selection
  *   - NULL currency is read as the column default 'SEK' and stays bookable
- *   - a genuine single-currency (non-SEK) batch still books
+ *   - a homogeneous non-SEK batch is refused and nothing is written
  */
 
 async function insertTransaction(params: {
@@ -81,7 +86,7 @@ async function seedTenant() {
 interface RpcResult {
   ok: boolean
   code?: string
-  details?: { currencies?: string[] }
+  details?: { currencies?: string[]; currency?: string }
   mode?: 'link_existing' | 'create_new'
   journal_entry_id?: string
   linked_tx_count?: number
@@ -193,11 +198,14 @@ describe('bulk_book_transactions: currency homogeneity (BFL 4 kap 6 §)', () => 
     })
   })
 
-  it('still books a homogeneous non-SEK selection', async () => {
+  it('refuses a homogeneous non-SEK selection (the ledger columns are always kronor)', async () => {
     const { userId, companyId } = await seedTenant()
     const eur1 = await insertTransaction({ userId, companyId, amount: 100, currency: 'EUR' })
     const eur2 = await insertTransaction({ userId, companyId, amount: 200, currency: 'EUR' })
 
+    // The old body accepted this batch and wrote 300 into the always-SEK
+    // debit/credit columns: a verifikat read as 300 kronor by balansräkning,
+    // moms and SIE while the affärshändelse was 300 euro.
     const newEntry = {
       description: 'Samlingsverifikation EUR 2026-06-05',
       lines: [
@@ -212,9 +220,21 @@ describe('bulk_book_transactions: currency homogeneity (BFL 4 kap 6 §)', () => 
         [[eur1, eur2], null, JSON.stringify(newEntry), companyId],
       )
       const result = r.rows[0]!.bulk_book_transactions
-      expect(result.ok).toBe(true)
-      expect(result.mode).toBe('create_new')
-      expect(result.linked_tx_count).toBe(2)
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BULK_BOOK_FOREIGN_CURRENCY')
+      expect(result.details?.currency).toBe('EUR')
+
+      // Nothing was posted and nothing was linked.
+      const jes = await client.query(
+        `SELECT id FROM public.journal_entries WHERE company_id = $1`,
+        [companyId],
+      )
+      expect(jes.rows).toHaveLength(0)
+      const links = await client.query(
+        `SELECT transaction_id FROM public.transaction_voucher_links WHERE company_id = $1`,
+        [companyId],
+      )
+      expect(links.rows).toHaveLength(0)
     })
   })
 })

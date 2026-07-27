@@ -216,6 +216,19 @@ describe('extractBirthDate', () => {
     expect(result.month).toBe(1)
     expect(result.day).toBe(1)
   })
+
+  it('normalizes the samordningsnummer day offset to the real calendar day', () => {
+    // Day 61 = the 1st + 60, day 91 = the 31st + 60. The offset is a numbering
+    // convention on the printed digits, not a calendar fact: consumers doing
+    // date math must see 1-31, never 61-91. Same synthetic, Luhn-valid
+    // samordningsnummer as the validatePersonnummer suite above.
+    expect(extractBirthDate('199001619809')).toEqual({ year: 1990, month: 1, day: 1 })
+    expect(extractBirthDate('199001919803')).toEqual({ year: 1990, month: 1, day: 31 })
+  })
+
+  it('leaves ordinary days 1-31 untouched', () => {
+    expect(extractBirthDate('199006159802').day).toBe(15)
+  })
 })
 
 describe('calculateAge', () => {
@@ -226,6 +239,18 @@ describe('calculateAge', () => {
   it('returns age minus one before birthday', () => {
     expect(calculateAge('199006159802', '2026-06-14')).toBe(35)
     expect(calculateAge('199006159802', '2026-06-15')).toBe(36)
+  })
+
+  it('computes samordningsnummer age from the real calendar day', () => {
+    // 199001619809 is born 1990-01-01 (printed day 61 = 1 + 60). Comparing the
+    // reference day against the OFFSET day made `refDay < birth.day` true for
+    // every day of the birth month, shaving a year off the age until the month
+    // was over: born-on-the-1st read as 35 on their own 36th birthday.
+    expect(calculateAge('199001619809', '2026-01-01')).toBe(36)
+    expect(calculateAge('199001619809', '2025-12-31')).toBe(35)
+    // End of the offset range too: 1990-01-31 (printed day 91).
+    expect(calculateAge('199001919803', '2026-01-30')).toBe(35)
+    expect(calculateAge('199001919803', '2026-01-31')).toBe(36)
   })
 })
 

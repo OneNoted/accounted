@@ -201,7 +201,12 @@ export function reportCronFailure(report: CronFailureReport): void {
     const now = report.now ?? Date.now()
 
     if (!cronReportState.has(key) && cronReportState.size >= MAX_TRACKED_CRON_KEYS) {
-      cronReportState.clear()
+      // Evict the oldest entry only (Map preserves insertion order). A
+      // wholesale clear() would drop every live throttle at once, so an
+      // in-progress failure storm would re-report immediately: the exact
+      // event flood the throttle exists to damp.
+      const oldestKey = cronReportState.keys().next().value
+      if (oldestKey !== undefined) cronReportState.delete(oldestKey)
     }
 
     const state = cronReportState.get(key) ?? { consecutiveFailures: 0, lastReportAt: null }

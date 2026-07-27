@@ -8,6 +8,7 @@ import { generateGeneralLedger } from './general-ledger'
 import { generateJournalRegister } from './journal-register'
 import { calculateVatDeclaration } from './vat-declaration'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
+import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
 import {
@@ -492,9 +493,17 @@ async function writeDocuments(
         }
 
         try {
-          const { data: fileData, error } = await supabase.storage
-            .from('documents')
-            .download(doc.storage_path)
+          // Dual-layout download: the document batch is snapshotted up
+          // front, and a concurrent Phase B backfill can re-home an object
+          // (legacy uploader-scoped -> company-scoped) and later remove the
+          // source mid-run, leaving the stored pointer stale. The helper
+          // tries the stored pointer first, then the alternate layout, so a
+          // healthy document never lands in the manifest as an error.
+          const { blob: fileData, error } = await downloadDocumentObject(
+            supabase,
+            doc.storage_path,
+            companyId
+          )
 
           if (error || !fileData) {
             manifest.push({

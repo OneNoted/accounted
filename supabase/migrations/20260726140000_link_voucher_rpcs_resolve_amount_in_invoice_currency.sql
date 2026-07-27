@@ -48,6 +48,13 @@
 --     with a CURRENCY_MISMATCH rather than summing only the readable lines and
 --     silently understating a voucher that settles more than we can see.
 --
+-- The RESOLVED currency (v_invoice_currency, NULL normalized to 'SEK') is
+-- used consistently: in the label guard, in the persisted payment row and in
+-- the returned jsonb. Comparing the guard against the RAW nullable column
+-- made a legacy NULL-currency invoice unlinkable ('SEK' IS DISTINCT FROM NULL
+-- is true, so every ordinary domestic payment raised CURRENCY_MISMATCH), and
+-- the insert persisted that NULL into invoice_payments.currency.
+--
 -- Everything else in both functions (tenant guard, notes cap, attribution,
 -- FOR UPDATE locking, the already-linked check, the amount guard, the writes,
 -- the returned jsonb) is verbatim from the previous definitions:
@@ -240,12 +247,16 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'code', 'LINK_VOUCHER_NO_AR_CREDIT');
   END IF;
 
-  -- Label guard, unchanged and still load-bearing, but no longer as a unit
-  -- check: v_ar_credit_total is already in the invoice's currency. What it
-  -- catches now is a counterparty discriminator, a matched line stamped with
-  -- some other document's currency. Always passes on a foreign invoice, because
-  -- only same-labelled lines could be read at all.
-  IF COALESCE(v_line_currency, v_invoice.currency) IS DISTINCT FROM v_invoice.currency THEN
+  -- Label guard, still load-bearing, but no longer as a unit check:
+  -- v_ar_credit_total is already in the invoice's currency. What it catches
+  -- now is a counterparty discriminator, a matched line stamped with some
+  -- other document's currency. Always passes on a foreign invoice, because
+  -- only same-labelled lines could be read at all. Both sides compare the
+  -- RESOLVED v_invoice_currency, never the raw nullable column: with the raw
+  -- column, a legacy NULL-currency invoice (which has always meant SEK) hit
+  -- 'SEK' IS DISTINCT FROM NULL = true and an ordinary domestic payment
+  -- raised LINK_VOUCHER_CURRENCY_MISMATCH forever.
+  IF COALESCE(v_line_currency, v_invoice_currency) IS DISTINCT FROM v_invoice_currency THEN
     RETURN jsonb_build_object(
       'ok', false,
       'code', 'LINK_VOUCHER_CURRENCY_MISMATCH',
@@ -301,12 +312,15 @@ BEGIN
       updated_at = v_now
   WHERE id = p_invoice_id;
 
+  -- The payment row persists the RESOLVED currency: writing the raw column
+  -- would store NULL for a legacy NULL-currency invoice, and the payment's
+  -- unit is a fact this row must state, not inherit as "unknown".
   INSERT INTO public.invoice_payments (
     user_id, company_id, invoice_id, payment_date, amount, currency,
     exchange_rate, journal_entry_id, transaction_id, notes
   ) VALUES (
     v_acting_user, p_company_id, p_invoice_id, v_voucher.entry_date,
-    v_payment_amount, v_invoice.currency, v_invoice.exchange_rate,
+    v_payment_amount, v_invoice_currency, v_invoice.exchange_rate,
     p_journal_entry_id, NULL, p_notes
   )
   RETURNING id INTO v_payment_id;
@@ -319,7 +333,7 @@ BEGIN
     'remaining_amount', v_new_remaining,
     'payment_amount', v_payment_amount,
     'journal_entry_id', p_journal_entry_id,
-    'currency', v_invoice.currency,
+    'currency', v_invoice_currency,
     'payment_date', v_voucher.entry_date
   );
 END;
@@ -464,8 +478,9 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'code', 'LINK_SI_VOUCHER_NO_AP_DEBIT');
   END IF;
 
-  -- Label guard, unchanged: a counterparty discriminator, not a unit check.
-  IF COALESCE(v_line_currency, v_invoice.currency) IS DISTINCT FROM v_invoice.currency THEN
+  -- Label guard: a counterparty discriminator, not a unit check. Compares the
+  -- RESOLVED currency on both sides, as in link_invoice_to_voucher above.
+  IF COALESCE(v_line_currency, v_invoice_currency) IS DISTINCT FROM v_invoice_currency THEN
     RETURN jsonb_build_object('ok', false, 'code', 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
       'details', jsonb_build_object('invoice_currency', v_invoice.currency, 'line_currency', v_line_currency));
   END IF;
@@ -504,7 +519,7 @@ BEGIN
     journal_entry_id, transaction_id, notes
   ) VALUES (
     v_acting_user, p_company_id, p_supplier_invoice_id, v_voucher.entry_date,
-    v_payment_amount, v_invoice.currency, p_journal_entry_id, NULL, p_notes
+    v_payment_amount, v_invoice_currency, p_journal_entry_id, NULL, p_notes
   )
   RETURNING id INTO v_payment_id;
 
@@ -516,7 +531,7 @@ BEGIN
     'remaining_amount', v_new_remaining,
     'payment_amount', v_payment_amount,
     'journal_entry_id', p_journal_entry_id,
-    'currency', v_invoice.currency
+    'currency', v_invoice_currency
   );
 END;
 $$;

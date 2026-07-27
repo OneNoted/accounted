@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocale } from 'next-intl'
 import { Brain, Loader2, Pin, PinOff, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -87,43 +87,58 @@ export function AgentMemoryPanel() {
   const [newKind, setNewKind] = useState<Kind>('fact')
   const [adding, setAdding] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoadError(null)
-    const params = new URLSearchParams()
-    if (includeDismissed) params.set('include_dismissed', 'true')
-    if (kindFilter !== 'all') params.set('kind', kindFilter)
-    try {
-      const res = await fetch(`/api/agent/memory?${params.toString()}`)
-      if (!res.ok) {
-        // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
-        // getErrorMessage falls back to the status map.
-        const json = await res.json().catch(() => null)
-        const sessionGone = res.status === 401 || res.status === 403
-        setRows(null)
-        setLoadError({
-          detail: sessionGone
-            ? getErrorMessage(json, { statusCode: res.status, locale: errorLocale })
-            : null,
-        })
-        return
-      }
-      // A 200 whose body will not parse throws into the catch below; a 200
-      // without the list is a failed read too. Neither may become a
-      // fabricated "Inga minnen ännu".
-      const json = await res.json()
-      if (!Array.isArray(json?.data)) {
-        setRows(null)
-        setLoadError({ detail: null })
-        return
-      }
-      setRows(json.data as AgentMemoryRow[])
-    } catch {
-      setRows(null)
-      setLoadError({ detail: null })
-    }
-  }, [includeDismissed, kindFilter, errorLocale])
+  // The cancelled closure is the same idiom every sibling panel uses
+  // (TeamPanel, AccountDangerZone): a response that lands after unmount, or
+  // after a filter change superseded this load, must not setState. Without it
+  // a slow "Alla" response could overwrite a newer filtered list.
+  useEffect(() => {
+    let cancelled = false
 
-  useEffect(() => { void load() }, [load, reloadKey])
+    async function load() {
+      setLoadError(null)
+      const params = new URLSearchParams()
+      if (includeDismissed) params.set('include_dismissed', 'true')
+      if (kindFilter !== 'all') params.set('kind', kindFilter)
+      try {
+        const res = await fetch(`/api/agent/memory?${params.toString()}`)
+        if (!res.ok) {
+          // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+          // getErrorMessage falls back to the status map.
+          const json = await res.json().catch(() => null)
+          if (cancelled) return
+          const sessionGone = res.status === 401 || res.status === 403
+          setRows(null)
+          setLoadError({
+            detail: sessionGone
+              ? getErrorMessage(json, { statusCode: res.status, locale: errorLocale })
+              : null,
+          })
+          return
+        }
+        // A 200 whose body will not parse throws into the catch below; a 200
+        // without the list is a failed read too. Neither may become a
+        // fabricated "Inga minnen ännu".
+        const json = await res.json()
+        if (cancelled) return
+        if (!Array.isArray(json?.data)) {
+          setRows(null)
+          setLoadError({ detail: null })
+          return
+        }
+        setRows(json.data as AgentMemoryRow[])
+      } catch {
+        if (!cancelled) {
+          setRows(null)
+          setLoadError({ detail: null })
+        }
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [includeDismissed, kindFilter, errorLocale, reloadKey])
 
   const counts = useMemo(() => {
     const active = rows?.filter((r) => r.is_active).length ?? 0

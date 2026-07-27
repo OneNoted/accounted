@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getPool, withUserContext } from '@/tests/pg/setup'
+import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
 import {
   seedCompany,
   insertAuthUser,
@@ -10,17 +10,24 @@ import {
 } from '@/tests/pg/fixtures'
 
 // Migration 20260624120000_undo_sie_import_explicit_actor.sql makes
-// undo_sie_import accept the authorising user as p_user_id and resolve the
-// owner/admin gate against COALESCE(p_user_id, auth.uid()).
+// undo_sie_import accept the authorising user as p_user_id.
 //
-// Why: the RPC now runs on the service-role client (to escape the 8s
+// Why: the RPC runs on the service-role client (to escape the 8s
 // statement_timeout on large imports). That client is cookie-less, so inside
-// the RPC auth.uid() is NULL: before this fix the role lookup matched nothing
+// the RPC auth.uid() is NULL: before that fix the role lookup matched nothing
 // and the function ALWAYS raised "Only company owners and admins can undo SIE
 // imports", breaking undo entirely on hosted.
 //
-// These tests call the function over the raw pool (no JWT context), which is
-// exactly the auth.uid()-is-NULL situation the service client creates.
+// Migration 20260727121000_undo_sie_import_caller_guard.sql then closes the
+// hole the COALESCE(p_user_id, auth.uid()) shape opened: EXECUTE is granted
+// to `authenticated`, so any signed-in PostgREST caller could pass an owner's
+// UUID as p_user_id and impersonate them into the gate. p_user_id is now
+// honored ONLY when auth.role() = 'service_role'; every other caller is
+// pinned to its own auth.uid().
+//
+// These tests call the function under a simulated service-role context
+// (runAsServiceRole), which is how the app's service client presents:
+// auth.uid() NULL, auth.role() = 'service_role'.
 
 async function insertCompletedImport(params: {
   companyId: string
@@ -66,9 +73,11 @@ async function insertPostedImportEntry(params: {
 }
 
 async function callUndo(companyId: string, importId: string, actor: string | null) {
-  return getPool().query<{ deleted: number }>(
-    `SELECT public.undo_sie_import($1::uuid, $2::uuid, $3::uuid) AS deleted`,
-    [companyId, importId, actor],
+  return runAsServiceRole((client) =>
+    client.query<{ deleted: number }>(
+      `SELECT public.undo_sie_import($1::uuid, $2::uuid, $3::uuid) AS deleted`,
+      [companyId, importId, actor],
+    ),
   )
 }
 
@@ -126,6 +135,64 @@ describe('undo_sie_import: explicit actor (service-client path)', () => {
     await expect(callUndo(companyId, importId, randomUUID())).rejects.toThrow(
       /owners and admins/i,
     )
+  })
+
+  it('ignores a spoofed p_user_id from an authenticated (non-service) caller', async () => {
+    // 20260727121000: a member passing the OWNER's UUID as p_user_id over an
+    // authenticated PostgREST session must stay pinned to their own
+    // auth.uid(), be rejected with 42501, and delete nothing. Same guard as
+    // replace_sie_import (20260727120000).
+    const { companyId, userId: ownerId, fiscalPeriodId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+
+    const importId = await insertCompletedImport({ companyId, userId: ownerId, fiscalPeriodId })
+    const jeId = await insertPostedImportEntry({ companyId, userId: ownerId, fiscalPeriodId })
+
+    await withUserContext(memberId, async (client) => {
+      let raised: (Error & { code?: string }) | null = null
+      try {
+        await client.query(
+          `SELECT public.undo_sie_import($1::uuid, $2::uuid, $3::uuid)`,
+          [companyId, importId, ownerId],
+        )
+      } catch (err) {
+        raised = err as Error & { code?: string }
+      }
+      expect(raised, 'spoofed p_user_id must not authorize').not.toBeNull()
+      expect(raised!.message).toMatch(/owners and admins/i)
+      expect(raised!.code).toBe('42501')
+    })
+
+    // The gate fired before any mutation.
+    const { rows: impRows } = await getPool().query<{ status: string }>(
+      `SELECT status FROM public.sie_imports WHERE id = $1`,
+      [importId],
+    )
+    expect(impRows[0].status).toBe('completed')
+    const { rows: jeRows } = await getPool().query(
+      `SELECT 1 FROM public.journal_entries WHERE id = $1`,
+      [jeId],
+    )
+    expect(jeRows).toHaveLength(1)
+  })
+
+  it('does not grant EXECUTE to anon or PUBLIC (20260727121000 least privilege)', async () => {
+    const { rows } = await getPool().query<{
+      anon_can: boolean
+      public_can: boolean
+      authenticated_can: boolean
+      service_role_can: boolean
+    }>(
+      `SELECT has_function_privilege('anon', 'public.undo_sie_import(uuid,uuid,uuid)', 'EXECUTE') AS anon_can,
+              has_function_privilege('public', 'public.undo_sie_import(uuid,uuid,uuid)', 'EXECUTE') AS public_can,
+              has_function_privilege('authenticated', 'public.undo_sie_import(uuid,uuid,uuid)', 'EXECUTE') AS authenticated_can,
+              has_function_privilege('service_role', 'public.undo_sie_import(uuid,uuid,uuid)', 'EXECUTE') AS service_role_can`,
+    )
+    expect(rows[0].anon_can, 'anon must not be able to call undo_sie_import').toBe(false)
+    expect(rows[0].public_can, 'PUBLIC must not hold EXECUTE').toBe(false)
+    expect(rows[0].authenticated_can).toBe(true)
+    expect(rows[0].service_role_can).toBe(true)
   })
 
   it('still resolves the actor from auth.uid() when p_user_id is omitted (backward compat)', async () => {

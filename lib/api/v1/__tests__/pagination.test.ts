@@ -81,7 +81,19 @@ describe('nextCursorFromPage', () => {
     ]
     const cursor = nextCursorFromPage(rows, 2)
     expect(cursor).not.toBeNull()
-    expect(decodeDefaultCursor(cursor)).toEqual({ ts: '2026-01-03T00:00:00Z', id: ID_C })
+    // The cursor is the LAST row of the trimmed page (rows[limit - 1]), never
+    // rows[limit]: routes paginate with strictly-greater/less predicates, so
+    // encoding the first row of the next page would skip it at the boundary.
+    expect(decodeDefaultCursor(cursor)).toEqual({ ts: '2026-01-02T00:00:00Z', id: ID_B })
+  })
+
+  it('with limit=1 the cursor is the single returned row, so the next page starts at row 2', () => {
+    const rows = [
+      row(ID_A, '2026-01-01T00:00:00Z'),
+      row(ID_B, '2026-01-02T00:00:00Z'),
+    ]
+    const cursor = nextCursorFromPage(rows, 1)
+    expect(decodeDefaultCursor(cursor)).toEqual({ ts: '2026-01-01T00:00:00Z', id: ID_A })
   })
 })
 

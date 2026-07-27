@@ -93,15 +93,16 @@ describe('POST /api/deadlines/[id]/complete', () => {
     expect(res.status).toBe(403)
   })
 
-  it('maps zero-rows to 404', async () => {
+  it('maps zero-rows to 404 with a Swedish message', async () => {
     auth(createCapturingSupabase([{ error: { code: 'PGRST116', message: 'no rows' } }], {}))
-    const { status } = await parseJsonResponse(
+    const { status, body } = await parseJsonResponse<{ error: string }>(
       await POST(
         createMockRequest('/x', { method: 'POST', body: { is_completed: false } }),
         idParams,
       ),
     )
     expect(status).toBe(404)
+    expect(body.error).toBe('Deadline hittades inte')
   })
 
   it('marks a pending deadline done and stamps completed_at', async () => {
@@ -193,18 +194,63 @@ describe('POST /api/deadlines/[id]/complete', () => {
     expect(captured.update?.is_completed).toBe(true)
   })
 
-  it('falls back to toggling when is_completed is not a boolean', async () => {
+  it('rejects a non-boolean is_completed with 400 instead of guessing', async () => {
+    // { is_completed: "false" } is the load-bearing case: a string is truthy,
+    // and the old hand-rolled parser silently degraded it to a toggle, so an
+    // "undo" carrying the string could re-complete the deadline. A wrong type
+    // must fail loudly and persist nothing.
+    const captured: Captured = {}
+    auth(createCapturingSupabase([], captured))
+    const { status } = await parseJsonResponse(
+      await POST(
+        createMockRequest('/x', { method: 'POST', body: { is_completed: 'false' } }),
+        idParams,
+      ),
+    )
+    expect(status).toBe(400)
+    expect(captured.update).toBeUndefined()
+  })
+
+  it('rejects other wrong types for is_completed with 400', async () => {
+    const captured: Captured = {}
+    auth(createCapturingSupabase([], captured))
+    for (const bad of [1, 'nope', null, [true]]) {
+      const { status } = await parseJsonResponse(
+        await POST(
+          createMockRequest('/x', { method: 'POST', body: { is_completed: bad } }),
+          idParams,
+        ),
+      )
+      expect(status, `is_completed=${JSON.stringify(bad)} must be a 400`).toBe(400)
+    }
+    expect(captured.update).toBeUndefined()
+  })
+
+  it('rejects unknown body keys with 400 (strict schema)', async () => {
+    const captured: Captured = {}
+    auth(createCapturingSupabase([], captured))
+    const { status } = await parseJsonResponse(
+      await POST(
+        createMockRequest('/x', { method: 'POST', body: { is_completed: true, extra: 1 } }),
+        idParams,
+      ),
+    )
+    expect(status).toBe(400)
+    expect(captured.update).toBeUndefined()
+  })
+
+  it('treats an explicit empty object as a toggle', async () => {
     const captured: Captured = {}
     auth(
       createCapturingSupabase(
-        [{ data: { is_completed: true } }, { data: { id: 'deadline-1', is_completed: false } }],
+        [{ data: { is_completed: false } }, { data: { id: 'deadline-1', is_completed: true } }],
         captured,
       ),
     )
-    await POST(
-      createMockRequest('/x', { method: 'POST', body: { is_completed: 'nope' } }),
-      idParams,
+    const { status } = await parseJsonResponse(
+      await POST(createMockRequest('/x', { method: 'POST', body: {} }), idParams),
     )
-    expect(captured.update?.is_completed).toBe(false)
+    expect(status).toBe(200)
+    expect(captured.update?.is_completed).toBe(true)
   })
 })

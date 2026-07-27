@@ -42,8 +42,15 @@ export interface DuplicateVoucherCandidate {
   /** The voucher leg's SEK debit. Never the bank line's own (possibly foreign) amount. */
   amount: number
   bank_account_number: string
-  /** Date proximity only. Says nothing about whether the amounts were comparable. */
-  reason: 'exact_amount_same_date' | 'exact_amount_within_window'
+  /**
+   * How the candidate was selected. The `exact_amount_*` values mean the SEK
+   * amounts really were compared and matched within 0.01; `date_window_only`
+   * means the amount test never ran (the bank line has no SEK value, see
+   * `amount_verified` below) and the candidate rests on date + bank account +
+   * unlinked-ness alone. Renderers must never phrase a `date_window_only`
+   * candidate as an amount match.
+   */
+  reason: 'exact_amount_same_date' | 'exact_amount_within_window' | 'date_window_only'
   /**
    * Whether the bank line's SEK value could be established and actually matched
    * the leg. False means the amounts were never compared and the candidate rests
@@ -248,7 +255,15 @@ export async function detectDuplicatePaymentVoucher(
     description: best.journal_entry.description,
     amount: Math.round(Number(best.debit_amount) * 100) / 100,
     bank_account_number: best.account_number,
-    reason: sameDate ? 'exact_amount_same_date' : 'exact_amount_within_window',
+    // When the amount test never ran, the reason must say so: labelling a
+    // date-only survivor 'exact_amount_*' made the UI claim an amount match
+    // that was never made.
+    reason:
+      targetSek === null
+        ? 'date_window_only'
+        : sameDate
+          ? 'exact_amount_same_date'
+          : 'exact_amount_within_window',
     amount_verified: targetSek !== null,
     unverified_reason: targetSek === null ? 'transaction_missing_sek_value' : null,
   }

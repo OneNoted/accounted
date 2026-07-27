@@ -41,6 +41,14 @@ export interface TableModel {
   checks: Map<string, { column: string; values: Set<string> }>
   /** unique/PK column sets, sorted and joined by ',', for `onConflict` validation. */
   uniqueSets: Set<string>
+  /**
+   * Named UNIQUE/PK constraint -> its unique-set key, so `DROP CONSTRAINT` can
+   * retract the set. Only NAMED constraints are tracked: a column-level bare
+   * `UNIQUE` has no name in the DDL, so its set cannot be retracted by name
+   * and stays in uniqueSets (a missed retraction there loses strictness, it
+   * never invents an accusation).
+   */
+  uniqueConstraintKeys: Map<string, string>
 }
 
 export interface SchemaModel {
@@ -69,6 +77,7 @@ function emptyTable(name: string): TableModel {
     fkTargets: new Map(),
     checks: new Map(),
     uniqueSets: new Set(),
+    uniqueConstraintKeys: new Map(),
   }
 }
 
@@ -266,9 +275,13 @@ function parseClosedCheck(
   return { column: m[1], values }
 }
 
-function recordUnique(table: TableModel, columns: string[]): void {
+function recordUnique(table: TableModel, columns: string[], constraintName?: string | null): void {
   if (columns.length === 0) return
-  table.uniqueSets.add([...columns].sort().join(','))
+  const key = [...columns].sort().join(',')
+  table.uniqueSets.add(key)
+  // Remember the name so `ALTER TABLE ... DROP CONSTRAINT <name>` can retract
+  // the set again. Unnamed (column-level) uniques have nothing to key on.
+  if (constraintName) table.uniqueConstraintKeys.set(constraintName, key)
 }
 
 function parseColumnList(body: string): string[] {
@@ -307,7 +320,7 @@ function applyTableItem(
     }
     if (/^UNIQUE\s*\(/i.test(rest) || /^PRIMARY\s+KEY\s*\(/i.test(rest)) {
       const group = balancedParens(rest, 0)
-      if (group) recordUnique(table, parseColumnList(group.body))
+      if (group) recordUnique(table, parseColumnList(group.body), name)
       return
     }
     if (/^FOREIGN\s+KEY\s*\(/i.test(rest)) {
@@ -649,7 +662,21 @@ function applyAlterAction(
     a
   )
   if (dropConstraint) {
-    table.checks.delete(dropConstraint[1])
+    const name = dropConstraint[1]
+    table.checks.delete(name)
+    // Retract the unique set a NAMED UNIQUE/PK constraint carried, so an
+    // `onConflict` naming the dropped constraint's columns fails here instead
+    // of 42P10-ing at runtime. The set survives when another constraint or a
+    // unique index still provides the same column key. A column-level bare
+    // `UNIQUE` (parsed by applyTableItem) has no name and is untouched.
+    const key = table.uniqueConstraintKeys.get(name)
+    if (key !== undefined) {
+      table.uniqueConstraintKeys.delete(name)
+      const stillProvided =
+        [...table.uniqueConstraintKeys.values()].includes(key) ||
+        [...model.uniqueIndexes.values()].some((e) => e.table === table.name && e.key === key)
+      if (!stillProvided) table.uniqueSets.delete(key)
+    }
     return
   }
 
@@ -665,7 +692,7 @@ function applyAlterAction(
     }
     if (/^UNIQUE\s*\(/i.test(body) || /^PRIMARY\s+KEY\s*\(/i.test(body)) {
       const group = balancedParens(body, 0)
-      if (group) recordUnique(table, parseColumnList(group.body))
+      if (group) recordUnique(table, parseColumnList(group.body), name)
       return
     }
     if (/^FOREIGN\s+KEY\s*\(/i.test(body)) {

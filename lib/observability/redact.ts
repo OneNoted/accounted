@@ -12,12 +12,17 @@
  * data. Under GDPR that data must not be shipped to an error-tracking vendor,
  * so redaction runs on every path into the sink, not just on the log path.
  *
- * Two mechanisms:
+ * Three mechanisms:
  *   1. A key denylist (`REDACT_KEYS`): any object key matching case-insensitively
  *      has its whole value replaced, however deeply nested.
  *   2. A personnummer regex applied to every string. UUIDs are stripped first,
  *      because a UUID's hex runs can otherwise look like a 10/12-digit
- *      personnummer and would nuke useful ids.
+ *      personnummer and would nuke useful ids. A hit replaces the WHOLE string:
+ *      the digits around a personnummer are usually themselves identifying.
+ *   3. Substring patterns for emails, Swedish IBANs and gnubok API keys,
+ *      replaced in place with a placeholder naming what was removed. These are
+ *      self-delimiting secrets, so the rest of the string (a log line, a stack
+ *      trace) stays useful.
  *
  * `redact()` is idempotent: running it twice is safe and produces the same
  * result, which is what lets the sink re-redact records the logger already
@@ -49,6 +54,16 @@ export const REDACT_KEYS = new Set([
 
 const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 const PERSONNUMMER_PATTERN = /\b\d{6}-?\d{4}\b|\b\d{8}-?\d{4}\b/
+// gnubok API keys (secret keys and invite tokens). The wire-format prefix is
+// permanent (see CLAUDE.md: the gnubok_* prefixes are kept on purpose), so
+// this pattern will not rot with the Accounted rename.
+const API_KEY_PATTERN = /gnubok_(?:sk|inv)_[A-Za-z0-9_]+/g
+// Swedish IBAN: SE + 22 digits, optionally grouped with spaces
+// ("SE4550000000058398257466" or "SE45 5000 0000 0583 9825 7466").
+const SE_IBAN_PATTERN = /\bSE(?:\s?\d){22}\b/g
+// Pragmatic email shape: enough to catch real addresses in log lines without
+// matching package specs like "pkg@1.2.3" (the domain must end in a TLD).
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
 
 export function redactString(value: string): string {
   // Strip UUIDs first to avoid false-positive personnummer matches
@@ -56,7 +71,14 @@ export function redactString(value: string): string {
   if (PERSONNUMMER_PATTERN.test(stripped)) {
     return REDACTED
   }
+  // Substring secrets are replaced in place (distinct placeholders, so an
+  // adapter or a human can tell WHAT was removed). The placeholders contain
+  // no digits and no '@', so re-running redactString over them is a no-op:
+  // this is what keeps redact() idempotent.
   return value
+    .replace(API_KEY_PATTERN, '[REDACTED_API_KEY]')
+    .replace(SE_IBAN_PATTERN, '[REDACTED_IBAN]')
+    .replace(EMAIL_PATTERN, '[REDACTED_EMAIL]')
 }
 
 export function redact(value: unknown, keyPath = ''): unknown {
@@ -68,7 +90,12 @@ export function redact(value: unknown, keyPath = ''): unknown {
     return {
       name: value.name,
       message: redactString(value.message),
-      stack: process.env.NODE_ENV === 'production' ? undefined : value.stack,
+      // The stack is kept (redacted like any other string) in EVERY
+      // environment: the observability sink only runs in production, and a
+      // stackless event is useless to group on. Production STDOUT still drops
+      // it: that stripping happens in the logger's emit path (lib/logger.ts),
+      // which is the only consumer that wants stackless records.
+      stack: typeof value.stack === 'string' ? redactString(value.stack) : undefined,
       code: (value as Error & { code?: unknown }).code,
     }
   }

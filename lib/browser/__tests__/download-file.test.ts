@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { downloadFile, DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
+import {
+  downloadFile,
+  saveBlobToDisk,
+  DOWNLOAD_TIMEOUT_MS,
+  OBJECT_URL_REVOKE_DELAY_MS,
+} from '@/lib/browser/download-file'
 
 const originalFetch = globalThis.fetch
 
@@ -175,5 +180,64 @@ describe('downloadFile', () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect(init.signal).toBeInstanceOf(AbortSignal)
     expect(DOWNLOAD_TIMEOUT_MS).toBe(15_000)
+  })
+})
+
+describe('saveBlobToDisk', () => {
+  const originalCreateObjectURL = URL.createObjectURL
+  const originalRevokeObjectURL = URL.revokeObjectURL
+
+  function stubDom() {
+    const anchor = { href: '', download: '', rel: '', click: vi.fn(), remove: vi.fn() }
+    const body = { appendChild: vi.fn() }
+    ;(globalThis as Record<string, unknown>).document = {
+      createElement: vi.fn(() => anchor),
+      body,
+    }
+    const createObjectURL = vi.fn(() => 'blob:test-url')
+    const revokeObjectURL = vi.fn()
+    URL.createObjectURL = createObjectURL as typeof URL.createObjectURL
+    URL.revokeObjectURL = revokeObjectURL as typeof URL.revokeObjectURL
+    return { anchor, body, revokeObjectURL }
+  }
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).document
+    URL.createObjectURL = originalCreateObjectURL
+    URL.revokeObjectURL = originalRevokeObjectURL
+    vi.useRealTimers()
+  })
+
+  it('defers object-URL revocation so the browser can finish reading the blob', () => {
+    // Revoking synchronously in a finally right after a.click() can abort the
+    // save in Firefox/Safari: the click only STARTS the download.
+    vi.useFakeTimers()
+    const { anchor, revokeObjectURL } = stubDom()
+
+    saveBlobToDisk(new Blob(['x']), 'f.json')
+
+    expect(anchor.click).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(OBJECT_URL_REVOKE_DELAY_MS - 1)
+    expect(revokeObjectURL).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-url')
+  })
+
+  it('revokes immediately when the click never happened', () => {
+    // Nothing is reading the URL if the DOM threw before the click, so the
+    // blob memory is released right away instead of leaking for 10 seconds.
+    vi.useFakeTimers()
+    const { body, revokeObjectURL } = stubDom()
+    body.appendChild.mockImplementation(() => {
+      throw new Error('detached document')
+    })
+
+    expect(() => saveBlobToDisk(new Blob(['x']), 'f.json')).toThrow('detached document')
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-url')
   })
 })

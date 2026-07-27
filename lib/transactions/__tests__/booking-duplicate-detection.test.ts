@@ -556,9 +556,11 @@ describe('detectLedgerDuplicateVoucher', () => {
     // Neither amount_sek nor exchange_rate: nothing can be compared. Returning
     // null here would wave the booking through and mint a second verifikat for
     // one affärshändelse, so the candidate is surfaced as unverified instead.
+    // The bank line sits ONE day from the voucher (2026-03-29 vs 2026-03-30):
+    // without an amount comparison, only date-adjacent vouchers may be named.
     const supabase = makeLedgerSupabase({ lines: [jel()] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 8570.87, currency: 'EUR',
+      id: 'self', date: '2026-03-29', amount: 8570.87, currency: 'EUR',
       amount_sek: null, exchange_rate: null, cash_account_id: null,
     })
     expect(result).not.toBeNull()
@@ -567,6 +569,31 @@ describe('detectLedgerDuplicateVoucher', () => {
     expect(result?.unverified_reason).toBe('transaction_missing_sek_value')
     // Still the leg's SEK figure, so no caller can print a foreign number as kr.
     expect(result?.amount).toBe(98565)
+  })
+
+  it('does NOT name a voucher days away when the amounts cannot be compared', async () => {
+    // Rateless foreign line 4 days from the only 19xx leg in the window. With
+    // the amount test skipped, date + account + direction are the only
+    // evidence, and a ±7 day pick would attribute an arbitrary unrelated
+    // voucher to this bank line in the user-facing warning. Beyond ±1 day the
+    // guard stays silent rather than pointing at the wrong verifikat.
+    const supabase = makeLedgerSupabase({ lines: [jel()] }) // entry_date 2026-03-30
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 8570.87, currency: 'EUR',
+      amount_sek: null, exchange_rate: null, cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('still verifies a SEK amount match across the full ±7 day window (verified path unchanged)', async () => {
+    // The 1-day gate applies ONLY to the unverified (rateless) path: a SEK
+    // line whose amount matched exactly still dedupes 4 days out.
+    const supabase = makeLedgerSupabase({ lines: [jel()] }) // 98565 SEK debit, 2026-03-30
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result?.journal_entry_id).toBe('je-2')
+    expect(result?.amount_verified).toBe(true)
   })
 
   it('returns null (a verified pass) for a rateless foreign line with no 19xx leg in the window', async () => {
@@ -581,10 +608,12 @@ describe('detectLedgerDuplicateVoucher', () => {
   })
 
   it('still respects direction and storno filters when the amount cannot be verified', async () => {
+    // Same-day target so the storno filter, not the 1-day naming gate, is
+    // what removes the candidate.
     const stornoLine = jel({ journal_entry: { ...jel().journal_entry, source_type: 'storno' } })
     const supabase = makeLedgerSupabase({ lines: [stornoLine] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 8570.87, currency: 'EUR',
+      id: 'self', date: '2026-03-30', amount: 8570.87, currency: 'EUR',
       amount_sek: null, exchange_rate: null, cash_account_id: null,
     })
     expect(result).toBeNull()

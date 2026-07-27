@@ -20,14 +20,10 @@ vi.mock('@/lib/company/context', () => ({
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
-vi.mock('@/lib/salary/personnummer', () => ({
-  decryptPersonnummer: (x: string) => x,
-  maskPersonnummer: (x: string) => x,
-}))
-
-import { PATCH } from '../route'
+import { GET, PATCH } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -40,6 +36,53 @@ function authed() {
   })
   return { supabase, enqueueMany }
 }
+
+describe('GET /api/salary/runs/[id]/employees/[employeeId]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
+  })
+
+  it('masks the embedded employee: no ciphertext, no personnummer_last4', async () => {
+    // The embed is employees(*), so personnummer_last4 rides along from the DB.
+    // The mask is YYYYMMDD-XXXX: mask + last4 in the same payload would
+    // reassemble the full personnummer, so both pn-derived columns must be
+    // stripped before the payload leaves the server.
+    const STORED_PNR = '190203040000' // synthetic
+    const { enqueueMany } = authed()
+    enqueueMany([
+      {
+        data: {
+          id: 'sre-1',
+          gross_salary: 30000,
+          employee: {
+            id: 'emp-1',
+            first_name: 'Test',
+            last_name: 'Testsson',
+            personnummer: encryptPersonnummer(STORED_PNR),
+            personnummer_last4: '0000',
+            employment_type: 'employee',
+          },
+          line_items: [],
+        },
+      },
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/employees/emp-1'),
+      createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      data: { employee: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.employee.personnummer_masked).toBe('19020304-XXXX')
+    expect(body.data.employee).not.toHaveProperty('personnummer')
+    expect(body.data.employee).not.toHaveProperty('personnummer_last4')
+    expect(JSON.stringify(body)).not.toContain(STORED_PNR)
+  })
+})
 
 describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: monthly salary edit', () => {
   beforeEach(() => {

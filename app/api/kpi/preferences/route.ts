@@ -77,6 +77,14 @@ export const PUT = withRouteContext(
     const stored = mergeWithDefaults((existing?.value as Partial<KPIPreferences>) ?? {})
     const merged: KPIPreferences = { ...stored, ...prefs }
 
+    // KPI preferences are COMPANY-scoped, not per-user: the read paths (GET
+    // above and the KPI report route) filter on (company_id, extension_id,
+    // key) with no user filter, and the key carries no user id. user_id is
+    // stored purely as "who wrote this last" attribution. The upsert must
+    // therefore arbitrate on the company-scoped unique constraint: migration
+    // 20260330130000 dropped UNIQUE (user_id, extension_id, key) in favor of
+    // UNIQUE (company_id, extension_id, key), so naming the old column trio
+    // here makes Postgres fail every save with 42P10 (no matching constraint).
     const { data, error } = await supabase
       .from('extension_data')
       .upsert(
@@ -87,7 +95,7 @@ export const PUT = withRouteContext(
           key: KEY,
           value: merged,
         },
-        { onConflict: 'user_id,extension_id,key' }
+        { onConflict: 'company_id,extension_id,key' }
       )
       .select()
       .single()

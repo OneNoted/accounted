@@ -89,6 +89,34 @@ describe('computeSkattekontoDrift', () => {
     expect(drift!.tolerance).toBe(1)
   })
 
+  it('returns null (skips the drift pass) when the GL 1630 read fails', async () => {
+    // A transient read failure must NOT be treated as glSum1630 = 0: with a
+    // cached SKV saldo of 5500 that would compute drift = 5500 and (throttled)
+    // email a false "Skattekontot stämmer inte med bokföringen".
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The entry-lines fetch errors -> fetchAllRows throws -> sumGl1630 fails.
+    enqueue({ error: { message: 'connection reset by peer' } })
+
+    const ctx = fakeCtx({
+      supabase,
+      settings: {
+        get: vi.fn().mockImplementation((key: string) => {
+          if (key === 'skattekonto_balance_snapshot') {
+            return Promise.resolve({
+              saldo: { saldoSkatteverket: 5500, saldoKronofogden: 0 },
+              fetchedAt: new Date('2026-06-12T04:00:00Z').getTime(),
+            })
+          }
+          return Promise.resolve(null)
+        }),
+        set: vi.fn(),
+      },
+    })
+
+    const drift = await computeSkattekontoDrift(ctx)
+    expect(drift).toBeNull()
+  })
+
   it('honors a per-company override of the tolerance', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueGlLines(enqueue, [{ debit_amount: 1000, credit_amount: 0 }])

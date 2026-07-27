@@ -163,6 +163,9 @@ describe('personnummer contract on /api/salary/employees/[id]', () => {
     // The writable key name must not carry the mask: a client that reads this
     // object and writes it back would otherwise send the mask to the encrypt path.
     expect('personnummer' in body.data).toBe(false)
+    // personnummer_last4 must not ride along either: the mask is
+    // YYYYMMDD-XXXX, so mask + last4 reassembles the full personnummer.
+    expect('personnummer_last4' in body.data).toBe(false)
     // Neither the plaintext nor the stored ciphertext may leave the server.
     expect(JSON.stringify(body)).not.toContain(STORED_PNR)
     expect(JSON.stringify(body)).not.toContain(STORED_CIPHERTEXT)
@@ -179,6 +182,7 @@ describe('personnummer contract on /api/salary/employees/[id]', () => {
     expect(captured.updates).not.toHaveProperty('personnummer_last4')
     expect(body.data.personnummer_masked).toBe('19020304-XXXX')
     expect('personnummer' in body.data).toBe(false)
+    expect('personnummer_last4' in body.data).toBe(false)
   })
 
   it('PATCH refuses a masked personnummer instead of encrypting the mask', async () => {
@@ -197,9 +201,12 @@ describe('personnummer contract on /api/salary/employees/[id]', () => {
     expect(stored).not.toBe(NEW_PNR)
     expect(decryptPersonnummer(stored)).toBe(NEW_PNR)
     expect(captured.updates?.personnummer_last4).toBe('0008')
-    // The response echoes only the mask, under the read-only key.
+    // The response echoes only the mask, under the read-only key. The updated
+    // last4 is written to the row but must not appear in the response.
     expect(body.data.personnummer_masked).toBe('19000101-XXXX')
     expect('personnummer' in body.data).toBe(false)
+    expect('personnummer_last4' in body.data).toBe(false)
     expect(JSON.stringify(body)).not.toContain(NEW_PNR)
+    expect(JSON.stringify(body)).not.toContain('"0008"')
   })
 })

@@ -17,6 +17,13 @@ vi.mock('@react-pdf/renderer', () => ({
   renderToBuffer: (...args: unknown[]) => mockRenderToBuffer(...args),
 }))
 
+const mockFetchExchangeRate = vi.fn()
+vi.mock('@/lib/currency/riksbanken', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
+  return { ...actual, fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args) }
+})
+
 const mockInvoicePDF = vi.fn()
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: (...args: unknown[]) => mockInvoicePDF(...args),
@@ -544,5 +551,98 @@ describe('executeRecurringSchedule VAT rate gate', () => {
     await expect(
       executeRecurringSchedule(client, makeScheduleWithRate(10), today, { suppressAutoSend: true }),
     ).rejects.toThrow(/VAT rate 10% not allowed/)
+  })
+})
+
+describe('executeRecurringSchedule foreign-currency rate fetch', () => {
+  const { supabase, enqueue, reset } = createQueuedMockSupabase()
+  const client = supabase as unknown as SupabaseClient
+  const today = new Date('2026-07-06T06:30:00Z')
+
+  const customer = makeCustomer({ id: 'cust-1', name: 'Kund AB' })
+
+  function makeEurSchedule() {
+    return {
+      id: 'sched-1',
+      company_id: 'company-1',
+      user_id: 'user-1',
+      customer_id: 'cust-1',
+      name: 'Monthly EUR retainer',
+      day_of_month: 6,
+      send_hour: 8,
+      payment_terms_days: 30,
+      currency: 'EUR',
+      your_reference: null,
+      our_reference: null,
+      notes: null,
+      auto_send: false,
+      status: 'active',
+      next_run_date: '2026-07-06',
+      last_run_at: null,
+      last_invoice_id: null,
+      last_run_warning: null,
+      generated_count: 0,
+      items: [
+        {
+          id: 'si-1',
+          schedule_id: 'sched-1',
+          sort_order: 0,
+          description: 'Konsulttimmar',
+          quantity: 10,
+          unit: 'tim',
+          unit_price: 100,
+          vat_rate: 25,
+        },
+      ],
+    } as unknown as Parameters<typeof executeRecurringSchedule>[1]
+  }
+
+  function enqueueCreateOnlyPath() {
+    enqueue({ data: customer, error: null }) // customers select
+    enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // invoices insert
+    enqueue({ data: null, error: null }) // invoice_items insert
+    enqueue({
+      data: { id: 'inv-1', invoice_number: 'F-1', customer, items: [] },
+      error: null,
+    }) // re-fetch with relations
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockEnsureNumber.mockResolvedValue('F-1')
+  })
+
+  it('fetches the rate for the invoice date through the shared cache client', async () => {
+    // The cron used to call fetchExchangeRate(currency) with neither the date
+    // nor the supabase client, skipping the exchange_rates cache and the
+    // Riksbanken-429 fallback that build-invoice-write.ts uses: one transient
+    // rate limit left the monthly foreign retainer with exchange_rate NULL
+    // forever. The call shape must match buildInvoiceWriteData's.
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.5, date: '2026-07-04' })
+    enqueueCreateOnlyPath()
+
+    const result = await executeRecurringSchedule(client, makeEurSchedule(), today, {
+      suppressAutoSend: true,
+    })
+
+    expect(result.invoiceId).toBe('inv-1')
+    expect(mockFetchExchangeRate).toHaveBeenCalledTimes(1)
+    const [currencyArg, dateArg, clientArg] = mockFetchExchangeRate.mock.calls[0]
+    expect(currencyArg).toBe('EUR')
+    expect((dateArg as Date).toISOString().slice(0, 10)).toBe('2026-07-06')
+    expect(clientArg).toBe(client)
+  })
+
+  it('keeps continue-on-null: a missing rate never fails the cron run', async () => {
+    mockFetchExchangeRate.mockResolvedValue(null)
+    enqueueCreateOnlyPath()
+
+    const result = await executeRecurringSchedule(client, makeEurSchedule(), today, {
+      suppressAutoSend: true,
+    })
+
+    expect(result.invoiceId).toBe('inv-1')
   })
 })

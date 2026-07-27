@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { verifikationDraft } from '../verifikation-draft'
 
 // verifikation.draft is the assistant entry point on the manual bookkeeping
@@ -287,6 +287,27 @@ describe('verifikation.draft period lock gate', () => {
     expect(captured.period_status?.status).toBe('unknown')
     expect(prompt).toContain('PERIODLÅSET KUNDE INTE LÄSAS')
     expect(prompt).toContain('utgå INTE från att perioden är öppen')
+  })
+
+  it('renders a SOFT lookup failure as unknown, never as a real lock', async () => {
+    // resolvePeriodStatusForDate does not throw on a PostgREST error result:
+    // it returns { status: 'locked', lookup_failed: true } (fail-closed for
+    // write gates). This surface must branch on lookup_failed: a transient DB
+    // blip must not tell the user "PERIODEN ÄR LÅST ... låsa upp perioden"
+    // about a lock that may not exist.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { captured, prompt } = await captureWith(
+        stubs({ company_settings: [{ data: null, error: { message: 'connection reset' } }] }),
+      )
+
+      expect(captured.period_status?.status).toBe('unknown')
+      expect(prompt).toContain('PERIODLÅSET KUNDE INTE LÄSAS')
+      expect(prompt).not.toContain('PERIODEN ÄR LÅST')
+      expect(prompt).not.toContain('låsa upp perioden')
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 
   it('points a posted entry in a locked period at storno, never at an inline rewrite', async () => {

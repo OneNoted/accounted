@@ -6,7 +6,7 @@ import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -419,7 +419,6 @@ export const POST = withRouteContext(
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
 
     let journalEntryId: string | null = null
-    let journalEntryError: string | null = null
 
     try {
       if (customLines) {
@@ -537,11 +536,7 @@ export const POST = withRouteContext(
       // A foreign-currency invoice with no booking rate is a missing-input
       // failure, not a transient booking failure: buildInvoicePaymentClearing
       // Lines refuses rather than valuing the 1510 credit at a fabricated rate.
-      // Soft-failing it would mark the invoice paid with NO verifikat, and
-      // mark-paid rejects 'paid' invoices while this route rejects linked
-      // transactions, so no flow could ever complete the booking afterwards
-      // (the same half-state the supplier route guards against). Fatal here
-      // instead, and fully retryable once invoice.exchange_rate is on file.
+      // Fully retryable once invoice.exchange_rate is on file.
       // Dispatch on `code`, not instanceof: the class lives in a module route
       // tests routinely vi.mock away, and the literal keeps a mocked-away
       // export from turning into an `undefined === undefined` catch-all.
@@ -549,10 +544,29 @@ export const POST = withRouteContext(
         return errorResponse(err, txLog, { requestId })
       }
       txLog.error('failed to create payment journal entry', err as Error)
-      // Other errors are recorded but don't abort the match: the user can
-      // re-book the verifikation manually. All errors map to Swedish via
-      // getErrorMessage; the raw message must never reach the user (issue #337).
-      journalEntryError = getErrorMessage(err, { context: 'invoice' })
+      // ANY failed payment voucher fails the whole match (mirrors
+      // match-supplier-invoice): proceeding used to mark the invoice paid and
+      // link the transaction with NO verifikat, an unrecoverable half-state:
+      // mark-paid rejects 'paid' invoices and this route rejects linked
+      // transactions, so no flow could ever complete the booking afterwards.
+      // Typed bookkeeping errors (period locked, no fiscal period, ...) map
+      // to their registered envelope; everything else returns the invoice-
+      // side payment-failure code with a Swedish reason via getErrorMessage,
+      // so the raw message never reaches the user (issue #337).
+      if (isBookkeepingError(err)) {
+        return errorResponse(err, txLog, { requestId })
+      }
+      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, {
+        requestId,
+        details: { reason: getErrorMessage(err, { context: 'invoice' }) },
+      })
+    }
+
+    if (!journalEntryId) {
+      // createJournalEntry resolved without an id: the same unrecoverable
+      // half-state as a thrown failure, so the match aborts here too
+      // (mirrors the supplier route's !journalEntryId guard).
+      return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, { requestId })
     }
 
     // Underlag for the payment verifikation: re-attach the invoice PDF that
@@ -722,13 +736,6 @@ export const POST = withRouteContext(
       txLog.warn('invoice.match_confirmed event emission failed', err as Error)
     }
 
-    if (journalEntryError) {
-      txLog.warn('match recorded but payment journal entry failed', {
-        errorCode: 'MATCH_INVOICE_PARTIAL',
-        message: journalEntryError,
-      })
-    }
-
     return NextResponse.json({
       success: true,
       invoice_status: newStatus,
@@ -736,7 +743,9 @@ export const POST = withRouteContext(
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,
-      journal_entry_error: journalEntryError,
+      // Always null since a failed voucher now aborts the whole match; the
+      // field survives for response-shape compatibility with existing callers.
+      journal_entry_error: null,
       category: 'income_services',
     })
   },

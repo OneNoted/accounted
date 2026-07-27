@@ -4,31 +4,19 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { getCompanyEntityType } from '@/lib/company/context'
-import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
+import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
-/**
- * Turn a raw `employees` row into the response shape: drop the encrypted
- * `personnummer` column, add the display form under `personnummer_masked`.
- *
- * The mask must NOT be returned under the writable key name. This route both
- * reads and writes the same object shape, so a client that renders
- * `data.personnummer` and posts it back in its next PATCH would send
- * 'ÅÅÅÅMMDD-XXXX' straight into the encrypt path. Splitting the read key from
- * the write key forecloses that round-trip structurally, matching v1
- * (`EmployeeWriteResponse`), the MCP tools, and `lib/salary/employee-commands.ts`.
- */
-function maskForResponse(row: Record<string, unknown>): Record<string, unknown> {
-  const { personnummer, ...rest } = row
-  return {
-    ...rest,
-    personnummer_masked: maskPersonnummer(decryptPersonnummer(personnummer as string)),
-  }
-}
+// Response shaping lives in the shared maskEmployeeForResponse: it drops the
+// ciphertext AND personnummer_last4 (mask + last4 reassembles the full
+// personnummer) and returns the mask under the read-only `personnummer_masked`
+// key, never the writable `personnummer` key. This route both reads and writes
+// the same object shape, so a mask under the write key would round-trip
+// 'ÅÅÅÅMMDD-XXXX' straight into the encrypt path.
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.employees.get',
@@ -46,7 +34,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
     }
 
-    return NextResponse.json({ data: maskForResponse(employee) })
+    return NextResponse.json({ data: maskEmployeeForResponse(employee) })
   },
 )
 
@@ -184,7 +172,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
-    return NextResponse.json({ data: maskForResponse(updated) })
+    return NextResponse.json({ data: maskEmployeeForResponse(updated) })
   },
   { requireWrite: true },
 )

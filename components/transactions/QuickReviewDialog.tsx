@@ -233,8 +233,11 @@ export default function QuickReviewDialog({
               </ToastAction>
             ),
           })
-          // Keep the files that did not attach: clearing them would erase the
-          // user's only pointer to the underlag they believed was filed.
+          // By this point the parent has already closed the dialog (onConfirm
+          // resolved before linkDocuments did), so this component's file state
+          // is invisible either way: the toast above, with its open-entry
+          // action, is the user's actual pointer to the underlag that did not
+          // attach. The early return just skips the redundant cleanup below.
           return
         }
       }

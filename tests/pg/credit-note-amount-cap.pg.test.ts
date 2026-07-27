@@ -301,6 +301,40 @@ describe('credit note amount cap', () => {
     ).resolves.toBeTruthy()
   })
 
+  // The trigger reads the original with SECURITY DEFINER (RLS bypassed), so
+  // the company match in its lookup is what stops a credit note in one
+  // company from FOR UPDATE-locking another tenant's invoice and leaking its
+  // total/currency through the exception text. A cross-company reference is
+  // treated as not found and the insert is rejected.
+  it('rejects a credit note that references another tenant\'s invoice', async () => {
+    const victim = await seedCompany()
+    const attacker = await seedCompany()
+
+    const victimInvoiceId = await insertInvoice({
+      userId: victim.userId,
+      companyId: victim.companyId,
+      number: `F-${randomUUID()}`,
+      total: 98765.43,
+    })
+
+    let raised: Error | null = null
+    try {
+      await insertInvoice({
+        userId: attacker.userId,
+        companyId: attacker.companyId,
+        number: `KR-${randomUUID()}`,
+        total: -1000,
+        creditedInvoiceId: victimInvoiceId,
+      })
+    } catch (err) {
+      raised = err as Error
+    }
+    expect(raised).not.toBeNull()
+    expect(raised!.message).toMatch(/not found for credit note/i)
+    // The exception must not leak the victim invoice's figures.
+    expect(raised!.message).not.toContain('98765.43')
+  })
+
   it('leaves ordinary invoices untouched', async () => {
     const { userId, companyId } = await seedCompany()
     await expect(

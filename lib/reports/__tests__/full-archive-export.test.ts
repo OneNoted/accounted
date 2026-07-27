@@ -213,6 +213,53 @@ describe('generateFullArchive', () => {
       expect(manifest[0].zip_path).toBe('dokument/2024/A17_receipt.pdf')
     })
 
+    it('falls back to the company-scoped key when the stored pointer is stale', async () => {
+      // A concurrent Phase B backfill re-homed the object mid-run: the
+      // legacy pointer 404s but the company-scoped copy exists. The archive
+      // must contain the bytes, not a manifest error.
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: PERIOD_2024 },
+        {
+          data: [
+            {
+              id: 'doc-1',
+              file_name: 'receipt.pdf',
+              storage_path: 'documents/user-1/receipt.pdf',
+              journal_entry_id: 'entry-1',
+              journal_entries: {
+                voucher_number: 17,
+                voucher_series: 'A',
+                entry_date: '2024-03-15',
+              },
+            },
+          ],
+        },
+        { data: [{ id: 'entry-1', fiscal_period_id: PERIOD_2024.id }] },
+      ])
+
+      const download = vi.fn(async (path: string) =>
+        path === 'documents/company-1/user-1/receipt.pdf'
+          ? { data: new Blob(['receipt bytes']), error: null }
+          : { data: null, error: { message: 'Object not found' } },
+      )
+      supabase.storage.from = vi.fn().mockReturnValue({ download })
+
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period',
+        period_id: PERIOD_2024.id,
+      })
+
+      const zip = await JSZip.loadAsync(buffer)
+      const manifest = JSON.parse(await zip.file('dokument/manifest.json')!.async('text'))
+      expect(manifest).toHaveLength(1)
+      expect(manifest[0].status).toBe('downloaded')
+      expect(zip.file('dokument/2024/A17_receipt.pdf')).not.toBeNull()
+      // Stored pointer first, alternate layout second.
+      expect(download).toHaveBeenNthCalledWith(1, 'documents/user-1/receipt.pdf')
+      expect(download).toHaveBeenNthCalledWith(2, 'documents/company-1/user-1/receipt.pdf')
+    })
+
     it('skips documents when include_documents is false', async () => {
       enqueueMany([
         { data: COMPANY_ROW },

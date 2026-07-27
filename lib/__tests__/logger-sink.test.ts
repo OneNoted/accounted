@@ -47,6 +47,7 @@ beforeEach(() => {
 afterEach(() => {
   resetObservabilitySink()
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 describe('logger -> observability sink', () => {
@@ -79,6 +80,16 @@ describe('logger -> observability sink', () => {
     expect(events[0].message).toBe('something went wrong')
     expect(events[0].level).toBe('error')
     expect(events[0].context.status).toBe(500)
+  })
+
+  it('forwards alert-flagged info/warn at their own severity, not as error', () => {
+    const log = createLogger('m')
+    log.warn('tax table stale', { alert: true })
+    log.info('backup finished late', { alert: true })
+
+    expect(events).toHaveLength(2)
+    expect(events[0]).toMatchObject({ kind: 'message', level: 'warning' })
+    expect(events[1]).toMatchObject({ kind: 'message', level: 'info' })
   })
 
   it('does not forward plain info/warn records', () => {
@@ -165,6 +176,52 @@ describe('logger -> observability sink', () => {
     log.error('legacy call', 'customer 800101-1234 not found', 42)
 
     expect(events[0].context.details).toEqual(['[REDACTED]', 42])
+  })
+
+  it('scrubs API keys, emails and IBANs from free-text messages, not just denylisted keys', () => {
+    const log = createLogger('m')
+    log.error('key gnubok_sk_live_secret1 for anna@example.com failed on SE4550000000058398257466')
+
+    expect(events[0].message).toBe(
+      'key [REDACTED_API_KEY] for [REDACTED_EMAIL] failed on [REDACTED_IBAN]',
+    )
+    const serialized = JSON.stringify(events[0])
+    expect(serialized).not.toContain('gnubok_sk_live_secret1')
+    expect(serialized).not.toContain('anna@example.com')
+    expect(serialized).not.toContain('SE4550000000058398257466')
+  })
+
+  // --- stacks: the sink keeps them, production stdout drops them -------------
+
+  it('in production the sink receives a stack while the stdout JSON line drops it', () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    const log = createLogger('m')
+    log.error('insert failed', new Error('clean failure'))
+
+    // Sink path: the error tracker only runs in production, so this is the
+    // one environment where a missing stack would make every event ungroupable.
+    const sinkErr = events[0].error as { message: string; stack?: string }
+    expect(typeof sinkErr.stack).toBe('string')
+    expect(sinkErr.stack).toContain('clean failure')
+
+    // Stdout path: unchanged contract, production log lines stay stackless.
+    const line = (console.error as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+    const parsed = JSON.parse(line) as { err: { message: string; stack?: unknown } }
+    expect(parsed.err.message).toBe('clean failure')
+    expect(parsed.err.stack).toBeUndefined()
+  })
+
+  it('the stack reaching the sink in production is redacted', () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    const log = createLogger('m')
+    log.error('lookup failed', new Error('no customer with 800101-1234'))
+
+    const sinkErr = events[0].error as { message: string; stack?: string }
+    // The first stack line carries the message, so the whole-string
+    // personnummer rule nukes the stack rather than leaking it.
+    expect(sinkErr.message).toBe('[REDACTED]')
+    expect(sinkErr.stack).toBe('[REDACTED]')
+    expect(JSON.stringify(events[0])).not.toContain('800101-1234')
   })
 
   // --- resilience ----------------------------------------------------------

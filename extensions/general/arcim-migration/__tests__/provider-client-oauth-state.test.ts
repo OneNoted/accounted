@@ -63,6 +63,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import {
   consumeOAuthState,
+  generateOtc,
   getConsent,
   ConsentNotFoundError,
 } from '../lib/provider-client'
@@ -156,6 +157,33 @@ describe('consumeOAuthState', () => {
     useResults([{ data: null, error: { message: 'boom' } }])
 
     await expect(consumeOAuthState('state-token')).resolves.toBeNull()
+  })
+})
+
+describe('generateOtc', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('defaults the OAuth state lifetime to 10 minutes', async () => {
+    // The state only has to survive the round trip to the provider's login
+    // page. The old 60-minute default left a phished or leaked state
+    // consumable for an hour.
+    const { calls } = useResults([{ data: null }])
+    const before = Date.now()
+
+    const { expiresAt } = await generateOtc('consent-1')
+
+    const after = Date.now()
+    expect(calls[0].table).toBe('provider_otc')
+    const inserted = findOp(calls[0], 'insert')?.[1][0] as { consent_id: string; expires_at: string }
+    expect(inserted.consent_id).toBe('consent-1')
+
+    const tenMinutes = 10 * 60 * 1000
+    const expiry = new Date(expiresAt).getTime()
+    expect(expiry).toBeGreaterThanOrEqual(before + tenMinutes)
+    expect(expiry).toBeLessThanOrEqual(after + tenMinutes)
+    expect(new Date(inserted.expires_at).getTime()).toBe(expiry)
   })
 })
 

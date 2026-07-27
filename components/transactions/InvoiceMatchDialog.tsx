@@ -18,9 +18,16 @@ interface DuplicateCandidate {
   voucher_label: string
   entry_date: string
   description: string | null
+  /** The voucher leg's SEK debit: always kronor, never the bank line's own
+   *  (possibly foreign) amount. Render with an explicit 'SEK'. */
   amount: number
   bank_account_number: string
-  reason: 'exact_amount_same_date' | 'exact_amount_within_window'
+  /** 'date_window_only' = the amount test never ran (no SEK value on the bank
+   *  line); the copy must not claim an amount match for that shape. */
+  reason: 'exact_amount_same_date' | 'exact_amount_within_window' | 'date_window_only'
+  /** False when the amounts were never compared (mirrors
+   *  lib/transactions/booking-duplicate-detection.ts). */
+  amount_verified: boolean
 }
 
 interface PreviewLine {
@@ -363,17 +370,30 @@ export default function InvoiceMatchDialog({
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-warning-foreground" />
                   <div className="text-sm space-y-1">
                     <p className="font-medium text-warning-foreground">{t('duplicate_title')}</p>
+                    {/* candidate.amount is the voucher leg's SEK debit
+                        (duplicate-payment-detection.ts), so it is formatted as
+                        SEK regardless of the transaction's currency: an
+                        11 500 kr leg must never print as "11 500,00 EUR".
+                        The unverified shape (date_window_only) uses copy that
+                        does NOT claim an amount match: the amounts were never
+                        compared (the bank line has no stored SEK value). */}
                     <p className="text-muted-foreground">
-                      {candidate.reason === 'exact_amount_same_date'
-                        ? t('duplicate_body_same_date', {
+                      {candidate.reason === 'date_window_only' || candidate.amount_verified === false
+                        ? t('duplicate_body_unverified', {
                             label: candidate.voucher_label,
-                            amount: formatCurrency(candidate.amount, transaction.currency),
-                          })
-                        : t('duplicate_body_window', {
-                            label: candidate.voucher_label,
-                            amount: formatCurrency(candidate.amount, transaction.currency),
+                            amount: formatCurrency(candidate.amount, 'SEK'),
                             date: formatDate(candidate.entry_date),
-                          })}
+                          })
+                        : candidate.reason === 'exact_amount_same_date'
+                          ? t('duplicate_body_same_date', {
+                              label: candidate.voucher_label,
+                              amount: formatCurrency(candidate.amount, 'SEK'),
+                            })
+                          : t('duplicate_body_window', {
+                              label: candidate.voucher_label,
+                              amount: formatCurrency(candidate.amount, 'SEK'),
+                              date: formatDate(candidate.entry_date),
+                            })}
                     </p>
                     {candidate.description && (
                       <p className="text-xs text-muted-foreground truncate">

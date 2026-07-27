@@ -127,6 +127,21 @@ export const POST = withRouteContext(
     }
     const currency = txTyped[0]!.currency ?? 'SEK'
 
+    // A HOMOGENEOUS foreign batch is refused too: the RPC writes the line
+    // amounts into journal_entry_lines.debit_amount/credit_amount, which are
+    // ALWAYS kronor, and neither the route nor the RPC carries an exchange
+    // rate here. Two EUR transactions of 100 + 200 would produce a verifikat
+    // whose 300 is read as kronor by balansräkning, momsdeklaration and SIE
+    // export. Foreign-currency transactions are booked individually through
+    // the FX-aware flows, which resolve a rate and book the kursdifferens.
+    // The RPC enforces the same refusal for callers that bypass this route.
+    if (currency !== 'SEK') {
+      return errorResponseFromCode('BULK_BOOK_FOREIGN_CURRENCY', opLog, {
+        requestId,
+        details: { currency },
+      })
+    }
+
     // Three paths now (PR #608):
     //   1. existing_journal_entry_id → null new_entry, RPC links txs to JE.
     //   2. template_id → route expands template per mode, builds lines.

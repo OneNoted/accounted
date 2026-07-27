@@ -284,6 +284,32 @@ describe('uploadDocument', () => {
     // company_id out of the RLS-visible path entirely.
     expect(key).not.toMatch(/^documents\/user-1\//)
   })
+
+  it('cleans up the uploaded object via the service-role client when the record insert fails', async () => {
+    // The documents bucket is WORM (no DELETE policy): a caller-bound
+    // remove() is silently blocked by RLS, so the failed-upload cleanup must
+    // run on the service-role client or the object is orphaned forever.
+    results = [{ data: null, error: { message: 'insert exploded' } }]
+
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+
+    const callerRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload, remove: callerRemove })
+
+    await expect(
+      uploadDocument(supabase as never, 'user-1', 'company-1', {
+        name: 'kvitto.pdf',
+        buffer: pdfBuffer(),
+        type: 'application/pdf',
+      }),
+    ).rejects.toThrow(/Failed to create document record/)
+
+    const uploadedKey = upload.mock.calls[0]![0] as string
+    expect(serviceRemove).toHaveBeenCalledWith([uploadedKey])
+    expect(callerRemove).not.toHaveBeenCalled()
+  })
 })
 
 describe('createNewVersion', () => {
@@ -354,6 +380,34 @@ describe('createNewVersion', () => {
       }),
     ).rejects.toThrow(/original document not found/)
     expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('cleans up the uploaded object via the service-role client when the version RPC fails', async () => {
+    results = [
+      { data: { company_id: 'company-1' }, error: null },  // resolve owning company
+      { data: null, error: { message: 'rpc exploded' } },  // create_document_version RPC
+    ]
+
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+
+    const callerRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload, remove: callerRemove })
+
+    await expect(
+      createNewVersion(supabase as never, 'user-1', 'doc-1', {
+        name: 'test-v2.pdf',
+        buffer: pdfBuffer('new content'),
+        type: 'application/pdf',
+      }),
+    ).rejects.toThrow(/Failed to create new version: rpc exploded/)
+
+    // WORM bucket: the cleanup must go through the service-role client, not
+    // the caller-bound client (whose remove() RLS silently blocks).
+    const uploadedKey = upload.mock.calls[0]![0] as string
+    expect(serviceRemove).toHaveBeenCalledWith([uploadedKey])
+    expect(callerRemove).not.toHaveBeenCalled()
   })
 })
 
@@ -467,7 +521,7 @@ describe('dual-layout read helpers', () => {
 })
 
 describe('deleteDocument', () => {
-  it('removes BOTH key layouts so no readable orphan copy survives', async () => {
+  it('removes BOTH key layouts via the service-role client so no readable orphan copy survives', async () => {
     const company = 'company-1'
     const legacy = 'documents/user-1/1_a.pdf'
 
@@ -485,13 +539,32 @@ describe('deleteDocument', () => {
       { data: null, error: null }, // delete
     ]
 
-    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
-    const supabase = makeClient({ remove })
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+
+    const callerRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    const supabase = makeClient({ remove: callerRemove })
 
     const result = await deleteDocument(supabase as never, company, 'doc-1')
 
     expect(result.ok).toBe(true)
-    expect(remove).toHaveBeenCalledWith([legacy, `documents/${company}/user-1/1_a.pdf`])
+    expect(serviceRemove).toHaveBeenCalledWith([legacy, `documents/${company}/user-1/1_a.pdf`])
+    // The documents bucket is WORM (no DELETE policy on storage.objects): a
+    // caller-bound remove() is silently blocked by RLS and reports success
+    // without deleting, so it must never be used for the removal.
+    expect(callerRemove).not.toHaveBeenCalled()
+  })
+
+  it('does not touch storage when the company-filtered fetch finds nothing (authz-first)', async () => {
+    results = [{ data: null, error: null }]
+
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+
+    const result = await deleteDocument(makeClient() as never, 'company-1', 'doc-1')
+
+    expect(result).toMatchObject({ ok: false, reason: 'not_found', status: 404 })
+    expect(serviceRemove).not.toHaveBeenCalled()
   })
 
   it('refuses to delete a document linked to a journal entry (BFL 7 kap 2§)', async () => {
@@ -508,13 +581,41 @@ describe('deleteDocument', () => {
       },
     ]
 
-    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
-    const supabase = makeClient({ remove })
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+
+    const callerRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    const supabase = makeClient({ remove: callerRemove })
 
     const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
 
     expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry', status: 409 })
-    expect(remove).not.toHaveBeenCalled()
+    expect(callerRemove).not.toHaveBeenCalled()
+    expect(serviceRemove).not.toHaveBeenCalled()
+  })
+
+  it('keeps the storage objects when the DB row delete is blocked by the trigger', async () => {
+    results = [
+      {
+        data: {
+          id: 'doc-1',
+          file_name: 'a.pdf',
+          storage_path: 'documents/user-1/1_a.pdf',
+          journal_entry_id: null,
+          user_id: 'user-1',
+        },
+        error: null,
+      },
+      { data: null, error: { message: 'blocked by Bokföringslagen retention trigger' } },
+    ]
+
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+
+    const result = await deleteDocument(makeClient() as never, 'company-1', 'doc-1')
+
+    expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry', status: 409 })
+    expect(serviceRemove).not.toHaveBeenCalled()
   })
 })
 

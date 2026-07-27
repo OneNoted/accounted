@@ -22,6 +22,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-currency'
 import type { Invoice, Transaction, Customer } from '@/types'
 
 export interface InvoiceMatch {
@@ -183,19 +184,34 @@ function comparableAmount(
   transaction: Transaction,
   invoiceAmount: number
 ): number | null {
+  // Currency codes normalize before any comparison: both `invoices.currency`
+  // and `transactions.currency` are nullable with DEFAULT 'SEK', so a legacy
+  // NULL (or lowercase) code means kronor and must keep matching a SEK bank
+  // row instead of being routed down the cross-currency branch and dropped.
+  // Same rule as normalizeCurrency in supplier-invoice-matching.ts.
+  const invoiceCurrency = normalizeCurrencyCode(invoice.currency)
+  const transactionCurrency = normalizeCurrencyCode(transaction.currency)
+
   // Same currency: raw magnitudes, no rate needed. The only path a SEK-only
   // company ever takes.
-  if (invoice.currency === transaction.currency) return invoiceAmount
+  if (invoiceCurrency === transactionCurrency) return invoiceAmount
 
   // Cross-currency: only a SEK bank row is comparable, and only against the
   // invoice's stored SEK conversion.
-  if (transaction.currency !== 'SEK') return null
+  if (transactionCurrency !== 'SEK') return null
 
-  // Pro-rate total_sek down to the part that is still unpaid: total_sek covers
-  // the whole invoice at the rate booked on registration, while
-  // remaining_amount is denominated in the invoice currency.
-  if (!invoice.total_sek || !invoice.total) return null
-  return Math.round((invoiceAmount / invoice.total) * invoice.total_sek * 100) / 100
+  // One definition of "the invoice amount in SEK", shared with the
+  // duplicate-payment guards: pro-rated total_sek first (total_sek covers the
+  // whole invoice at the registration rate while remaining_amount is in the
+  // invoice currency), then the stored exchange_rate when total_sek is 0 or
+  // absent. Both are STORED conversions; a missing rate still returns null.
+  return invoiceAmountSek({
+    amount: invoiceAmount,
+    currency: invoiceCurrency,
+    total: invoice.total,
+    totalSek: invoice.total_sek,
+    exchangeRate: invoice.exchange_rate,
+  })
 }
 
 /**
@@ -206,11 +222,19 @@ function comparableAmount(
  * (rate-independent) exclusion and is not reported as one of these.
  */
 function isUnconvertedForeignInvoice(invoice: Invoice, transaction: Transaction): boolean {
+  // Same normalization as comparableAmount: a NULL/lowercase code is kronor,
+  // so a legacy NULL-currency invoice is never reported as unconverted FX.
+  const invoiceCurrency = normalizeCurrencyCode(invoice.currency)
   return (
-    transaction.currency === 'SEK' &&
-    !!invoice.currency &&
-    invoice.currency !== 'SEK' &&
-    !invoice.total_sek
+    normalizeCurrencyCode(transaction.currency) === 'SEK' &&
+    invoiceCurrency !== 'SEK' &&
+    invoiceAmountSek({
+      amount: invoice.remaining_amount ?? invoice.total,
+      currency: invoiceCurrency,
+      total: invoice.total,
+      totalSek: invoice.total_sek,
+      exchangeRate: invoice.exchange_rate,
+    }) === null
   )
 }
 

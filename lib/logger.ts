@@ -33,10 +33,19 @@
 // Relative, not `@/lib/...`: the logger sits at the bottom of the import graph
 // and is pulled in by everything, so it should not depend on path-alias
 // resolution being configured in whatever context it is loaded from.
-import { captureException, captureMessage } from './observability/sink'
+import { captureException, captureMessage, type ObservabilityLevel } from './observability/sink'
 import { redact, redactString } from './observability/redact'
 
 type LogLevel = 'info' | 'warn' | 'error'
+
+// The sink speaks the vendor-neutral level vocabulary ('warning', not 'warn').
+// Without this map every alert-flagged info/warn record arrived at the
+// provider as severity 'error' and paged like one.
+const SINK_LEVEL: Record<LogLevel, ObservabilityLevel> = {
+  info: 'info',
+  warn: 'warning',
+  error: 'error',
+}
 
 export interface LogContext {
   requestId?: string
@@ -123,12 +132,47 @@ function buildRecord(
   return record
 }
 
+/** A `redact()`-serialized Error: `{ name, message, stack?, code? }`. */
+function isSerializedError(v: unknown): v is Record<string, unknown> {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    !Array.isArray(v) &&
+    typeof (v as Record<string, unknown>).name === 'string' &&
+    typeof (v as Record<string, unknown>).message === 'string' &&
+    'stack' in (v as Record<string, unknown>)
+  )
+}
+
+/**
+ * Drop `stack` from every serialized error in the record, however nested.
+ *
+ * This is the STDOUT half of the stack policy: production log lines stay
+ * small and grep-friendly without stack noise, exactly as before. The sink
+ * path deliberately does NOT run this: `redact()` keeps a redacted stack on
+ * the serialized error, because the error tracker only runs in production and
+ * needs the stack to group events (see lib/observability/redact.ts).
+ */
+function stripErrorStacks(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripErrorStacks)
+  if (typeof value === 'object' && value !== null) {
+    const dropStack = isSerializedError(value)
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (dropStack && k === 'stack') continue
+      out[k] = stripErrorStacks(v)
+    }
+    return out
+  }
+  return value
+}
+
 function emit(record: LogRecord) {
   const fn =
     record.level === 'error' ? console.error : record.level === 'warn' ? console.warn : console.log
 
   if (process.env.NODE_ENV === 'production') {
-    fn(JSON.stringify(record))
+    fn(JSON.stringify(stripErrorStacks(record)))
     return
   }
 
@@ -161,9 +205,12 @@ function hasAlertFlag(base: LogContext, args: unknown[]): boolean {
  * redacts a second time on its own boundary, so no field can reach a provider
  * without passing the denylist and the personnummer regex.
  *
- * Errors are captured as exceptions (the provider gets a stack to group on);
- * records without an Error become messages. Both entry points swallow their
- * own failures, so this can never throw into a caller's path.
+ * Errors are captured as exceptions (the provider gets a redacted stack to
+ * group on, in production too: emit() strips stacks from STDOUT only);
+ * records without an Error become messages at the record's own severity, so
+ * an alert-flagged info/warn arrives as info/warning rather than error. Both
+ * entry points swallow their own failures, so this can never throw into a
+ * caller's path.
  */
 function forwardToSink(record: LogRecord): void {
   const { level, module, msg, ts, err, details, ...ctx } = record
@@ -179,7 +226,7 @@ function forwardToSink(record: LogRecord): void {
   if (err !== undefined) {
     captureException(err, context)
   } else {
-    captureMessage(msg, 'error', context)
+    captureMessage(msg, SINK_LEVEL[level], context)
   }
 }
 

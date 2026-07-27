@@ -126,6 +126,7 @@ describe('PUT /api/kpi/preferences', () => {
 describe('PUT /api/kpi/preferences merge semantics', () => {
   function createCapturingSupabase(results: { data?: unknown; error?: unknown }[]) {
     const upsertPayloads: Record<string, unknown>[] = []
+    const upsertOptions: ({ onConflict?: string } | undefined)[] = []
     let idx = 0
     const makeBuilder = () => {
       const result = results[idx++] ?? { data: null, error: null }
@@ -134,15 +135,16 @@ describe('PUT /api/kpi/preferences merge semantics', () => {
       for (const m of ['select', 'eq', 'maybeSingle', 'single']) {
         b[m] = () => b
       }
-      b.upsert = (payload: Record<string, unknown>) => {
+      b.upsert = (payload: Record<string, unknown>, options?: { onConflict?: string }) => {
         upsertPayloads.push(payload)
+        upsertOptions.push(options)
         return b
       }
       b.then = (resolve: (v: unknown) => void) =>
         resolve({ data: result.data ?? null, error: result.error ?? null })
       return b
     }
-    return { supabase: { from: () => makeBuilder() }, upsertPayloads }
+    return { supabase: { from: () => makeBuilder() }, upsertPayloads, upsertOptions }
   }
 
   const stored = {
@@ -152,7 +154,7 @@ describe('PUT /api/kpi/preferences merge semantics', () => {
   }
 
   async function put(body: unknown, existing: unknown) {
-    const { supabase, upsertPayloads } = createCapturingSupabase([
+    const { supabase, upsertPayloads, upsertOptions } = createCapturingSupabase([
       { data: existing === undefined ? null : { value: existing } },
       { data: { value: 'ok' } },
     ])
@@ -161,7 +163,12 @@ describe('PUT /api/kpi/preferences merge semantics', () => {
       createMockRequest('/api/kpi/preferences', { method: 'PUT', body }),
       { params: Promise.resolve({}) },
     )
-    return { res, value: upsertPayloads[0]?.value as Record<string, unknown> | undefined }
+    return {
+      res,
+      value: upsertPayloads[0]?.value as Record<string, unknown> | undefined,
+      payload: upsertPayloads[0],
+      options: upsertOptions[0],
+    }
   }
 
   it('keeps the stored visibleKpis and kpiOrder when only accountOverrides is sent', async () => {
@@ -196,5 +203,22 @@ describe('PUT /api/kpi/preferences merge semantics', () => {
   it('an empty body stores the stored value unchanged', async () => {
     const { value } = await put({}, stored)
     expect(value).toEqual(stored)
+  })
+
+  it('upserts against the company-scoped unique constraint', async () => {
+    // Migration 20260330130000 dropped UNIQUE (user_id, extension_id, key) in
+    // favor of UNIQUE (company_id, extension_id, key). Naming the old trio in
+    // onConflict makes Postgres reject every save with 42P10, because the
+    // surviving user_id index is non-unique and cannot arbitrate ON CONFLICT.
+    const { res, payload, options } = await put({ visibleKpis: ['kpi_a'] }, stored)
+    expect(res.status).toBe(200)
+    expect(options?.onConflict).toBe('company_id,extension_id,key')
+    // The row still carries company scoping + last-writer attribution.
+    expect(payload).toMatchObject({
+      company_id: 'company-1',
+      user_id: 'user-1',
+      extension_id: 'core/kpi',
+      key: 'preferences',
+    })
   })
 })

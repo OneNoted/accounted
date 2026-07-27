@@ -11,7 +11,7 @@ let results: Array<{ data?: unknown; error?: unknown; count?: number | null }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'insert', 'update', 'delete', 'lte', 'gte', 'in', 'not', 'or', 'order', 'limit', 'is']) {
+  for (const m of ['select', 'eq', 'insert', 'update', 'delete', 'lte', 'gte', 'in', 'not', 'or', 'order', 'limit', 'is', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
@@ -136,13 +136,24 @@ interface GuardStore {
 /**
  * Client whose guard-table reads are predicate-evaluated against `store`.
  * `fiscal_periods` still comes from the sequential `results` queue.
+ *
+ * `.range(from, to)` slices the matched rows exactly like PostgREST pages
+ * them, so a fetchAllRows caller is actually exercised page by page; a query
+ * that never calls `.range()` gets everything back at once (the old
+ * cap-oblivious behaviour a real PostgREST would truncate at 1000 rows).
  */
 function makeGuardClient(store: GuardStore) {
-  const queries: Array<{ table: string; specs: FilterSpec[] }> = []
+  const queries: Array<{
+    table: string
+    specs: FilterSpec[]
+    orderedBy: string | null
+    range: { from: number; to: number } | null
+  }> = []
 
   function guardBuilder(table: (typeof GUARD_TABLES)[number]) {
     const specs: FilterSpec[] = []
-    queries.push({ table, specs })
+    const record: (typeof queries)[number] = { table, specs, orderedBy: null, range: null }
+    queries.push(record)
     let head = false
     const b: Record<string, unknown> = {}
     b.select = vi.fn((_cols?: string, opts?: { head?: boolean }) => {
@@ -155,10 +166,25 @@ function makeGuardClient(store: GuardStore) {
         return b
       })
     }
+    b.order = vi.fn((col: string) => {
+      record.orderedBy = col
+      return b
+    })
+    b.range = vi.fn((from: number, to: number) => {
+      record.range = { from, to }
+      return b
+    })
     b.then = (resolve: (v: unknown) => void) => {
       const failure = store.failOn?.[table]
       if (failure) return resolve({ data: null, count: null, error: { message: failure } })
-      const matched = (store[table] ?? []).filter((r) => matchesAll(r, specs))
+      let matched = (store[table] ?? []).filter((r) => matchesAll(r, specs))
+      if (record.orderedBy) {
+        const col = record.orderedBy
+        matched = [...matched].sort((a, c) => String(a[col]).localeCompare(String(c[col])))
+      }
+      if (record.range) {
+        matched = matched.slice(record.range.from, record.range.to + 1)
+      }
       return resolve(
         head
           ? { count: matched.length, data: null, error: null }
@@ -323,6 +349,53 @@ describe('lockPeriod: unbooked transaction guard', () => {
 
     const result = await lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')
     expect(result.locked_at).toBeTruthy()
+  })
+
+  it('paginates the business-unbooked candidate fetch past the 1000-row PostgREST page cap', async () => {
+    // Bulk-booked transactions keep journal_entry_id NULL, so >1000 candidates
+    // is realistic. A bare .select() would silently stop at 1000 rows; the
+    // guard must page through all 1500 and refuse with the full count.
+    results = [{ data: openPeriod(), error: null }]
+
+    const rows = Array.from({ length: 1500 }, (_, i) =>
+      tx({ id: `t${String(i).padStart(4, '0')}`, is_business: true, journal_entry_id: null }),
+    )
+    const { client, queries } = makeGuardClient({ transactions: rows })
+
+    await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
+      /1500 banktransaktion\(er\)[\s\S]*1500 markerade som affärshändelse men utan verifikat/,
+    )
+
+    // The candidate fetch (non-head transactions reads) is paginated with a
+    // stable unique order, per the fetch-all.ts ordering invariant.
+    const candidatePages = queries.filter((q) => q.table === 'transactions' && q.range !== null)
+    expect(candidatePages.length).toBeGreaterThanOrEqual(2)
+    for (const page of candidatePages) {
+      expect(page.orderedBy).toBe('id')
+    }
+    expect(candidatePages[0].range).toEqual({ from: 0, to: 999 })
+    expect(candidatePages[1].range).toEqual({ from: 1000, to: 1999 })
+  })
+
+  it('anchored rows beyond the first page still reduce the blocking count', async () => {
+    // 1200 candidates, of which the LAST 100 (sorted by id, i.e. entirely on
+    // page 2) are bulk-booked via transaction_voucher_links. Without
+    // pagination those rows were never fetched, so their anchoring never
+    // mattered; with it, 1200 - 100 = 1100 genuinely unbooked rows block.
+    results = [{ data: openPeriod(), error: null }]
+
+    const rows = Array.from({ length: 1200 }, (_, i) =>
+      tx({ id: `t${String(i).padStart(4, '0')}`, is_business: true, journal_entry_id: null }),
+    )
+    const anchoredIds = rows.slice(1100).map((r) => r.id as string)
+    const { client } = makeGuardClient({
+      transactions: rows,
+      transaction_voucher_links: anchoredIds.map((id) => ({ transaction_id: id })),
+    })
+
+    await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
+      /1100 banktransaktion\(er\)[\s\S]*1100 markerade som affärshändelse men utan verifikat/,
+    )
   })
 
   it('regression: the old journal_entry_id IS NULL + is_business = true guard let untriaged rows through', async () => {

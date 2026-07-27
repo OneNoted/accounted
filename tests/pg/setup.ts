@@ -64,6 +64,33 @@ export async function withUserContext<T>(
   }
 }
 
+// Run `fn` with service-role claims and the service_role DB role: the same
+// presentation PostgREST gives a createServiceClient() call (auth.uid() NULL,
+// auth.role() = 'service_role'). Unlike withUserContext this COMMITS on
+// success: the SIE bulk-delete suites assert persisted effects over the plain
+// pool afterwards. SET LOCAL scopes the claims and role to the transaction,
+// so the pooled connection is clean again after COMMIT/ROLLBACK either way.
+export async function runAsServiceRole<T>(
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `SELECT set_config('request.jwt.claims', '{"role":"service_role"}', true)`,
+    )
+    await client.query('SET LOCAL ROLE service_role')
+    const result = await fn(client)
+    await client.query('COMMIT')
+    return result
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
 // Schema sanity: fail loud if migrations did not apply, rather than letting
 // every test fail with a cryptic "relation does not exist". Runs once per
 // test file (vitest invokes setupFiles per worker).

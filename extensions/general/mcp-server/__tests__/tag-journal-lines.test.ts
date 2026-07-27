@@ -149,6 +149,50 @@ describe('gnubok_tag_journal_lines: filter gates', () => {
     const insertCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls
     expect(insertCalls.some((args) => args[0] === 'pending_operations')).toBe(false)
   })
+
+  it('stops fetching line chunks as soon as the cap is exceeded (no full-ledger walk)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: false }, error: null })
+    // 300 matching entries → 3 line chunks of up to 100 entry ids each. The
+    // FIRST chunk alone already returns 501 lines (past RETAG_MAX_LINES), so
+    // chunks 2-3 must never be fetched: the outcome is decided.
+    enqueue({
+      data: Array.from({ length: 300 }, (_, i) => ({
+        id: `je-${i}`,
+        entry_date: '2024-03-01',
+        voucher_number: i,
+        voucher_series: 'A',
+        status: 'posted',
+      })),
+      error: null,
+    })
+    enqueue({
+      data: Array.from({ length: 501 }, (_, i) => ({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        journal_entry_id: `je-${i % 300}`,
+        account_number: '4010',
+        debit_amount: 250,
+        credit_amount: 0,
+        sort_order: 1,
+      })),
+      error: null,
+    })
+
+    await expect(
+      tagJournalLines.execute(
+        { dimensions: { '6': 'P01' }, reason: 'Retro-taggning', filters: { only_untagged: true } },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/fler än 500 rader/)
+
+    const fromCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls
+    // Exactly one journal_entry_lines query ran: the overflow short-circuits
+    // before the second and third chunks.
+    expect(fromCalls.filter((args) => args[0] === 'journal_entry_lines')).toHaveLength(1)
+    expect(fromCalls.some((args) => args[0] === 'pending_operations')).toBe(false)
+  })
 })
 
 // ── Staging ──────────────────────────────────────────────────────────────────

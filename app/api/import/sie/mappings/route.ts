@@ -1,8 +1,38 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody } from '@/lib/api/validate'
 import { saveMappings } from '@/lib/import/sie-import'
 import type { AccountMapping } from '@/lib/import/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+
+// Mirrors what saveMappings() (lib/import/sie-import.ts) reads off each
+// element: sourceAccount/sourceName/targetAccount/confidence/matchType land
+// verbatim in sie_account_mappings columns. Everything except sourceAccount is
+// optional because saveMappings itself tolerates absence: it filters out
+// elements with a falsy targetAccount (unmapped accounts travel in the same
+// array), and confidence/match_type fall back to their column defaults.
+// The point of the schema is type safety: a wrongly-typed element used to
+// reach Postgres and surface as a 500 instead of a 400.
+const SieMappingElementSchema = z.object({
+  sourceAccount: z.string().min(1).max(20),
+  sourceName: z.string().max(200).nullish(),
+  targetAccount: z.string().max(20).nullish(),
+  targetName: z.string().max(200).nullish(),
+  confidence: z.number().min(0).max(1).nullish(),
+  matchType: z.enum(['exact', 'name', 'class', 'manual', 'bas_range']).nullish(),
+  isOverride: z.boolean().nullish(),
+})
+
+const SaveMappingsSchema = z.object({
+  mappings: z.array(SieMappingElementSchema),
+})
+
+const UpdateMappingSchema = z.object({
+  sourceAccount: z.string().min(1).max(20),
+  targetAccount: z.string().min(1).max(20),
+  sourceName: z.string().max(200).nullish(),
+})
 
 /**
  * GET /api/import/sie/mappings
@@ -32,12 +62,12 @@ export const GET = withRouteContext(
 export const POST = withRouteContext(
   'sie_import.mappings.save',
   async (request, { supabase, companyId, user }) => {
-    const body = await request.json()
-    const mappings: AccountMapping[] = body.mappings
-
-    if (!mappings || !Array.isArray(mappings)) {
-      return NextResponse.json({ error: 'Invalid mappings data' }, { status: 400 })
-    }
+    const validation = await validateBody(request, SaveMappingsSchema)
+    if (!validation.success) return validation.response
+    // Sparse elements are deliberate (see the schema comment): saveMappings
+    // handles absent fields itself, so the wire type is a relaxed superset of
+    // AccountMapping.
+    const mappings = validation.data.mappings as unknown as AccountMapping[]
 
     try {
       // saveMappings' second parameter is the tenant key: it lands verbatim in
@@ -69,15 +99,9 @@ export const POST = withRouteContext(
 export const PUT = withRouteContext(
   'sie_import.mappings.update',
   async (request, { supabase, user, companyId }) => {
-    const body = await request.json()
-    const { sourceAccount, targetAccount, sourceName } = body
-
-    if (!sourceAccount || !targetAccount) {
-      return NextResponse.json(
-        { error: 'sourceAccount and targetAccount are required' },
-        { status: 400 }
-      )
-    }
+    const validation = await validateBody(request, UpdateMappingSchema)
+    if (!validation.success) return validation.response
+    const { sourceAccount, targetAccount, sourceName } = validation.data
 
     // source_name is the label the exporting system gave the account in the SIE
     // file's #KONTO record ('#KONTO 1910 "Kassa"'). During the mapping review it

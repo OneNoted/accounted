@@ -50,7 +50,7 @@ import {
 } from '@/lib/reports/vat-filing-gate'
 import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { fetchEntryLines, fetchLinesByEntryIds, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
@@ -116,7 +116,7 @@ import { findSupplierCandidates } from './supplier-candidates'
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
-import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
+import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '@/lib/salary/personnummer'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
@@ -140,6 +140,7 @@ import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-arc
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
@@ -356,7 +357,19 @@ async function stagePendingOperation(
   assertNoPlaintextPersonnummer(params, 'params')
   assertNoPlaintextPersonnummer(previewData, 'preview_data')
 
-  const riskLevel = getRiskLevel(operationType)
+  // params-aware: create/update_recurring_schedule escalate to 'high' when
+  // params.auto_send === true (standing outbound email with no per-send
+  // approval, same side-effect that puts one-off send_invoice at 'high').
+  // Ops whose persisted params nest the effective fields under `changes`
+  // (update_recurring_schedule: { schedule_id, changes }) are flattened for
+  // the risk check ONLY, so paramEscalatedRisk sees auto_send; the stored
+  // params row is untouched (the commit executor's schema owns that shape).
+  const changesBag = params.changes
+  const riskParams =
+    changesBag && typeof changesBag === 'object' && !Array.isArray(changesBag)
+      ? { ...params, ...(changesBag as Record<string, unknown>) }
+      : params
+  const riskLevel = getRiskLevel(operationType, riskParams)
   const branding = getBranding().appName.toLowerCase()
 
   // Resolve period_status once. The caller can pass `dateForPeriodCheck`
@@ -3898,12 +3911,12 @@ export const tools: McpTool[] = [
         })
         if (dup) {
           const voucher = dup.voucher_label ? `verifikat ${dup.voucher_label}` : 'en befintlig verifikation'
-          // dup.amount is the voucher leg's SEK figure, hence always "kr".
-          const claim = dup.amount_verified
-            ? `bokför redan ${dup.amount} kr på bankkontot`
-            : `bokför ${dup.amount} kr på bankkontot, men beloppen kunde inte jämföras: ` +
-              `transaktionen är i ${tx.currency} och saknar både amount_sek och exchange_rate, ` +
-              `så det går inte att avgöra om det är samma affärshändelse`
+          // Shared three-branch claim (lib/transactions/categorize-core.ts):
+          // SEK figure when verified, the foreign amount when the sibling has
+          // no SEK value (dup.amount === null used to render "bokför null kr"
+          // here), and an explicit could-not-compare that attributes the
+          // missing rate to the TARGET row. One implementation for web + MCP.
+          const claim = buildDuplicateBookingClaim(dup, tx.currency ?? null)
           throw new Error(
             `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) ${claim}. ` +
             `Den här affärshändelsen ser redan ut att vara bokförd: länka transaktionen till den befintliga ` +
@@ -6530,45 +6543,113 @@ export const tools: McpTool[] = [
       // correlated LATERAL join over every tenant's journal_entry_lines.
       // The DB-side `.limit(RETAG_MAX_LINES + 1)` is replaced by the JS
       // overflow check below: the cap counts MATCHED lines, and the old
-      // limit could not be expressed across the two steps. At least one
-      // filter is mandatory (guard above), so the match set stays bounded by
-      // the user's own filter, not by the whole ledger.
-      let rows: MatchedRow[]
+      // limit could not be expressed across the two steps.
+      //
+      // BOUNDED: entries are paged and their lines fetched chunk by chunk,
+      // and the whole walk STOPS as soon as the accumulated line count
+      // exceeds RETAG_MAX_LINES: the overflow check below then throws the
+      // same ">500 rader" error either way. Without the short-circuit,
+      // `only_untagged: true` alone (a valid filter per the guard above) on a
+      // large ledger materialized every matching line first: hundreds of
+      // round-trips just to throw. fetchLinesByEntryIds is the same shared
+      // chunked helper fetchEntryLines drives; only the loop around it is
+      // local so it can bail early.
+      const filterEntries = (eq: EntryLinesQuery) => {
+        let e = eq.eq('company_id', companyId).eq('status', 'posted')
+        if (dateFrom) e = e.gte('entry_date', dateFrom)
+        if (dateTo) e = e.lte('entry_date', dateTo)
+        if (text) {
+          // LIKE wildcards escaped so the filter matches literal % / _:
+          // same treatment as gnubok_query_journal's text legs. v1
+          // searches the ENTRY description only (documented in the
+          // schema); the two-leg line+entry union query_journal runs is
+          // overkill for a write filter.
+          const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+          e = e.ilike('description', `%${escaped}%`)
+        }
+        return e
+      }
+      const filterLines = (lq: EntryLinesQuery) => {
+        let l = lq
+        if (accounts && accounts.length > 0) {
+          l = l.in('account_number', accounts)
+        } else {
+          if (accountFrom) l = l.gte('account_number', accountFrom)
+          if (accountTo) l = l.lte('account_number', accountTo)
+        }
+        // Pragmatic v1 (documented in the schema): only-untagged means the
+        // bag is EXACTLY '{}' (column is NOT NULL DEFAULT '{}'). Partially
+        // tagged lines (e.g. only dim 1 set) do not match.
+        if (onlyUntagged) l = l.filter('dimensions', 'eq', '{}')
+        return l
+      }
+
+      /** journal_entries page size (PostgREST's own cap). */
+      const ENTRY_PAGE_SIZE = 1000
+      /** Entry ids per fetchLinesByEntryIds call: its own chunk width, so each
+       *  call is exactly one `.in()` query and the early-stop check runs
+       *  between every query rather than after a large batch. */
+      const LINE_CHUNK_SIZE = 100
+
+      type EntryRow = {
+        id: string
+        entry_date: string
+        voucher_number: number
+        voucher_series: string
+      }
+      type BareLineRow = {
+        id: string
+        journal_entry_id: string
+        account_number: string
+        debit_amount: number
+        credit_amount: number
+        sort_order: number
+      }
+
+      const rows: MatchedRow[] = []
       try {
-        rows = await fetchEntryLines<MatchedRow>({
-          supabase,
-          entryColumns: 'id, entry_date, voucher_number, voucher_series, status',
-          lineColumns: 'id, account_number, debit_amount, credit_amount, sort_order',
-          filterEntries: (eq: EntryLinesQuery) => {
-            let e = eq.eq('company_id', companyId).eq('status', 'posted')
-            if (dateFrom) e = e.gte('entry_date', dateFrom)
-            if (dateTo) e = e.lte('entry_date', dateTo)
-            if (text) {
-              // LIKE wildcards escaped so the filter matches literal % / _:
-              // same treatment as gnubok_query_journal's text legs. v1
-              // searches the ENTRY description only (documented in the
-              // schema); the two-leg line+entry union query_journal runs is
-              // overkill for a write filter.
-              const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
-              e = e.ilike('description', `%${escaped}%`)
+        const seenEntryIds = new Set<string>()
+        let entryFrom = 0
+        paging: while (true) {
+          const { data: entryPage, error: entryError } = await filterEntries(
+            supabase
+              .from('journal_entries')
+              .select('id, entry_date, voucher_number, voucher_series, status'),
+          )
+            // Stable total order on the PK for correct paging (same invariant
+            // as lib/supabase/fetch-all.ts).
+            .order('id', { ascending: true })
+            .range(entryFrom, entryFrom + ENTRY_PAGE_SIZE - 1)
+          if (entryError) throw new Error(entryError.message)
+
+          const pageEntries = ((entryPage ?? []) as EntryRow[]).filter(
+            (e) => !seenEntryIds.has(e.id),
+          )
+          for (const e of pageEntries) seenEntryIds.add(e.id)
+          const entryById = new Map(pageEntries.map((e) => [e.id, e]))
+
+          for (let i = 0; i < pageEntries.length; i += LINE_CHUNK_SIZE) {
+            const chunkIds = pageEntries.slice(i, i + LINE_CHUNK_SIZE).map((e) => e.id)
+            const chunkLines = await fetchLinesByEntryIds<BareLineRow>(
+              supabase,
+              chunkIds,
+              'id, account_number, debit_amount, credit_amount, sort_order',
+              filterLines,
+            )
+            for (const line of chunkLines) {
+              const parent = entryById.get(line.journal_entry_id)
+              if (!parent) continue
+              rows.push({ ...line, journal_entries: parent } as MatchedRow)
             }
-            return e
-          },
-          filterLines: (lq: EntryLinesQuery) => {
-            let l = lq
-            if (accounts && accounts.length > 0) {
-              l = l.in('account_number', accounts)
-            } else {
-              if (accountFrom) l = l.gte('account_number', accountFrom)
-              if (accountTo) l = l.lte('account_number', accountTo)
-            }
-            // Pragmatic v1 (documented in the schema): only-untagged means the
-            // bag is EXACTLY '{}' (column is NOT NULL DEFAULT '{}'). Partially
-            // tagged lines (e.g. only dim 1 set) do not match.
-            if (onlyUntagged) l = l.filter('dimensions', 'eq', '{}')
-            return l
-          },
-        })
+            // Short-circuit: one line past the cap already decides the
+            // outcome, so stop fetching instead of walking the rest of the
+            // match set.
+            if (rows.length > RETAG_MAX_LINES) break paging
+          }
+
+          if (!entryPage || entryPage.length < ENTRY_PAGE_SIZE) break
+          entryFrom += ENTRY_PAGE_SIZE
+        }
       } catch (err) {
         log.warn('tag_journal_lines match query failed', {
           companyId,
@@ -9857,7 +9938,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_employees',
     title: 'List Employees',
-    description: 'List employees for the active company. Personnummer returned masked (YYYYMMDD-XXXX).',
+    description: 'List employees for the active company. Personnummer is returned masked under personnummer_masked (YYYYMMDD-XXXX); the full value is never exposed on this surface.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9879,12 +9960,18 @@ export const tools: McpTool[] = [
       const activeOnly = args.active_only !== false
       let query = supabase
         .from('employees')
-        .select('id, first_name, last_name, personnummer, personnummer_last4, employment_type, monthly_salary, hourly_rate, employment_degree, tax_table_number, tax_column, salary_type, default_dimensions, is_active')
+        // personnummer_last4 is deliberately NOT selected: the mask is
+        // YYYYMMDD-XXXX, so mask + last4 in one payload reconstructs the full
+        // personnummer by concatenation (see maskEmployeeForResponse).
+        .select('id, first_name, last_name, personnummer, employment_type, monthly_salary, hourly_rate, employment_degree, tax_table_number, tax_column, salary_type, default_dimensions, is_active')
         .eq('company_id', companyId)
       if (activeOnly) query = query.eq('is_active', true)
       const { data, error } = await query.order('last_name')
       if (error) throw new Error(`Database error: ${error.message}`)
-      const employees = (data || []).map(e => ({ ...e, personnummer: maskPersonnummer(decryptPersonnummer(e.personnummer as string)) }))
+      // Shared masking helper: strips personnummer (ciphertext) AND
+      // personnummer_last4, exposing only personnummer_masked: same shape as
+      // the app routes and the other MCP payroll tools.
+      const employees = (data || []).map(e => maskEmployeeForResponse(e as Record<string, unknown>))
       return { employees, count: employees.length }
     },
   },
@@ -9913,9 +10000,11 @@ export const tools: McpTool[] = [
       if (error || !run) throw new Error('Salary run not found')
       const { data: employees } = await supabase
         .from('salary_run_employees')
-        .select('*, employee:employees(first_name, last_name, personnummer, personnummer_last4)')
+        // The embed deliberately excludes personnummer_last4: the mask plus
+        // last4 reconstructs the full personnummer (see maskEmployeeForResponse).
+        .select('*, employee:employees(first_name, last_name, personnummer)')
         .eq('salary_run_id', id)
-      return { ...run, employees: (employees || []).map(e => ({ ...e, employee: e.employee ? { ...(e.employee as Record<string, unknown>), personnummer: maskPersonnummer(decryptPersonnummer((e.employee as Record<string, unknown>).personnummer as string)) } : null })) }
+      return { ...run, employees: (employees || []).map(e => ({ ...e, employee: e.employee ? maskEmployeeForResponse(e.employee as Record<string, unknown>) : null })) }
     },
   },
   {

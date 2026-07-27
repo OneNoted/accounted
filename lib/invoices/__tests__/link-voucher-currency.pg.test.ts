@@ -51,7 +51,9 @@ async function seedInvoice(params: {
   userId: string
   companyId: string
   customerId: string
-  currency: string
+  // invoices.currency is `text default 'SEK'` and NULLABLE; explicit null
+  // seeds the legacy row shape that has always meant kronor.
+  currency: string | null
   total: number
   totalSek?: number | null
   exchangeRate?: number | null
@@ -429,6 +431,47 @@ describe('link_invoice_to_voucher: amount resolved in the invoice currency', () 
     expect(result).toMatchObject({ ok: true, invoice_status: 'partially_paid' })
     expect(Number(result.payment_amount)).toBe(400)
     expect(Number(result.remaining_amount)).toBe(600)
+  })
+
+  it('links a legacy NULL-currency invoice (meaning SEK) with a SEK payment line', async () => {
+    // The label guard used to compare against the RAW nullable column:
+    // COALESCE('SEK', NULL) IS DISTINCT FROM NULL is true, so an ordinary
+    // domestic payment against a NULL-currency invoice raised
+    // LINK_VOUCHER_CURRENCY_MISMATCH forever, and the payment row would have
+    // inherited the NULL. Both now use the resolved currency.
+    const { userId, companyId, fiscalPeriodId } = await seedTenant()
+    const customerId = await seedCustomer({ userId, companyId })
+    const invoiceId = await seedInvoice({
+      userId,
+      companyId,
+      customerId,
+      currency: null,
+      total: 1000,
+    })
+    const voucherId = await seedVoucher({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      debitAccount: '1930',
+      creditAccount: '1510',
+      sekAmount: 1000,
+      lineCurrency: 'SEK',
+    })
+
+    const result = await callLinkInvoice({ invoiceId, voucherId, userId, companyId })
+
+    expect(result).toMatchObject({ ok: true, invoice_status: 'paid' })
+    expect(Number(result.payment_amount)).toBe(1000)
+
+    // The payment row carries the resolved unit, not the raw NULL.
+    const { rows } = await getPool().query(
+      `SELECT amount, currency FROM public.invoice_payments
+       WHERE invoice_id = $1 AND journal_entry_id = $2`,
+      [invoiceId, voucherId],
+    )
+    expect(rows).toHaveLength(1)
+    expect(Number(rows[0].amount)).toBe(1000)
+    expect(rows[0].currency).toBe('SEK')
   })
 
   it('SEK: the ledger column wins even when the line carries FX metadata', async () => {

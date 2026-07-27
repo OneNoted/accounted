@@ -237,6 +237,28 @@ describe('currency-revaluation', () => {
       expect(result).toHaveLength(0)
     })
 
+    it('includes partially_paid invoices: the unpaid remainder is still an open FX item', async () => {
+      // payment-sync.ts moves a customer invoice to 'partially_paid' on a
+      // partial settlement. Omitting the status made these receivables
+      // entirely invisible to the balansdagen revaluation (ÅRL 4 kap. 13 §);
+      // the payables side has always included it.
+      const partialEur = makeInvoice({
+        status: 'partially_paid',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        paid_amount: 400,
+        remaining_amount: 600,
+      })
+
+      const supabase = createMockSupabase({ invoices: [partialEur] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await getOpenForeignCurrencyReceivables(supabase as any, 'company-1')
+
+      expect(result).toHaveLength(1)
+      expect(result[0].status).toBe('partially_paid')
+    })
+
     // INVERTED (was: 'excludes invoices without exchange_rate'). The SQL
     // `.not('exchange_rate','is',null)` filter meant the invoices with the
     // largest unmeasured FX exposure never reached the caller and were never
@@ -536,6 +558,99 @@ describe('currency-revaluation', () => {
       // Only remaining 5000 EUR is revalued, not full 10000
       expect(preview.items[0].amount_in_currency).toBe(5000)
       expect(preview.items[0].difference_sek).toBe(2500) // 5000 * (11.5 - 11.0)
+    })
+
+    it('revalues only the outstanding amount of a partially paid receivable', async () => {
+      // Hand-computed: 1 000 EUR invoiced at 11,00 (11 000 kr on 1510),
+      // 400 EUR since paid. Outstanding = 600 EUR. Closing 11,50:
+      //   originalSek = 600 * 11,00 = 6 600,00
+      //   closingSek  = 600 * 11,50 = 6 900,00
+      //   unrealized gain = 300,00 kr (NOT 500,00 from the 1 000 EUR face value)
+      const partialEur = makeInvoice({
+        id: 'inv-partial',
+        status: 'partially_paid',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        paid_amount: 400,
+        remaining_amount: 600,
+        invoice_number: 'F-PARTIAL',
+      })
+
+      mockRates({ EUR: 11.5 })
+
+      const supabase = createMockSupabase({ invoices: [partialEur] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].amount_in_currency).toBe(600)
+      expect(preview.items[0].original_sek).toBe(6600)
+      expect(preview.items[0].closing_sek).toBe(6900)
+      expect(preview.items[0].difference_sek).toBe(300)
+
+      const debit1510 = preview.lines.find(l => l.account_number === '1510' && l.debit_amount > 0)
+      const credit3960 = preview.lines.find(l => l.account_number === '3960' && l.credit_amount > 0)
+      expect(debit1510!.debit_amount).toBe(300)
+      expect(credit3960!.credit_amount).toBe(300)
+
+      // Balanced to the öre.
+      const totalDebit = preview.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+      const totalCredit = preview.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+      expect(Math.round(totalDebit * 100)).toBe(Math.round(totalCredit * 100))
+    })
+
+    it('skips a receivable with nothing outstanding instead of revaluing its face value', async () => {
+      // Edge: status still open but paid_amount covers the total (e.g. the
+      // status update lagged the payment sync). There is no monetary item
+      // left to value and nothing to report as unconverted either.
+      const settledEur = makeInvoice({
+        id: 'inv-settled',
+        status: 'partially_paid',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        paid_amount: 1000,
+        remaining_amount: 0,
+      })
+
+      mockRates({ EUR: 11.5 })
+
+      const supabase = createMockSupabase({ invoices: [settledEur] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(0)
+      expect(preview.lines).toHaveLength(0)
+      expect(preview.unconvertedFxCount).toBe(0)
+      expect(mockedFetchRate).not.toHaveBeenCalled()
+    })
+
+    it('reports the outstanding amount (not face value) for an unrated partially paid receivable', async () => {
+      const unratedPartial = makeInvoice({
+        id: 'inv-unrated-partial',
+        status: 'partially_paid',
+        currency: 'USD',
+        exchange_rate: null,
+        total: 4000,
+        paid_amount: 1500,
+        remaining_amount: 2500,
+        invoice_number: 'F-UNRATED-PARTIAL',
+      })
+
+      mockRates({})
+
+      const supabase = createMockSupabase({ invoices: [unratedPartial] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.unconvertedFxCount).toBe(1)
+      expect(preview.unconvertedFx[0]).toMatchObject({
+        source_id: 'inv-unrated-partial',
+        type: 'receivable',
+        currency: 'USD',
+        amount_in_currency: 2500,
+      })
     })
 
     it('skips items with zero difference', async () => {

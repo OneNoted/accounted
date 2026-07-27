@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import type { FiscalPeriod, PeriodStatus } from '@/types'
 
@@ -74,23 +75,38 @@ async function countUnbookedInPeriod(
   // Leg 2: triaged as a business event, but no verifikat anywhere. The user has
   // already confirmed this is the company's affärshändelse, so a lock strands
   // it just as hard as an untriaged one, only with less excuse. Fetch the ids
-  // (bounded: this set is single digits per company-year in practice) and
-  // subtract the ones anchored via the non-denormalized locations.
-  const { data: candidates, error: candidatesError } = await supabase
-    .from('transactions')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('is_business', true)
-    .eq('is_ignored', false)
-    .is('journal_entry_id', null)
-    .gte('date', periodStart)
-    .lte('date', periodEnd)
-  if (candidatesError) {
-    throw new Error(`business transaction lookup failed: ${candidatesError.message}`)
+  // and subtract the ones anchored via the non-denormalized locations.
+  //
+  // Paginated via fetchAllRows with a stable id order: PostgREST silently caps
+  // a bare select at 1000 rows, and this candidate set is NOT bounded in
+  // practice, because bulk-booked transactions keep journal_entry_id NULL
+  // (anchored only via transaction_voucher_links). An unpaginated read would
+  // drop every candidate past row 1000, under-counting businessUnbooked and
+  // letting a period lock while genuinely unbooked affärshändelser are
+  // stranded in it (BFL 5 kap 2 §).
+  let candidates: Array<{ id?: string }>
+  try {
+    candidates = await fetchAllRows<{ id?: string }>(({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('is_business', true)
+        .eq('is_ignored', false)
+        .is('journal_entry_id', null)
+        .gte('date', periodStart)
+        .lte('date', periodEnd)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+  } catch (err) {
+    throw new Error(
+      `business transaction lookup failed: ${err instanceof Error ? err.message : String(err)}`
+    )
   }
 
-  const candidateIds = (candidates ?? [])
-    .map((row) => (row as { id?: string }).id)
+  const candidateIds = candidates
+    .map((row) => row.id)
     .filter((id): id is string => typeof id === 'string')
   if (candidateIds.length === 0) {
     return { untriaged: untriaged ?? 0, businessUnbooked: 0 }

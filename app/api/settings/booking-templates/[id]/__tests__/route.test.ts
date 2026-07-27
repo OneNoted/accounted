@@ -69,6 +69,11 @@ const validLines = [
   { account: '1930', label: 'Bank', side: 'credit', type: 'settlement' },
 ]
 
+/** The pre-update fetch result for a template owned by the active company. */
+const OWN_TEMPLATE = {
+  data: { id: 'tpl-1', company_id: 'company-1', team_id: null, is_system: false },
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   requireWriteMock.mockResolvedValue({ ok: true })
@@ -123,7 +128,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('returns 500 when the update fails', async () => {
-    const { supabase } = createCapturingSupabase([{ error: { message: 'boom' } }])
+    const { supabase } = createCapturingSupabase([OWN_TEMPLATE, { error: { message: 'boom' } }])
     auth(supabase)
     const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
       method: 'PUT',
@@ -133,8 +138,91 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
     expect(status).toBe(500)
   })
 
+  it('returns 404 when the template does not exist', async () => {
+    // .single() used to turn zero rows into a PGRST116 ERROR, so not-found
+    // surfaced as 500 and the 404 branch was dead.
+    const { supabase, calls } = createCapturingSupabase([{ data: null }])
+    auth(supabase)
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: { name: 'Nytt namn' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: string }>(await PUT(req, idParams))
+    expect(status).toBe(404)
+    expect(body.error).toBe('Mallen hittades inte')
+    expect(calls.find((c) => c.method === 'update')).toBeUndefined()
+  })
+
+  it("returns 404 for another company's template without touching it", async () => {
+    // RLS is membership-wide: a user who belongs to companies A and B can see
+    // B's templates while acting in A. The route must scope to the ACTIVE
+    // company, so B's template reads as not-found here and no update runs.
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { id: 'tpl-1', company_id: 'company-2', team_id: null, is_system: false } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: { name: 'Nytt namn' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: string }>(await PUT(req, idParams))
+    expect(status).toBe(404)
+    expect(body.error).toBe('Mallen hittades inte')
+    expect(calls.find((c) => c.method === 'update')).toBeUndefined()
+  })
+
+  it('returns 404 for a system template', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { id: 'tpl-1', company_id: null, team_id: null, is_system: true } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: { name: 'Nytt namn' },
+    })
+    const { status } = await parseJsonResponse(await PUT(req, idParams))
+    expect(status).toBe(404)
+    expect(calls.find((c) => c.method === 'update')).toBeUndefined()
+  })
+
+  it("updates a team template shared with the active company's team", async () => {
+    // Team templates carry company_id NULL: a blind company_id filter would
+    // have broken them. The scope check goes through the company's team_id.
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { id: 'tpl-1', company_id: null, team_id: 'team-1', is_system: false } },
+      { data: { team_id: 'team-1' } }, // companies lookup
+      { data: { id: 'tpl-1', name: 'Nytt namn' } }, // update
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: { name: 'Nytt namn' },
+    })
+    const { status } = await parseJsonResponse(await PUT(req, idParams))
+    expect(status).toBe(200)
+    expect(updatePayload(calls)).toEqual({ name: 'Nytt namn' })
+  })
+
+  it("returns 404 for another team's template", async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { id: 'tpl-1', company_id: null, team_id: 'team-other', is_system: false } },
+      { data: { team_id: 'team-1' } }, // companies lookup
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: { name: 'Nytt namn' },
+    })
+    const { status } = await parseJsonResponse(await PUT(req, idParams))
+    expect(status).toBe(404)
+    expect(calls.find((c) => c.method === 'update')).toBeUndefined()
+  })
+
   it('updates the template on the happy path', async () => {
-    const { supabase } = createCapturingSupabase([{ data: { id: 'tpl-1', name: 'Nytt namn' } }])
+    const { supabase } = createCapturingSupabase([
+      OWN_TEMPLATE,
+      { data: { id: 'tpl-1', name: 'Nytt namn' } },
+    ])
     auth(supabase)
     const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
       method: 'PUT',
@@ -148,7 +236,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('writes only the field the caller named', async () => {
-    const { supabase, calls } = createCapturingSupabase([{ data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
     auth(supabase)
     const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
       method: 'PUT',
@@ -159,7 +247,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('leaves lines, category and entity_type alone on a name-only update', async () => {
-    const { supabase, calls } = createCapturingSupabase([{ data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
     auth(supabase)
     const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
       method: 'PUT',
@@ -173,7 +261,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('takes a supplied lines array wholesale', async () => {
-    const { supabase, calls } = createCapturingSupabase([{ data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
     auth(supabase)
     const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
       method: 'PUT',
@@ -184,7 +272,7 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
   })
 
   it('drops unknown keys instead of forwarding them to the update', async () => {
-    const { supabase, calls } = createCapturingSupabase([{ data: { id: 'tpl-1' } }])
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
     auth(supabase)
     const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
       method: 'PUT',

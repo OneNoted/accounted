@@ -149,6 +149,34 @@ describe('reportCronFailure', () => {
     expect(events[1].context.consecutiveFailures).toBe(1)
   })
 
+  it('evicts only the oldest tracked key at capacity, keeping live throttles intact', () => {
+    const t0 = 1_000_000_000
+    // Fill the map to MAX_TRACKED_CRON_KEYS (200 in lib/auth/cron.ts).
+    for (let i = 0; i < 200; i++) {
+      reportCronFailure({ operation: `cron.op-${i}`, now: t0 })
+    }
+    events.length = 0
+
+    // A new key at capacity used to clear() the whole map; now it evicts the
+    // single oldest entry (cron.op-0).
+    reportCronFailure({ operation: 'cron.new', now: t0 + 1 })
+    expect(events).toHaveLength(1)
+
+    // cron.op-199's throttle survived: an in-progress storm stays damped
+    // instead of re-reporting immediately after the map was cleared.
+    reportCronFailure({ operation: 'cron.op-199', now: t0 + 2 })
+    expect(events).toHaveLength(1)
+
+    // cron.op-0 was the one evicted: its next failure reports from a fresh
+    // streak rather than inheriting the old one.
+    reportCronFailure({ operation: 'cron.op-0', now: t0 + 3 })
+    expect(events).toHaveLength(2)
+    expect(events[1].context).toMatchObject({
+      operation: 'cron.op-0',
+      consecutiveFailures: 1,
+    })
+  })
+
   it('redacts PII in the supplied context before it reaches the sink', () => {
     reportCronFailure({
       operation: 'cron.salary',

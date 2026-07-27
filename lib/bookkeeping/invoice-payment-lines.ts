@@ -35,9 +35,9 @@
  *   tx.amount_sek    : pre-computed SEK at ingest for non-SEK tx
  *   invoice.currency : currency the invoice was issued in
  *   invoice.exchange_rate: the rate at which AR was originally booked on 1510.
- *                     REQUIRED whenever the invoice is foreign AND the bank tx
- *                     is in a different currency: without it the SEK value of
- *                     the receivable was never established, so the kursvinst /
+ *                     REQUIRED whenever the invoice is foreign, regardless of
+ *                     the bank tx currency: without it the SEK value of the
+ *                     receivable was never established, so the kursvinst /
  *                     kursförlust on settlement is not computable and the
  *                     helper throws InvoiceBookingRateMissingError rather than
  *                     inventing a number. Never needed for a SEK invoice.
@@ -104,11 +104,11 @@ export class InvoiceBookingRateMissingError extends Error {
 }
 
 /**
- * The invoice's booking rate, or a loud failure. Only ever called on the
- * cross-currency path (foreign invoice settled by a bank movement in another
- * currency): a SEK invoice never reaches it, because a SEK receivable already
- * carries its own SEK value and needs no rate at all. "Currency is SEK" and
- * "rate is missing" are therefore separate conditions, not one fallback.
+ * The invoice's booking rate, or a loud failure. Only ever called when the
+ * INVOICE is foreign (settled cross-currency or in its own foreign currency):
+ * a SEK invoice never reaches it, because a SEK receivable already carries
+ * its own SEK value and needs no rate at all. "Currency is SEK" and "rate is
+ * missing" are therefore separate conditions, not one fallback.
  */
 function requireInvoiceBookingRate(
   exchangeRate: number | null,
@@ -178,8 +178,20 @@ export interface PaymentClearingLines {
  * Build the verifikat lines for a customer-invoice payment matched against
  * a bank tx. Pure: no DB calls. Caller decides how to persist.
  *
- * # Same-currency
- *   Bank-leg = AR-leg = bankSek. No FX diff line.
+ * # Same-currency, both SEK (or SEK invoice paid from a foreign account)
+ *   Bank-leg = AR-leg = bankSek. No FX diff line: a SEK receivable has no FX
+ *   exposure, so the invoice's exchange_rate is never consulted.
+ *
+ * # Same-currency, foreign (EUR invoice settled by a EUR bank tx)
+ *   The foreign units paid are known exactly (|tx.amount|), so:
+ *     arSek     = |tx.amount| × invoice.exchange_rate (booking rate)
+ *     fxDiffSek = arSek − bankSek
+ *   1510 is cleared at the SEK value the receivable was booked at and the
+ *   difference against the actual SEK bank leg is the REALIZED kursvinst /
+ *   kursförlust (3960/7960), exactly like the cross-currency path. Booking
+ *   arSek = bankSek here (the pre-fix behaviour) over/under-credited 1510 by
+ *   the whole rate movement and stranded the realized kursdiff on the balance
+ *   sheet instead of the P&L.
  *
  * # Cross-currency with explicit paidInInvoiceCurrency (preferred path)
  *   The caller supplies how many units of the invoice's currency this bank
@@ -200,15 +212,15 @@ export interface PaymentClearingLines {
  *   deferred path leaves the GL slightly understated until the final
  *   settlement closes the invoice.
  *
- * # Cross-currency with no invoice booking rate
+ * # Foreign invoice with no booking rate
  *   Throws InvoiceBookingRateMissingError (code
- *   MATCH_INVOICE_BOOKING_RATE_MISSING). Both cross-currency paths above
- *   value the AR leg at the invoice's booking rate; without it the SEK value
- *   of the receivable is unknown and the kursvinst/kursförlust is not a
- *   computable number. The caller must obtain the rate the invoice was booked
- *   at instead of posting a guess. Only the cross-currency path can throw: a
- *   SEK invoice is settled entirely by the branches above and never consults
- *   invoice.exchange_rate.
+ *   MATCH_INVOICE_BOOKING_RATE_MISSING). Every foreign-invoice path above
+ *   (same-currency foreign and both cross-currency paths) values the AR leg
+ *   at the invoice's booking rate; without it the SEK value of the receivable
+ *   is unknown and the kursvinst/kursförlust is not a computable number. The
+ *   caller must obtain the rate the invoice was booked at instead of posting
+ *   a guess. Only a SEK invoice can never throw: it is settled entirely by
+ *   the SEK branches and never consults invoice.exchange_rate.
  *
  * # paymentAccount
  *   The bank-leg account (the debit line below). Defaults to '1930': callers
@@ -268,11 +280,25 @@ export function buildInvoicePaymentClearingLines(
       arSek = bankSek
     }
     fxDiffSek = 0
-  } else if (sameCurrency || !invoiceIsForeign) {
-    // Same currency (or SEK invoice paid by SEK tx): the customer-debt
-    // reduction equals what hit the bank. No FX diff possible.
+  } else if (!invoiceIsForeign) {
+    // SEK invoice settled from a non-SEK bank account: the receivable is a
+    // kronor claim, so the customer-debt reduction equals the SEK that hit
+    // the bank. The invoice's exchange_rate is never consulted.
     arSek = bankSek
     fxDiffSek = 0
+  } else if (sameCurrency) {
+    // Foreign invoice settled in its own currency (EUR invoice, EUR tx). The
+    // foreign units paid are known exactly, so clear 1510 at the invoice's
+    // BOOKING rate for those units and book the difference against the actual
+    // SEK bank leg as the realized kursdiff, exactly like the cross-currency
+    // path below. Setting arSek = bankSek here (the old behaviour) credited
+    // 1510 at the settlement-date value: a 1 000 EUR invoice booked at 11,30
+    // (11 300,00 on 1510) settled by a tx worth 11 496,70 kr over-credited
+    // 1510 by 196,70 and the realized kursvinst never reached 3960.
+    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
+    const paidForeign = Math.abs(tx.amount)
+    arSek = TWO_DP(paidForeign * invRate)
+    fxDiffSek = TWO_DP(arSek - bankSek)
   } else if (paidInInvoiceCurrency != null && paidInInvoiceCurrency > 0) {
     // Proper FX path: caller computed the invoice-currency equivalent
     // using today's spot rate. AR-leg comes off 1510 at the invoice's

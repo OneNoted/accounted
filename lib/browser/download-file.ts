@@ -65,6 +65,18 @@ export interface DownloadFileOptions {
 }
 
 /**
+ * How long the object URL outlives the click before it is revoked.
+ *
+ * Revoking synchronously right after `a.click()` can abort the save in
+ * Firefox and Safari: the click only STARTS the download, and the browser may
+ * still be reading from the blob URL when it is revoked. 10 seconds is far
+ * beyond any realistic gap between the click and the browser opening its own
+ * handle on the blob, while still guaranteeing the URL (and the blob memory
+ * it pins) is released.
+ */
+export const OBJECT_URL_REVOKE_DELAY_MS = 10_000
+
+/**
  * Hand a blob to the browser as a download.
  *
  * The anchor is attached to the document before it is clicked: a detached
@@ -73,6 +85,7 @@ export interface DownloadFileOptions {
  */
 export function saveBlobToDisk(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
+  let clicked = false
   try {
     const a = document.createElement('a')
     a.href = url
@@ -80,9 +93,18 @@ export function saveBlobToDisk(blob: Blob, filename: string): void {
     a.rel = 'noopener'
     document.body.appendChild(a)
     a.click()
+    clicked = true
     a.remove()
   } finally {
-    URL.revokeObjectURL(url)
+    if (clicked) {
+      // The download started: defer revocation so the browser can finish
+      // reading the blob (see OBJECT_URL_REVOKE_DELAY_MS).
+      setTimeout(() => URL.revokeObjectURL(url), OBJECT_URL_REVOKE_DELAY_MS)
+    } else {
+      // The click never happened (DOM threw): nothing is reading the URL,
+      // so release it immediately rather than leaking it for 10 seconds.
+      URL.revokeObjectURL(url)
+    }
   }
 }
 

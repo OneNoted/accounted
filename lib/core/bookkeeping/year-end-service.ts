@@ -904,9 +904,16 @@ async function countOpenFxItemsAtBalansdagen(
         .select(columns)
         .eq('company_id', companyId)
         .neq('currency', 'SEK')
+      // 'partially_paid' is a live status for customer invoices (payment-sync
+      // sets it on partial settlements); the unpaid remainder was open on
+      // balansdagen just like a 'sent' invoice. Kept in lockstep with
+      // getOpenForeignCurrencyReceivables so this warning never points at
+      // rows the revaluation engine cannot see.
       const scoped = isHistorical
-        ? base.in('status', ['sent', 'overdue', 'paid']).lte('invoice_date', balansdagen)
-        : base.in('status', ['sent', 'overdue'])
+        ? base
+            .in('status', ['sent', 'overdue', 'partially_paid', 'paid'])
+            .lte('invoice_date', balansdagen)
+        : base.in('status', ['sent', 'overdue', 'partially_paid'])
       // Stable total order for correct paging (see fetch-all.ts).
       return scoped.order('id', { ascending: true }).range(from, to)
     },

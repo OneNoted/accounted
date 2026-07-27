@@ -24,7 +24,7 @@ import {
   calculateAvgPaymentDays,
   calculateVatLiability,
   aggregateTopSuppliers,
-  topSupplierInvoicesQuery,
+  fetchTopSupplierInvoices,
   type KpiSupplierInvoiceRow,
 } from '@/lib/reports/kpi'
 import { mergeWithDefaults } from '@/lib/reports/kpi-definitions'
@@ -82,8 +82,10 @@ export const GET = withRouteContext('report.kpi', async (request, { supabase, co
       .eq('company_id', companyId)
       .eq('status', 'paid')
       .not('paid_at', 'is', null)
+  // Paginated: awaiting the bare query capped the rows at PostgREST's 1000
+  // default and silently corrupted the supplier totals for large companies.
   const topSuppliersQuery = () =>
-    topSupplierInvoicesQuery(supabase, companyId, period.period_start, period.period_end)
+    fetchTopSupplierInvoices(supabase, companyId, period.period_start, period.period_end)
 
   let prefsValue: unknown
   let incomeStatement: IncomeStatementReport

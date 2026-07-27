@@ -1,14 +1,28 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody } from '@/lib/api/validate'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+
+// Strict: `is_completed` must be a genuine boolean or absent. The hand-rolled
+// parser this replaces silently degraded { is_completed: "false" } (a string)
+// to a toggle: the exact hazard the explicit-state contract was built to
+// remove, since a truthy-string undo could re-complete the row it meant to
+// un-tick. Wrong types are a 400 now, never a guess.
+const CompleteDeadlineSchema = z
+  .object({
+    is_completed: z.boolean().optional(),
+  })
+  .strict()
 
 /**
  * POST /api/deadlines/[id]/complete
  * Set the completion status of a deadline.
  *
  * The body is optional. When it carries a boolean `is_completed` the route sets
- * exactly that state; a caller that sends nothing (or an unparseable body)
- * keeps the original toggle behaviour.
+ * exactly that state; a caller that sends no body (or `{}`) keeps the original
+ * toggle behaviour. A body that IS present but malformed (wrong type, unknown
+ * keys, broken JSON) is rejected with 400 instead of being reinterpreted.
  *
  * Honouring an explicit state is what makes the "Ångra" affordance an undo
  * rather than a second toggle: the click has to be idempotent, because the row
@@ -25,13 +39,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = await params
     const { supabase, companyId } = ctx
 
-    const body: unknown = await request.json().catch(() => null)
-    const requestedState =
-      typeof body === 'object' &&
-      body !== null &&
-      typeof (body as { is_completed?: unknown }).is_completed === 'boolean'
-        ? (body as { is_completed: boolean }).is_completed
-        : null
+    // Absent/empty body = toggle (the pre-explicit-state ergonomics); anything
+    // else must validate. The raw text is read first because validateBody
+    // treats an empty body as invalid JSON, which would 400 the plain toggle.
+    const raw = (await request.text()).trim()
+    let requestedState: boolean | null = null
+    if (raw !== '') {
+      const validation = await validateBody(
+        new Request(request.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: raw,
+        }),
+        CompleteDeadlineSchema,
+      )
+      if (!validation.success) return validation.response
+      requestedState = validation.data.is_completed ?? null
+    }
 
     // First, get current deadline state
     const { data: existing, error: fetchError } = await supabase
@@ -43,7 +67,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     if (fetchError) {
       if (fetchError.code === 'PGRST116') {
-        return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
+        // "Deadline" is the term the Swedish UI uses too (messages/sv.json).
+        return NextResponse.json({ error: 'Deadline hittades inte' }, { status: 404 })
       }
       return NextResponse.json({ error: getUserErrorMessage(fetchError) }, { status: 500 })
     }

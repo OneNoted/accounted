@@ -738,10 +738,17 @@ function DetailCard({ p, t }: { p: Payee; t: ReturnType<typeof useTranslations> 
           </div>
         )}
         {/* Its own label: `legend_size` now describes whichever unit the ring
-            settled on, which is not always the amount. */}
+            settled on, which is not always the amount. Rendered as a plain
+            number with NO currency suffix: total_amount is the RAW FOREIGN
+            amount when no SEK equivalent exists (ledger-graph-magnitude.ts),
+            so labelling it "kr" would show a 500 EUR supplier as "500 kr".
+            Proper per-currency display is deferred to the RPC fix documented
+            in that module. */}
         <div className="flex justify-between gap-3">
           <span>{t('card_amount')}</span>
-          <span className="tabular-nums" style={{ color: PAPER }}>{formatCurrency(e.total_amount)}</span>
+          <span className="tabular-nums" style={{ color: PAPER }}>
+            {e.total_amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
         </div>
         <div className="mt-2 border-t pt-2" style={{ borderColor: HAIR }}>
           <div className="flex items-center justify-between gap-3">

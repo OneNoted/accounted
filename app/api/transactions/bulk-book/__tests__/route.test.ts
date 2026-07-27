@@ -288,6 +288,39 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('refuses a homogeneous non-SEK selection with BULK_BOOK_FOREIGN_CURRENCY', async () => {
+    // Same currency throughout, but not kronor: the RPC would write the
+    // foreign magnitudes into the always-SEK debit/credit columns, so the
+    // route refuses before the RPC just like the mixed-currency case.
+    enqueue({
+      data: [
+        { id: TX1, amount: 100, currency: 'EUR', description: 'Stripe 1', date: '2026-06-05' },
+        { id: TX2, amount: 200, currency: 'EUR', description: 'Stripe 2', date: '2026-06-05' },
+      ],
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: {
+        tx_ids: [TX1, TX2],
+        entry_description: 'Samlingsverifikation',
+        manual_lines: [
+          { account_number: '1930', debit_amount: 300, credit_amount: 0, currency: 'EUR' },
+          { account_number: '3001', debit_amount: 0, credit_amount: 300, currency: 'EUR' },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { currency?: string } }
+    }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BULK_BOOK_FOREIGN_CURRENCY')
+    expect(body.error.details?.currency).toBe('EUR')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('books a single-currency manual_lines selection', async () => {
     // Tx fetch: both SEK.
     enqueue({

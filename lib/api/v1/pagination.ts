@@ -111,14 +111,19 @@ export function decodeDefaultCursor(cursor: string | null | undefined): DefaultC
  * cursor for the *next* page (or null when this was the final page).
  *
  * Convention: the caller fetches `limit + 1` rows, passes the full slice in,
- * and we return either the cursor of row[limit] or null when the page wasn't
- * full. The caller should then trim the slice to `limit` before returning it
- * to the user.
+ * and we return either the cursor of the LAST ROW OF THE TRIMMED PAGE
+ * (rows[limit - 1]) or null when the page wasn't full. The caller should then
+ * trim the slice to `limit` before returning it to the user.
+ *
+ * Contract: the cursor marks the last row already returned; every v1 route's
+ * keyset predicate is strictly greater/less than the cursor, so encoding
+ * rows[limit] (the first row of the NEXT page) would skip that row at every
+ * page boundary.
  */
 export function nextCursorFromPage<T extends { created_at: string; id: string }>(
   rows: T[],
   limit: number,
 ): string | null {
   if (rows.length <= limit) return null
-  return encodeDefaultCursor(rows[limit])
+  return encodeDefaultCursor(rows[limit - 1])
 }

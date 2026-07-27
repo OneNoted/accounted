@@ -80,7 +80,7 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * Baseline 2026-07-26: 346 (145 dynamic-payload, 116 dynamic-select,
  * 48 dynamic-logical, 32 spread-payload, 4 dynamic-column, 1 computed key).
  */
-const UNRESOLVED_CEILING = 420
+const UNRESOLVED_CEILING = 360
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
@@ -89,7 +89,7 @@ const UNRESOLVED_CEILING = 420
  *
  * Baseline 2026-07-26: 13 734.
  */
-const RESOLVED_COLUMN_FLOOR = 12_000
+const RESOLVED_COLUMN_FLOOR = 13_500
 
 let schema: SchemaModel
 let scan: ScanResult
@@ -104,6 +104,13 @@ function closedFor(table: TableModel): Map<string, Set<string>> {
   return sets
 }
 
+// Explicit hook timeout: this replays every migration AND parses the whole
+// app/lib/components/extensions/hooks/scripts tree through the TypeScript
+// AST. It runs in ~3s on its own, but vitest's 10s default hook timeout is
+// not enough headroom when the file is scheduled alongside the rest of the
+// suite and CPU is contended (observed failing exactly that way, then passing
+// on re-run). A flaky guard gets disabled, so give it room rather than let it
+// half-run.
 beforeAll(() => {
   schema = buildSchemaFromMigrations(path.join(ROOT, 'supabase', 'migrations'))
   scan = scanColumnRefs(
@@ -118,7 +125,7 @@ beforeAll(() => {
     schema,
     ROOT
   )
-})
+}, 120_000)
 
 /** Split findings into new ones (fail) and baselined ones (tracked). */
 function against(

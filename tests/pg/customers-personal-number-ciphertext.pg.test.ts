@@ -36,6 +36,21 @@ async function insertCustomer(params: {
 }
 
 describe('customers.personal_number ciphertext check.pg', () => {
+  it('is validated after full replay (NOT VALID in 20260726110000, VALIDATE in 20260726110001)', async () => {
+    // The constraint is added NOT VALID so a fork database holding a legacy
+    // plaintext row cannot stall the whole migration batch, then validated in
+    // its own migration. After replaying both, it must be fully validated:
+    // convalidated=false here means the VALIDATE migration was dropped.
+    const res = await getPool().query<{ convalidated: boolean }>(
+      `SELECT convalidated
+         FROM pg_constraint
+        WHERE conname = 'customers_personal_number_check'
+          AND conrelid = 'public.customers'::regclass`,
+    )
+    expect(res.rows).toHaveLength(1)
+    expect(res.rows[0]!.convalidated).toBe(true)
+  })
+
   it('accepts NULL', async () => {
     const { userId, companyId } = await seedCompany()
     const id = await insertCustomer({ userId, companyId, personalNumber: null })

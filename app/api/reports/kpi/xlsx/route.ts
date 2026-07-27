@@ -11,7 +11,7 @@ import {
   calculateAvgPaymentDays,
   calculateVatLiability,
   aggregateTopSuppliers,
-  topSupplierInvoicesQuery,
+  fetchTopSupplierInvoices,
   type KpiSupplierInvoiceRow,
 } from '@/lib/reports/kpi'
 import {
@@ -90,7 +90,9 @@ export const GET = withRouteContext('report.kpi.xlsx', async (request, { supabas
         .eq('company_id', companyId)
         .eq('status', 'paid')
         .not('paid_at', 'is', null),
-      topSupplierInvoicesQuery(supabase, companyId, period.period_start, period.period_end),
+      // Paginated past PostgREST's 1000-row cap so the export sums every
+      // supplier invoice in the period, same as the KPI JSON route.
+      fetchTopSupplierInvoices(supabase, companyId, period.period_start, period.period_end),
     ])
 
     const cashPosition = calculateCashPosition(trialBalanceResult.rows)

@@ -63,10 +63,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const blocked = await guardSandbox(supabase, companyId)
     if (blocked) return blocked
 
+    // The *_sek columns are projected solely so the post-update compensation
+    // below can restore the exact prior values if a concurrent booking wins.
     const { data: invoice, error: fetchError } = await supabase
       .from('invoices')
       .select(
-        'id, status, currency, invoice_date, delivery_date, subtotal, vat_amount, total, exchange_rate, exchange_rate_date, journal_entry_id',
+        'id, status, currency, invoice_date, delivery_date, subtotal, vat_amount, total, exchange_rate, exchange_rate_date, subtotal_sek, vat_amount_sek, total_sek, journal_entry_id',
       )
       .eq('id', id)
       .eq('company_id', companyId)
@@ -83,6 +85,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           | 'total'
           | 'exchange_rate'
           | 'exchange_rate_date'
+          | 'subtotal_sek'
+          | 'vat_amount_sek'
+          | 'total_sek'
           | 'journal_entry_id'
         >
       >()
@@ -191,6 +196,64 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode('INVOICE_FX_REFRESH_BOOKED', log, {
         requestId,
         details: { invoice_id: id, reason: 'booked_concurrently' },
+      })
+    }
+
+    // TOCTOU compensation. The `.is('journal_entry_id', null)` CAS above only
+    // covers the invoice ROW, but a booking flow that read the invoice at the
+    // OLD rate can commit its journal entry after our journal_entries check
+    // and before invoices.journal_entry_id is stamped: the verifikat then
+    // posts at the old rate while the row now stores the new one, the exact
+    // divergence this route exists to prevent. Re-check by source_id; if an
+    // entry appeared, restore the prior values via a CAS on the values this
+    // request just wrote (never clobbering a later legitimate write) and
+    // report the booked conflict. A perfect fix needs DB-level serialization
+    // (out of scope); this shrinks the race window from the whole request to
+    // the few milliseconds between this SELECT and the revert.
+    const { data: postEntries, error: postCheckError } = await supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('source_id', id)
+      .limit(1)
+
+    if (postCheckError) {
+      // Cannot tell whether a booking won the race: leave the update in place
+      // (same residual risk as before this compensation existed) but make the
+      // blind spot visible in logs.
+      log.warn('invoice fx refresh: post-update booking recheck failed', {
+        invoiceId: id,
+        error: postCheckError.message,
+      })
+    } else if (postEntries && postEntries.length > 0) {
+      const { error: revertError } = await supabase
+        .from('invoices')
+        .update({
+          exchange_rate: invoice.exchange_rate,
+          exchange_rate_date: invoice.exchange_rate_date,
+          subtotal_sek: invoice.subtotal_sek ?? null,
+          vat_amount_sek: invoice.vat_amount_sek ?? null,
+          total_sek: invoice.total_sek ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .eq('company_id', companyId)
+        // CAS on exactly what this request wrote: if someone else already
+        // changed the rate again, their write wins and nothing is reverted.
+        .eq('exchange_rate', rate.rate)
+        .eq('exchange_rate_date', rate.date)
+      if (revertError) {
+        log.error('invoice fx refresh: revert after concurrent booking failed', revertError, {
+          invoiceId: id,
+        })
+      }
+      return errorResponseFromCode('INVOICE_FX_REFRESH_BOOKED', log, {
+        requestId,
+        details: {
+          invoice_id: id,
+          journal_entry_id: (postEntries[0] as { id: string }).id,
+          reason: 'booked_concurrently_reverted',
+        },
       })
     }
 

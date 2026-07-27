@@ -167,12 +167,23 @@ const PINNED_DEPS = [
   },
 ]
 
-/** Pinned deps whose package.json spec or locked version drifted from the pin. */
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Pinned deps whose package.json spec or locked version drifted from the pin.
+ *
+ * Also scans .github/workflows/*.yml for literal `<name>@<version>` installs:
+ * a workflow that installs the SDK by version (e.g. the compliance review's
+ * out-of-tree `npm install ...@0.29.1`) bypasses package.json AND the
+ * lockfile, so it is exactly where the 0.32.0 regression can drift back in
+ * without either file changing.
+ */
 function findPinnedDepViolations() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'))
   const declared = { ...pkg.dependencies, ...pkg.devDependencies }
   const out = []
+  const workflowFiles = walk(path.join(ROOT, '.github', 'workflows'), ['.yml', '.yaml'])
   for (const pin of PINNED_DEPS) {
     const spec = declared[pin.name]
     if (spec !== undefined && spec !== pin.version) {
@@ -181,6 +192,18 @@ function findPinnedDepViolations() {
     const locked = lock.packages?.[`node_modules/${pin.name}`]?.version
     if (locked !== undefined && locked !== pin.version) {
       out.push({ ...pin, where: 'package-lock.json', actual: locked })
+    }
+    const literalInstall = new RegExp(
+      `${escapeRegExp(pin.name)}@(\\d+\\.\\d+\\.\\d+(?:[-+][\\w.-]+)?)`,
+      'g',
+    )
+    for (const wf of workflowFiles) {
+      const src = fs.readFileSync(wf, 'utf8')
+      for (const match of src.matchAll(literalInstall)) {
+        if (match[1] !== pin.version) {
+          out.push({ ...pin, where: rel(wf), actual: `${pin.name}@${match[1]}` })
+        }
+      }
     }
   }
   return out

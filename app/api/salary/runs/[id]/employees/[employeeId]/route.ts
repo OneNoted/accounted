@@ -3,7 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { SalaryEmployeeOverrideSchema } from '@/lib/api/schemas'
-import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
+import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { removeEmployeeFromRun } from '@/lib/salary/run-employees'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -32,25 +32,18 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
       return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
     }
 
-    // Strip the encrypted personnummer ciphertext before sending to the browser:
-    // replace it with the YYYYMMDD-XXXX masked form so the page can render
-    // identity without exposing the suffix or the raw cipher blob.
-    //
-    // The mask goes out under `personnummer_masked`, never under the writable
-    // `personnummer` key. This payload is an employee object; returning the mask
-    // under the write key would let a client read it here and post it straight
-    // back into the encrypt path. v1, the MCP tools and
-    // lib/salary/employee-commands.ts all use the `_masked` suffix for that
-    // reason, and these salary routes were the last surface that did not.
-    let maskedEmployee = data.employee
-    if (data.employee) {
-      const { personnummer, ...rest } = data.employee
-      maskedEmployee = {
-        ...rest,
-        personnummer_masked: maskPersonnummer(decryptPersonnummer(personnummer)),
-      }
+    // Strip the encrypted personnummer ciphertext AND personnummer_last4
+    // before sending to the browser (the embed is employees(*), so the last4
+    // column rides along otherwise, and mask + last4 reassembles the full
+    // personnummer). The shared helper replaces both with the YYYYMMDD-XXXX
+    // masked form under `personnummer_masked`, never under the writable
+    // `personnummer` key: this payload is an employee object, and a mask under
+    // the write key could be read here and posted straight back into the
+    // encrypt path.
+    const masked = {
+      ...data,
+      employee: data.employee ? maskEmployeeForResponse(data.employee) : data.employee,
     }
-    const masked = { ...data, employee: maskedEmployee }
 
     return NextResponse.json({ data: masked })
   },

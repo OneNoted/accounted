@@ -326,6 +326,71 @@ describe('POST /api/invoices/[id]/refresh-exchange-rate', () => {
     expect(body.error.code).toBe('INVOICE_FX_REFRESH_BOOKED')
   })
 
+  it('reverts the update with the prior values when a verifikat appears between the guard and the write', async () => {
+    // TOCTOU: a booking flow that read the invoice at the OLD rate commits
+    // its journal entry AFTER the source_id guard but BEFORE journal_entry_id
+    // is stamped on the invoice. The route must detect the entry on the
+    // post-update recheck, put the previous rate/SEK values back via a CAS on
+    // what it just wrote, and answer with the booked conflict.
+    const previouslyRated = {
+      ...sentEurInvoice,
+      exchange_rate: 11.2,
+      exchange_rate_date: '2026-06-10',
+      subtotal_sek: 11200,
+      vat_amount_sek: 0,
+      total_sek: 11200,
+    }
+    enqueue({ data: { is_sandbox: false } })
+    enqueue({ data: previouslyRated })
+    enqueue({ data: [] }) // pre-write guard: no entry references the invoice yet
+    enqueue({ data: [{ ...previouslyRated, exchange_rate: 11.5 }] }) // guarded update succeeds
+    enqueue({ data: [{ id: 'je-race' }] }) // post-update recheck: an entry appeared
+    enqueue({ data: [] }) // revert update
+
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { journal_entry_id: string; reason: string } }
+    }>(await post())
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_FX_REFRESH_BOOKED')
+    expect(body.error.details.journal_entry_id).toBe('je-race')
+    expect(body.error.details.reason).toBe('booked_concurrently_reverted')
+
+    const updates = recorded.filter((q) => q.op === 'update')
+    expect(updates).toHaveLength(2)
+    // The revert restores exactly the values read before the update.
+    expect(updates[1].table).toBe('invoices')
+    expect(updates[1].payload).toEqual({
+      exchange_rate: 11.2,
+      exchange_rate_date: '2026-06-10',
+      subtotal_sek: 11200,
+      vat_amount_sek: 0,
+      total_sek: 11200,
+      updated_at: expect.any(String),
+    })
+    // CAS: the revert only touches the row if it still holds the values this
+    // request wrote, so a later legitimate write is never clobbered.
+    expect(updates[1].filters).toMatchObject({
+      id: INVOICE_ID,
+      company_id: 'company-1',
+      exchange_rate: 11.5,
+      exchange_rate_date: '2026-06-15',
+    })
+  })
+
+  it('does not revert when the post-update recheck finds no verifikat', async () => {
+    enqueue({ data: { is_sandbox: false } })
+    enqueue({ data: sentEurInvoice })
+    enqueue({ data: [] }) // pre-write guard
+    enqueue({ data: [{ ...sentEurInvoice, exchange_rate: 11.5 }] }) // update
+    enqueue({ data: [] }) // recheck: still unbooked
+
+    const { status } = await parseJsonResponse(await post())
+
+    expect(status).toBe(200)
+    expect(recorded.filter((q) => q.op === 'update')).toHaveLength(1)
+  })
+
   it('is blocked in the sandbox', async () => {
     enqueue({ data: { is_sandbox: true } })
 

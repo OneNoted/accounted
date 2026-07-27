@@ -4,7 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
 import { getCompanyEntityType } from '@/lib/company/context'
-import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
+import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -29,14 +29,10 @@ export const GET = withRouteContext('salary.employees.list', async (request, { s
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
-  // Mask personnummer: show birthdate, hide the 4-digit suffix. The mask goes
-  // out under `personnummer_masked`, never under the writable `personnummer`
-  // key: the roster feeds edit forms, and a mask returned under the write key
-  // can be posted straight back into the encrypt path.
-  const masked = (data || []).map(({ personnummer, ...emp }) => ({
-    ...emp,
-    personnummer_masked: maskPersonnummer(decryptPersonnummer(personnummer)),
-  }))
+  // Mask personnummer: show birthdate, hide the 4-digit suffix. The shared
+  // helper also strips personnummer_last4: mask + last4 in the same payload
+  // would reassemble the full personnummer.
+  const masked = (data || []).map((emp) => maskEmployeeForResponse(emp))
 
   return NextResponse.json({ data: masked })
 })
@@ -119,8 +115,9 @@ export const POST = withRouteContext('salary.employees.create', async (request, 
 
   // Same rule as the read surfaces: the create response carries the mask under
   // `personnummer_masked` only. Spreading the inserted row would otherwise echo
-  // the stored ciphertext under `personnummer`.
-  const { personnummer: _storedPnr, ...created } = employee
+  // the stored ciphertext under `personnummer`, and personnummer_last4 must not
+  // ride along with the mask (mask + last4 = the full personnummer).
+  const { personnummer: _storedPnr, personnummer_last4: _storedLast4, ...created } = employee
   return NextResponse.json({
     data: {
       ...created,

@@ -25,7 +25,7 @@ import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
-import { loadMappings, generateImportPreview, executeSIEImport, saveMappings } from '@/lib/import/sie-import'
+import { loadMappings, generateImportPreview, executeSIEImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
 import type { ProviderName } from '@/lib/providers/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -910,9 +910,13 @@ export const arcimMigrationExtension: Extension = {
 
           // Account creation (and #KONTO renames) happen inside
           // executeSIEImport via syncMappedAccounts: the auto-activate block
-          // that used to live here was a duplicate of that logic.
-          await saveMappings(supabase, user.id, mappings)
-
+          // that used to live here was a duplicate of that logic. Mapping
+          // persistence ALSO happens inside executeSIEImport, with the
+          // correct companyId + userId and non-fatal warning handling: the
+          // direct saveMappings call that used to sit here passed user.id in
+          // the companyId slot, which throws on RLS/FK now that the helper
+          // surfaces upsert failures, 500ing every provider-migration import
+          // before a single voucher was written. Do not re-add it.
           const result = await executeSIEImport(supabase, companyId, user.id, parsed, mappings, {
             filename: `migration-sie-${Date.now()}.se`,
             fileContent: rawContent,

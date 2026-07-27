@@ -63,10 +63,15 @@ begin
      and (subtotal_sek is null or vat_amount_sek is null or total_sek is null);
 
   -- 2. Foreign invoices that already carry the rate they were booked at.
+  --    Each column is repaired independently (COALESCE keeps a non-NULL
+  --    value): the row qualifies when ANY of the three is NULL, and deriving
+  --    the already-filled columns again would restate correct historical
+  --    figures from the CURRENT exchange_rate, silently rewriting them if the
+  --    rate was corrected after they were written.
   update public.supplier_invoices
-     set subtotal_sek   = round(subtotal * exchange_rate, 2),
-         vat_amount_sek = round(vat_amount * exchange_rate, 2),
-         total_sek      = round(total * exchange_rate, 2)
+     set subtotal_sek   = coalesce(subtotal_sek,   round(subtotal * exchange_rate, 2)),
+         vat_amount_sek = coalesce(vat_amount_sek, round(vat_amount * exchange_rate, 2)),
+         total_sek      = coalesce(total_sek,      round(total * exchange_rate, 2))
    where currency <> 'SEK'
      and exchange_rate is not null
      and exchange_rate > 0

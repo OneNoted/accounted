@@ -135,6 +135,35 @@ describe('resolveSupplierInvoiceExchangeRate', () => {
     expect(result.rate.rate).toBe(0.072)
   })
 
+  it('refuses an implausibly large supplied rate instead of storing it', async () => {
+    // Same bound as lib/bookkeeping/invoice-payment-lines.ts and the
+    // match_batch_allocate RPC (0 < rate < 100000): a rate that far out is as
+    // unusable as NULL. Refused, not silently replaced by a fetched rate: the
+    // caller stated a rate and must get it bounced back for correction.
+    const result = await resolveSupplierInvoiceExchangeRate(supabase, {
+      currency: 'EUR',
+      invoiceDate: '2026-03-02',
+      suppliedRate: 100000,
+    })
+
+    expect(result).toEqual({ ok: false, currency: 'EUR', invoiceDate: '2026-03-02' })
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('still trusts a large supplied rate just below the plausibility bound', async () => {
+    const result = await resolveSupplierInvoiceExchangeRate(supabase, {
+      currency: 'EUR',
+      invoiceDate: '2026-03-02',
+      suppliedRate: 99999.9999,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.rate.rate).toBe(99999.9999)
+    expect(result.rate.source).toBe('supplied')
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
   it('rejects a non-positive supplied rate and falls through to the fetch', async () => {
     mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.1, date: '2026-03-02' })
 

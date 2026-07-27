@@ -1,6 +1,7 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -20,8 +21,6 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  * "genuinely settled". `remaining` (+ `currency`) always carries the invoice's
  * own-currency amount, so the row stays visible and readable either way.
  */
-const PAGE_LIMIT = 500
-
 export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>(
   'report.supplier_ledger.invoices',
   async (request, { supabase, companyId }, { params }) => {
@@ -40,32 +39,42 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
 
   // Mirror `generateSupplierLedger`'s filter: registered/approved/partially
   // paid/overdue invoices that still have an outstanding balance.
-  const { data, error } = await supabase
-    .from('supplier_invoices')
-    .select(`
-      id,
-      supplier_invoice_number,
-      invoice_date,
-      due_date,
-      total,
-      paid_amount,
-      remaining_amount,
-      currency,
-      exchange_rate,
-      registration_journal_entry_id
-    `)
-    .eq('company_id', companyId)
-    .eq('supplier_id', supplierId)
-    .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
-    .order('invoice_date', { ascending: true })
-    .limit(PAGE_LIMIT)
-
-  if (error) {
-    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-  }
-
+  //
+  // fetchAllRows: bounded by one supplier's OPEN invoices, so the volume is
+  // naturally small, but the previous hardcoded 500-row .limit() silently
+  // truncated the page for outliers while next_cursor: null claimed the list
+  // was complete, and `unconverted_fx_count` was computed over the truncated
+  // page (the honesty counter under-reported). The secondary .order('id')
+  // gives .range() paging the stable total order it needs (invoice_date is
+  // not unique).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const invoices = (data || []) as any[]
+  let invoices: any[]
+  try {
+    invoices = await fetchAllRows(({ from, to }) =>
+      supabase
+        .from('supplier_invoices')
+        .select(`
+          id,
+          supplier_invoice_number,
+          invoice_date,
+          due_date,
+          total,
+          paid_amount,
+          remaining_amount,
+          currency,
+          exchange_rate,
+          registration_journal_entry_id
+        `)
+        .eq('company_id', companyId)
+        .eq('supplier_id', supplierId)
+        .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+        .order('invoice_date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+  } catch (err) {
+    return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+  }
 
   // Pull the registration entries in one batch to get voucher numbers.
   const entryIds = invoices
@@ -146,8 +155,11 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
       supplier_name: supplier.name,
       lines,
       // Same contract as the ledger report itself: the rows are listed, but
-      // their SEK value is unknown and missing from every SEK total.
+      // their SEK value is unknown and missing from every SEK total. Computed
+      // over the FULL row set now that the query paginates.
       unconverted_fx_count: lines.filter((l) => l.remaining_sek === null).length,
+      // Kept for response-shape compatibility. Truthful now: every open
+      // invoice for the supplier is in `lines`, so there is never a next page.
       next_cursor: null,
     },
   })
