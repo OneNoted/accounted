@@ -247,6 +247,11 @@ export function validateInvoice(
   const toSek = deductionSekConverter(money)
   const advice = 'Kunden behöver kontrollera sitt återstående utrymme själv.'
 
+  // Warning-text amounts: sv-SE digits, always two decimals, same convention
+  // as maxText below.
+  const svAmount = (n: number): string =>
+    n.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
   const pushCapWarning = (kind: 'ROT' | 'RUT', amount: number, max: number): void => {
     if (amount <= 0) return
     const maxText = `${max.toLocaleString('sv-SE')} kr`
@@ -254,7 +259,7 @@ export function validateInvoice(
     if (currencyLabel === 'SEK') {
       if (amount <= max) return
       warnings.push(
-        `${kind}-avdraget på denna faktura (${amount.toFixed(2)} kr) överstiger årsmaximum ${maxText}. ` + advice,
+        `${kind}-avdraget på denna faktura (${svAmount(amount)} kr) överstiger årsmaximum ${maxText}. ` + advice,
       )
       return
     }
@@ -263,7 +268,7 @@ export function validateInvoice(
       // No booking rate: we cannot know whether the ceiling is breached.
       // Saying so beats both silence and a fabricated kronor comparison.
       warnings.push(
-        `${kind}-avdraget på denna faktura (${amount.toFixed(2)} ${currencyLabel}) kan inte stämmas av mot ` +
+        `${kind}-avdraget på denna faktura (${svAmount(amount)} ${currencyLabel}) kan inte stämmas av mot ` +
           `årsmaximum ${maxText}: fakturan saknar växelkurs. ` + advice,
       )
       return
@@ -272,7 +277,7 @@ export function validateInvoice(
     const amountSek = toSek(amount)
     if (amountSek <= max) return
     warnings.push(
-      `${kind}-avdraget på denna faktura (${amount.toFixed(2)} ${currencyLabel} = ${amountSek.toFixed(2)} kr) ` +
+      `${kind}-avdraget på denna faktura (${svAmount(amount)} ${currencyLabel} = ${svAmount(amountSek)} kr) ` +
         `överstiger årsmaximum ${maxText}. ` + advice,
     )
   }

@@ -81,7 +81,7 @@ describe('POST /api/dimensions/import-existing', () => {
       { id: 'l1', dimensions: { '1': 'KS01' } },
       { id: 'l2', dimensions: { '1': 'KS01', '6': 'P001' } },
       { id: 'l3', dimensions: { '1': 'BUTIK' } },
-      
+
     ])
     // Registry dims 1 & 6 exist (system dims).
     enqueue({
@@ -111,7 +111,7 @@ describe('POST /api/dimensions/import-existing', () => {
       { id: 'l2', dimensions: { '1': 'KS{01}' } },
       { id: 'l3', dimensions: { '1': 'X'.repeat(50) } },
       { id: 'l4', dimensions: { '1': '"{}"' } },
-      
+
     ])
     enqueue({ data: [{ id: 'dim-1', sie_dim_no: 1 }] }) // registry dims
     enqueue({ data: [] }) // no existing values
@@ -130,7 +130,7 @@ describe('POST /api/dimensions/import-existing', () => {
     enqueueLines([
       { id: 'l1', dimensions: { '1': 'KS01' } },
       { id: 'l2', dimensions: { '1': 'KS02' } },
-      
+
     ])
     enqueue({ data: [{ id: 'dim-1', sie_dim_no: 1 }] }) // registry dims
     enqueue({ data: [] }) // existing-values snapshot missed a raced KS02

@@ -1,6 +1,8 @@
 /**
  * pg-real test for migration
- * 20260726140000_link_voucher_rpcs_resolve_amount_in_invoice_currency.sql.
+ * 20260726140000_link_voucher_rpcs_resolve_amount_in_invoice_currency.sql,
+ * whose final RPC bodies (NULL-safe tenant guard) are restated by
+ * 20260727130000_link_voucher_rpcs_null_safe_tenant_guard.sql.
  *
  * `journal_entry_lines.debit_amount` / `credit_amount` are ALWAYS SEK;
  * `currency` + `amount_in_currency` describe the underlying DOCUMENT. Both

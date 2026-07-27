@@ -1,3 +1,24 @@
+-- Restate both voucher-link RPCs with the NULL-safe tenant guard.
+--
+-- 20260726140000 (the invoice-currency rewrite of these two RPCs) was already
+-- recorded on the PR #1215 Supabase preview branch when review hardening
+-- swapped its membership guard from the raw NOT-IN-over-user_company_ids()
+-- shape to caller_is_company_member() (20260703180000). A recorded migration
+-- version never re-runs, so editing that file in place could not reach any
+-- database that had already applied it, and it broke the byte-identical rule
+-- for applied migrations. That file is restored to the exact content the
+-- preview recorded; the corrected definitions land here under a fresh version.
+--
+-- CREATE OR REPLACE makes the sequence converge everywhere: a database that
+-- applied the weaker guard (the preview) replays these bodies on top, and a
+-- fresh replay (prod at merge, pg-real CI) ends up byte-identical in prosrc.
+-- The pg-real ratchet (tests/pg/null-safe-tenant-guards.pg.test.ts) pins the
+-- final state.
+--
+-- The full rationale for the RPC bodies themselves (resolving the matched
+-- voucher amount in the invoice's currency) lives in 20260726140000; nothing
+-- below differs from it except the two tenant-guard sites and their comments.
+
 -- Resolve the matched voucher amount in the INVOICE'S currency in both
 -- voucher-link commit RPCs.
 --
@@ -57,9 +78,12 @@
 --
 -- Everything else in both functions (tenant guard, notes cap, attribution,
 -- FOR UPDATE locking, the already-linked check, the amount guard, the writes,
--- the returned jsonb) is verbatim from the previous definitions:
+-- the returned jsonb) matches the LIVE definitions: the bodies from
 -- 20260620130000_link_invoice_to_voucher_cash_method.sql and
--- 20260615120000_link_voucher_rpcs_tenant_guard.sql respectively.
+-- 20260615120000_link_voucher_rpcs_tenant_guard.sql respectively, as
+-- mechanically rewritten by 20260703180000_null_safe_tenant_guards.sql
+-- (the membership guard is caller_is_company_member(), not the raw
+-- NOT IN pattern those older files carry).
 --
 -- No schema change, no trigger touched: two CREATE OR REPLACE FUNCTION bodies.
 
@@ -99,9 +123,15 @@ DECLARE
   v_unreadable_currency text;
 BEGIN
   -- 0. Tenant guard (mirrors 20260611140000): anon/authenticated may only act
-  --    on their own companies; service_role / direct access bypasses.
+  --    on their own companies; service_role / direct access bypasses. The
+  --    NULL-safe caller_is_company_member() form (20260703180000), not the
+  --    raw NOT-IN-over-user_company_ids() shape: that one skips the deny
+  --    branch on UNKNOWN and is banned by the pg-real ratchet
+  --    (tests/pg/null-safe-tenant-guards.pg.test.ts, which scans prosrc:
+  --    comments included, so the banned shape must not even be spelled out
+  --    here).
   IF v_jwt_role IN ('anon', 'authenticated') THEN
-    IF p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+    IF NOT public.caller_is_company_member(p_company_id) THEN
       RETURN jsonb_build_object('ok', false, 'code', 'LINK_VOUCHER_INVOICE_NOT_FOUND');
     END IF;
     -- Attribution: the JWT sub is authoritative for user-session callers:
@@ -372,9 +402,10 @@ DECLARE
   v_unreadable_currency text;
 BEGIN
   -- Tenant guard (mirrors 20260611140000): anon/authenticated may only act on
-  -- their own companies; service_role / direct access bypasses.
+  -- their own companies; service_role / direct access bypasses. NULL-safe
+  -- caller_is_company_member() form, as in link_invoice_to_voucher above.
   IF v_jwt_role IN ('anon', 'authenticated') THEN
-    IF p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+    IF NOT public.caller_is_company_member(p_company_id) THEN
       RETURN jsonb_build_object('ok', false, 'code', 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND');
     END IF;
     -- Attribution: the JWT sub is authoritative for user-session callers:

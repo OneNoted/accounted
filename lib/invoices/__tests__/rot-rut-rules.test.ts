@@ -14,6 +14,11 @@ import {
   type ValidateInvoiceItem,
 } from '../rot-rut-rules'
 
+// Mirrors the warning-text formatter in rot-rut-rules.ts, so the expected
+// strings stay correct regardless of which group separator the ICU build picks.
+const sv = (n: number): string =>
+  n.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 describe('rot-rut-rules: constants', () => {
   it('uses the 2026 statutory rates', () => {
     expect(ROT_PERCENT).toBe(0.30)
@@ -223,7 +228,7 @@ describe('validateInvoice', () => {
       { unit_price: 200000, quantity: 1, deduction_type: 'rot' }, // 60 000 deduction
     ]
     const expected =
-      `ROT-avdraget på denna faktura (60000.00 kr) överstiger årsmaximum ${ROT_MAX.toLocaleString('sv-SE')} kr. ` +
+      `ROT-avdraget på denna faktura (${sv(60000)} kr) överstiger årsmaximum ${ROT_MAX.toLocaleString('sv-SE')} kr. ` +
       'Kunden behöver kontrollera sitt återstående utrymme själv.'
     expect(validateInvoice(items, true, true).warnings).toEqual([expected])
     // Passing the currency explicitly must not change a character.
@@ -239,7 +244,7 @@ describe('validateInvoice: foreign currency vs the kronor ceilings', () => {
     ]
     const result = validateInvoice(items, true, true, { currency: 'EUR', exchangeRate: 11.4 })
     expect(result.warnings).toHaveLength(1)
-    expect(result.warnings[0]).toContain('6000.00 EUR = 68400.00 kr')
+    expect(result.warnings[0]).toContain(`${sv(6000)} EUR = ${sv(68400)} kr`)
     expect(result.warnings[0]).toContain('överstiger årsmaximum')
   })
 
@@ -257,8 +262,8 @@ describe('validateInvoice: foreign currency vs the kronor ceilings', () => {
       { unit_price: 250000, quantity: 1, deduction_type: 'rut' }, // 125 000 EUR
     ]
     const result = validateInvoice(items, true, true, { currency: 'EUR', exchangeRate: 11.4 })
-    expect(result.warnings[0]).toContain('125000.00 EUR')
-    expect(result.warnings[0]).not.toContain('(125000.00 kr)')
+    expect(result.warnings[0]).toContain(`${sv(125000)} EUR`)
+    expect(result.warnings[0]).not.toContain(`(${sv(125000)} kr)`)
   })
 
   it('says the cap could not be checked when the invoice has no rate', () => {
@@ -268,7 +273,7 @@ describe('validateInvoice: foreign currency vs the kronor ceilings', () => {
     const result = validateInvoice(items, true, true, { currency: 'EUR' })
     expect(result.errors).toHaveLength(0)
     expect(result.warnings).toHaveLength(1)
-    expect(result.warnings[0]).toContain('6000.00 EUR')
+    expect(result.warnings[0]).toContain(`${sv(6000)} EUR`)
     expect(result.warnings[0]).toContain('kan inte stämmas av')
     expect(result.warnings[0]).toContain('saknar växelkurs')
     expect(result.warnings[0]).not.toContain('överstiger')

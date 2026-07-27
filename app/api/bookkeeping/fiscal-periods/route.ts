@@ -5,7 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateFiscalPeriodSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-// Response shapes are legacy `{ error: string }` — kept for the räkenskapsår UI.
+// Response shapes are legacy `{ error: string }`, kept for the räkenskapsår UI.
 // Success may carry a non-blocking `warnings` array (same shape as the invoice
 // booking routes: `{ code, message }`).
 
