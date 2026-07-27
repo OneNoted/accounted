@@ -4,6 +4,7 @@ import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import AnalyticsIdentify from '@/components/AnalyticsIdentify'
+import { computeIdentityHash } from '@/lib/analytics/identity-hash'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
 import LazyCommandPalette from '@/components/common/LazyCommandPalette'
@@ -331,6 +332,7 @@ export default async function DashboardLayout({
               fullName: userProfile?.full_name ?? null,
               role: memberRow.role as CompanyRole,
             }}
+            identityHash={computeIdentityHash(user.id)}
             company={{
               id: companyId,
               name: displayName,

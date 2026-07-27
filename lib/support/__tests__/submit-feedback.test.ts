@@ -4,7 +4,17 @@ import { submitFeedback } from '@/lib/support/submit-feedback'
 // posthog-js is browser-only and irrelevant to delivery: stub it so the
 // analytics breadcrumb can be asserted without initialising the real SDK.
 const captureMock = vi.fn()
-vi.mock('posthog-js', () => ({ default: { capture: (...a: unknown[]) => captureMock(...a) } }))
+const sendMessageMock = vi.fn()
+const isAvailableMock = vi.fn(() => true)
+vi.mock('posthog-js', () => ({
+  default: {
+    capture: (...a: unknown[]) => captureMock(...a),
+    conversations: {
+      isAvailable: () => isAvailableMock(),
+      sendMessage: (...a: unknown[]) => sendMessageMock(...a),
+    },
+  },
+}))
 
 describe('submitFeedback', () => {
   beforeEach(() => {
@@ -12,6 +22,8 @@ describe('submitFeedback', () => {
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
     captureMock.mockClear()
+    sendMessageMock.mockClear()
+    isAvailableMock.mockReturnValue(true)
     // Analytics on by default so the breadcrumb path is exercised.
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
     vi.stubEnv('NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN', 'phc_test')
@@ -34,7 +46,7 @@ describe('submitFeedback', () => {
     const result = await submitFeedback({ subject: 'Hjälpsida', message: 'Hjälp tack' })
 
     expect(result.ok).toBe(true)
-    expect(result.channels).toEqual(['email'])
+    expect(result.channels).toEqual(['email', 'ticket'])
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/support/contact',
       expect.objectContaining({
@@ -58,8 +70,9 @@ describe('submitFeedback', () => {
 
     const result = await submitFeedback({ message: 'msg' })
 
+    // A ticket may still open, but delivery failed, so ok stays false.
     expect(result.ok).toBe(false)
-    expect(result.channels).toEqual([])
+    expect(result.channels).not.toContain('email')
     expect(result.error).toBe('Mailtjänsten är inte konfigurerad')
   })
 
@@ -69,7 +82,7 @@ describe('submitFeedback', () => {
     const result = await submitFeedback({ message: 'msg' })
 
     expect(result.ok).toBe(false)
-    expect(result.channels).toEqual([])
+    expect(result.channels).not.toContain('email')
     expect(result.error).toBe('Network down')
   })
 
@@ -116,6 +129,55 @@ describe('submitFeedback', () => {
     const result = await submitFeedback({ message: 'msg' })
 
     expect(result.ok).toBe(true)
-    expect(result.channels).toEqual(['email'])
+    expect(result.channels).toContain('email')
+  })
+
+  describe('PostHog Support ticket channel', () => {
+    it('opens a ticket carrying the message body, unlike the analytics breadcrumb', async () => {
+      stubFetchOk()
+      await submitFeedback({ subject: 'Moms', message: 'Jag fastnar på ruta 05' })
+      expect(sendMessageMock).toHaveBeenCalledWith('[Moms]\n\nJag fastnar på ruta 05')
+    })
+
+    it('omits the subject prefix when there is no subject', async () => {
+      stubFetchOk()
+      await submitFeedback({ message: 'bara text' })
+      expect(sendMessageMock).toHaveBeenCalledWith('bara text')
+    })
+
+    // A ticket alone is NOT delivery: nobody is watching PostHog at 02:00, and
+    // Recapt masking a dead email endpoint is the exact bug we removed.
+    it('does not report success when only the ticket worked', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'down' }) }))
+      const result = await submitFeedback({ message: 'msg' })
+      expect(result.ok).toBe(false)
+      expect(result.channels).toEqual(['ticket'])
+      expect(result.error).toBe('down')
+    })
+
+    it('still delivers by email when conversations are unavailable', async () => {
+      isAvailableMock.mockReturnValue(false)
+      stubFetchOk()
+      const result = await submitFeedback({ message: 'msg' })
+      expect(result.ok).toBe(true)
+      expect(result.channels).toEqual(['email'])
+      expect(sendMessageMock).not.toHaveBeenCalled()
+    })
+
+    it('still delivers by email when sendMessage throws', async () => {
+      sendMessageMock.mockRejectedValueOnce(new Error('conversations boom'))
+      stubFetchOk()
+      const result = await submitFeedback({ message: 'msg' })
+      expect(result.ok).toBe(true)
+      expect(result.channels).toEqual(['email'])
+    })
+
+    it('opens no ticket when analytics is off (self-hosted)', async () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+      stubFetchOk()
+      const result = await submitFeedback({ message: 'msg' })
+      expect(result.channels).toEqual(['email'])
+      expect(sendMessageMock).not.toHaveBeenCalled()
+    })
   })
 })
