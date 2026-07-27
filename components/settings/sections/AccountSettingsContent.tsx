@@ -23,6 +23,7 @@ import {
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useSettings } from '@/components/settings/useSettings'
 import { clearRecaptIdentity } from '@/lib/recapt'
+import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { useToast } from '@/components/ui/use-toast'
 import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 
@@ -92,6 +93,7 @@ export function AccountSettingsContent() {
 
   async function handleLogout() {
     clearRecaptIdentity()
+    resetAnalyticsIdentity()
     await supabase.auth.signOut()
     router.push('/login')
   }
