@@ -11410,6 +11410,11 @@ export const tools: McpTool[] = [
         const stored = storedByEmployee.get(p.employee_id as string)
         const carried: Record<string, unknown> = {}
         for (const field of MERGEABLE_FIELDS) {
+          // The null-skip cannot drop a legitimately stored value: every
+          // mergeable column is NOT NULL with a default (migration
+          // 20260713101000), so a stored row never holds NULL here. If a
+          // future migration adds a NULLABLE mergeable column, carry null
+          // through explicitly or the schema .default() resets it on merge.
           const value = stored?.[field]
           if (value !== undefined && value !== null) carried[field] = value
         }

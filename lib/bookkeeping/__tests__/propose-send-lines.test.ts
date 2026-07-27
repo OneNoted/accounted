@@ -227,8 +227,9 @@ describe('proposeSendLines', () => {
       entityType: 'enskild_firma',
     })
 
-    expect(lines.find((line) => line.account_number === '1510')?.credit_amount).toBe('9500')
-    expect(lines.find((line) => line.account_number === '1513')?.credit_amount).toBe('3000')
+    // ROT is 30% of the line total incl. moms (HUSFL 6-9 §§): 30% x 12 500 = 3 750.
+    expect(lines.find((line) => line.account_number === '1510')?.credit_amount).toBe('8750')
+    expect(lines.find((line) => line.account_number === '1513')?.credit_amount).toBe('3750')
     expect(lines.reduce((sum, line) => sum + (parseFloat(line.debit_amount) || 0), 0))
       .toBe(12500)
     expect(lines.reduce((sum, line) => sum + (parseFloat(line.credit_amount) || 0), 0))

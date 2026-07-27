@@ -49,6 +49,7 @@ export interface VatDeclarationCheck {
     | 'IMPORT_BASE_WITHOUT_OUTPUT'
     | 'IMPORT_OUTPUT_WITHOUT_BASE'
     | 'OUTPUT_VAT_WITHOUT_SALES_BASE'
+    | 'SALES_OUTPUT_VAT_SHORTFALL'
   status: VatDeclarationCheckStatus
   /** Swedish user-facing message; safe to render directly in the UI. */
   message: string
@@ -222,7 +223,8 @@ export function runVatDeclarationChecks(
   //
   // DELIBERATELY BINARY, unlike the RC and import pairs. The proportional form
   // (rutor 05-08 vs ruta10/0.25 + ruta11/0.12 + ruta12/0.06) is NOT sound on
-  // the sales side, because ACCOUNT_RUTA's two halves are not a closed set:
+  // the sales side as a filing-blocking ERROR, because ACCOUNT_RUTA's two
+  // halves are not a closed set:
   //   - rutor 07 (VMB) and 08 (frivillig uthyrning) have NO source accounts at
   //     all, while their output VAT (2616/2626/2636, 2613/2623/2633) does feed
   //     rutor 10-12, so the implied base permanently exceeds the reported one;
@@ -236,6 +238,9 @@ export function runVatDeclarationChecks(
   // blocking ERROR (isFilingBlocked) on a correct declaration. Making rutor 07
   // and 08 mappable and reconciling the revenue_account override is the
   // prerequisite; see the report accompanying this change.
+  //
+  // ONE direction is proportionally checkable without blocking: see
+  // SALES_OUTPUT_VAT_SHORTFALL below.
   const taxableSalesBase = rutor.ruta05 + rutor.ruta06 + rutor.ruta07 + rutor.ruta08
   const taxableSalesOutput = rutor.ruta10 + rutor.ruta11 + rutor.ruta12
   if (taxableSalesBase > eps && taxableSalesOutput <= eps) {
@@ -264,6 +269,48 @@ export function runVatDeclarationChecks(
         'försäljning (ruta 05-08). Skatteverket kräver att utgående moms ' +
         'matchas med ett försäljningsunderlag. Kontrollera att intäktskonton ' +
         '(3001/3002/3003) är bokförda för varje VAT-rad.',
+      rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
+    })
+  }
+
+  // Proportional tightening of the sales pair, WARNING tier only. The binary
+  // ERROR above clears as soon as ANY output VAT exists, so at a 400 000 kr
+  // sales base 2 000 kr of missing utgående moms still rendered a green
+  // "Inga fel hittades" banner: undeclared moms and skattetillägg exposure
+  // under SFL 49 kap 4 §.
+  //
+  // Only THIS direction (reported base implies more output VAT than rutor
+  // 10-12 carry) is proportionally checkable: every unmapped drift source
+  // listed above (VMB, frivillig uthyrning, revenue_account overrides,
+  // periodisering in the invoice month) inflates the OUTPUT side and can only
+  // suppress this finding, never trigger it. The one legitimate trigger is
+  // periodiserade invoice lines dissolving (3001 credited with the moms
+  // already declared in the invoice month), which is why this is a WARNING
+  // that names that cause and never blocks filing (isFilingBlocked reads
+  // ERROR only), following the RC_INPUT_VAT_MISMATCH precedent.
+  //
+  // The base comparison is exact per rate (basbelopp = moms/sats summed over
+  // 25/12/6), so legitimate mixed-rate declarations net to zero drift; the
+  // shared max(1 kr, 0.5%) tolerance absorbs per-voucher öre rounding.
+  const expectedSalesBase =
+    rutor.ruta10 / 0.25 + rutor.ruta11 / 0.12 + rutor.ruta12 / 0.06
+  const salesTolerance = Math.max(1, expectedSalesBase * 0.005)
+  if (taxableSalesOutput > eps && taxableSalesBase > expectedSalesBase + salesTolerance) {
+    const shortfall = Math.round(taxableSalesBase - expectedSalesBase)
+    findings.push({
+      code: 'SALES_OUTPUT_VAT_SHORTFALL',
+      status: 'WARNING',
+      message:
+        'Den momspliktiga försäljningen (ruta 05-08) är ' +
+        `${Math.round(taxableSalesBase).toLocaleString('sv-SE')} kr, men den ` +
+        'utgående momsen (ruta 10-12) motsvarar bara ett underlag på cirka ' +
+        `${Math.round(expectedSalesBase).toLocaleString('sv-SE')} kr: cirka ` +
+        `${shortfall.toLocaleString('sv-SE')} kr av försäljningen saknar ` +
+        'utgående moms. Kontrollera att momsrader (2611/2621/2631) är ' +
+        'bokförda för varje intäktsrad, eller flytta momsfri försäljning till ' +
+        'rätt ruta (35/36/39/40). Använder du periodisering av fakturarader ' +
+        'är skillnaden korrekt (momsen redovisas i fakturamånaden, intäkten ' +
+        'löpande) och varningen kan lämnas utan åtgärd.',
       rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
     })
   }

@@ -278,16 +278,17 @@ describe('foreign-currency invoices: kronor conversion', () => {
   }
 
   it('emits SEK whole kronor for a 3 000 EUR rot invoice', () => {
-    // 3 000 EUR arbete + 750 EUR moms, 900 EUR avdrag, rate 11,40:
-    //   PrisForArbete 34 200 + 8 550 = 42 750 kr
-    //   BegartBelopp  900 × 11,40    = 10 260 kr
-    //   BetaltBelopp  42 750 - 10 260 = 32 490 kr
+    // 3 000 EUR arbete + 750 EUR moms = 3 750 EUR inkl. moms; avdrag 30% av
+    // inkl.-moms-arbetet = 1 125 EUR (HUSFL 6-9 §§), rate 11,40:
+    //   PrisForArbete 34 200 + 8 550   = 42 750 kr
+    //   BegartBelopp  1 125 × 11,40    = 12 825 kr
+    //   BetaltBelopp  42 750 - 12 825  = 29 925 kr
     const invoice = makeEurRotInvoice({
       unit_price: 3000,
       quantity: 1,
       line_total: 3000,
       vat_amount: 750,
-      deduction_amount: 900,
+      deduction_amount: 1125,
       labor_hours: 10,
     })
 
@@ -296,23 +297,25 @@ describe('foreign-currency invoices: kronor conversion', () => {
 
     const xml = result.xml!
     expect(xml).toContain('<ns2:PrisForArbete>42750</ns2:PrisForArbete>')
-    expect(xml).toContain('<ns2:BegartBelopp>10260</ns2:BegartBelopp>')
-    expect(xml).toContain('<ns2:BetaltBelopp>32490</ns2:BetaltBelopp>')
-    expect(result.requested_total).toBe(10260)
+    expect(xml).toContain('<ns2:BegartBelopp>12825</ns2:BegartBelopp>')
+    expect(xml).toContain('<ns2:BetaltBelopp>29925</ns2:BetaltBelopp>')
+    expect(result.requested_total).toBe(12825)
 
     // The begäran and the receivable must be the same claim.
     expect(result.arenden[0].begart_belopp).toBe(Math.round(ledger1513(invoice)))
   })
 
-  it('asks for 7 125 kr, not 625, on the 625 EUR deduction case', () => {
-    // The bug this test pins: 625 EUR avdrag booked to 1513 as 7 125 kr while
-    // the begäran asked Skatteverket for "625" (read as kronor).
+  it('asks for 8 906 kr, not 781, on the 781.25 EUR deduction case', () => {
+    // The bug this test pins: a EUR avdrag booked to 1513 in kronor while
+    // the begäran asked Skatteverket for the raw EUR figure (read as kronor).
+    // 2 083,33 EUR arbete + 520,83 moms = 2 604,16 inkl.; 30% = 781,25 EUR
+    // = 8 906,25 kr at 11,40, whole-kronor 8 906 in the file.
     const invoice = makeEurRotInvoice({
       unit_price: 2083.33,
       quantity: 1,
       line_total: 2083.33,
       vat_amount: 520.83,
-      deduction_amount: 625,
+      deduction_amount: 781.25,
       labor_hours: 8,
     })
 
@@ -320,10 +323,10 @@ describe('foreign-currency invoices: kronor conversion', () => {
     expect(result.blockers).toHaveLength(0)
 
     const xml = result.xml!
-    expect(xml).toContain('<ns2:BegartBelopp>7125</ns2:BegartBelopp>')
-    expect(xml).not.toContain('<ns2:BegartBelopp>625</ns2:BegartBelopp>')
-    expect(ledger1513(invoice)).toBe(7125)
-    expect(result.arenden[0].begart_belopp).toBe(7125)
+    expect(xml).toContain('<ns2:BegartBelopp>8906</ns2:BegartBelopp>')
+    expect(xml).not.toContain('<ns2:BegartBelopp>781</ns2:BegartBelopp>')
+    expect(ledger1513(invoice)).toBe(8906.25)
+    expect(result.arenden[0].begart_belopp).toBe(8906)
   })
 
   it('MISSING_EXCHANGE_RATE rather than a guessed figure when the rate is absent', () => {

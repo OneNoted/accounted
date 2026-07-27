@@ -865,6 +865,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         unit_price: item.unit_price || 0,
         quantity: item.quantity || 0,
         deduction_type: item.deduction_type,
+        // Same rate resolution as the VAT totals loop above: the deduction
+        // base is the line total inkl. moms (HUSFL 6-9 §§).
+        vat_rate: vatRegistered ? (item.vat_rate ?? (vatRules?.rate || 25)) : 0,
       })
       if (item.deduction_type === 'rot') deductionByKind.rot += amount
       else deductionByKind.rut += amount
@@ -1941,6 +1944,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                 unit_price: watchItems[index]?.unit_price || 0,
                                 quantity: watchItems[index]?.quantity || 0,
                                 deduction_type: watchItems[index]?.deduction_type,
+                                vat_rate: vatRegistered
+                                  ? (watchItems[index]?.vat_rate ?? (vatRules?.rate || 25))
+                                  : 0,
                               })
                               return amt > 0 ? (
                                 <span className="text-xs tabular-nums text-muted-foreground">

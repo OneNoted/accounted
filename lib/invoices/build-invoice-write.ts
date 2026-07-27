@@ -329,6 +329,10 @@ export async function buildInvoiceWriteData(params: {
       unit_price: item.unit_price,
       quantity: item.quantity,
       deduction_type: item.deduction_type ?? null,
+      // The deduction base is arbetskostnaden inkl. moms (HUSFL 6-9 §§), so
+      // the validator and total need the same per-line rate the item rows
+      // below are stored with.
+      vat_rate: item.vat_rate !== undefined ? item.vat_rate : vatRules.rate,
       labor_hours: item.labor_hours ?? null,
       housing_designation: item.housing_designation ?? null,
     }))
@@ -433,6 +437,17 @@ export async function buildInvoiceWriteData(params: {
       vatAmountSek = convertToSEK(vatAmount, exchangeRate)
       totalSek = convertToSEK(total, exchangeRate)
     }
+  } else {
+    // SEK invoice: the *_sek twins equal their invoice-currency counterparts
+    // (rate 1) instead of staying NULL. The staged-operations commit path
+    // (lib/pending-operations/commit.ts, sekRate = 1) already writes them this
+    // way, and leaving them NULL here made the same invoice row differ by
+    // creation path, blanking SEK-reporting readers (KPI, AR ledger, full
+    // archive export). A failed Riksbanken fetch on a foreign-currency
+    // invoice still stores NULL above: that is a genuinely unknown value.
+    subtotalSek = Math.round(subtotal * 100) / 100
+    vatAmountSek = Math.round(vatAmount * 100) / 100
+    totalSek = Math.round(total * 100) / 100
   }
 
   const invoiceFields: InvoiceWriteFields = {
@@ -519,6 +534,7 @@ export async function buildInvoiceWriteData(params: {
           unit_price: item.unit_price,
           quantity: item.quantity,
           deduction_type: deductionType,
+          vat_rate: itemRate,
         })
       : 0
     return {

@@ -101,7 +101,77 @@ describe('computeDeduction', () => {
   })
 })
 
+describe('computeDeduction: base is labor cost INCLUDING VAT (HUSFL 6-9 §§)', () => {
+  it('Skatteverket worked example: 18 000 kr arbetskostnad @ 25% = 22 500 inkl. moms, ROT 30% = 6 750', () => {
+    const item: ItemForDeduction = {
+      unit_price: 18000,
+      quantity: 1,
+      deduction_type: 'rot',
+      vat_rate: 25,
+    }
+    expect(computeDeduction(item)).toBe(6750)
+  })
+
+  it('RUT 50% of labor incl. moms: 1 000 kr @ 25% = 1 250 → 625', () => {
+    const item: ItemForDeduction = {
+      unit_price: 1000,
+      quantity: 1,
+      deduction_type: 'rut',
+      vat_rate: 25,
+    }
+    expect(computeDeduction(item)).toBe(625)
+  })
+
+  it('respects the line rate: 1 000 kr @ 12% = 1 120 → ROT 336', () => {
+    const item: ItemForDeduction = {
+      unit_price: 1000,
+      quantity: 1,
+      deduction_type: 'rot',
+      vat_rate: 12,
+    }
+    expect(computeDeduction(item)).toBe(336)
+  })
+
+  it('vat_rate 0, null and undefined all mean momsfri labor (base = line total)', () => {
+    const base: ItemForDeduction = { unit_price: 10000, quantity: 1, deduction_type: 'rot' }
+    expect(computeDeduction({ ...base, vat_rate: 0 })).toBe(3000)
+    expect(computeDeduction({ ...base, vat_rate: null })).toBe(3000)
+    expect(computeDeduction(base)).toBe(3000)
+  })
+
+  it('reproduces the stored per-line vat_amount rounding before applying the percent', () => {
+    // 333.33 @ 25%: stored vat_amount = round2(83.3325) = 83.33, so the base
+    // is 416.66 (not 416.6625) and RUT 50% = 208.33.
+    const item: ItemForDeduction = {
+      unit_price: 333.33,
+      quantity: 1,
+      deduction_type: 'rut',
+      vat_rate: 25,
+    }
+    expect(computeDeduction(item)).toBe(208.33)
+  })
+
+  it('quantity > 1 with VAT: 20 × 500 kr @ 25% = 12 500 inkl. → ROT 3 750', () => {
+    const item: ItemForDeduction = {
+      unit_price: 500,
+      quantity: 20,
+      deduction_type: 'rot',
+      vat_rate: 25,
+    }
+    expect(computeDeduction(item)).toBe(3750)
+  })
+})
+
 describe('computeInvoiceDeductionTotal', () => {
+  it('sums on the inkl.-moms base when rates are present', () => {
+    const items: ItemForDeduction[] = [
+      { unit_price: 18000, quantity: 1, deduction_type: 'rot', vat_rate: 25 }, // 6 750
+      { unit_price: 1000, quantity: 1, deduction_type: 'rut', vat_rate: 25 }, // 625
+      { unit_price: 2000, quantity: 1, vat_rate: 25 }, // not flagged
+    ]
+    expect(computeInvoiceDeductionTotal(items)).toBe(7375)
+  })
+
   it('mixed: ROT line + non-eligible line: only ROT generates deduction', () => {
     const items: ItemForDeduction[] = [
       { unit_price: 10000, quantity: 1, deduction_type: 'rot' },

@@ -84,6 +84,20 @@ jobs:
           DIFF_FILE: diff.patch
           FILES_FILE: files.txt
         run: node scripts/swedish-compliance-review.mjs
+      - name: Assert review produced output
+        # This job once produced no compliance signal for 10 consecutive PR
+        # runs (the in-tree npm install died on an unrelated peer conflict, see
+        # the install step above) and nobody noticed: workflow_run-triggered
+        # jobs do not appear on the PR checks list, so a red or silently empty
+        # run is invisible from the PR. Fail loudly whenever the review script
+        # finishes without writing a non-empty review.md, so "no output" can
+        # never again pass as a green run.
+        run: |
+          set -euo pipefail
+          if [ ! -s review.md ]; then
+            echo "::error::Compliance review produced no output (review.md missing or empty)"
+            exit 1
+          fi
       - name: Find previous compliance comment
         uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad # v4.0.0
         id: find-comment

@@ -10,6 +10,7 @@
  * Reference: https://sie.se/format/
  */
 
+import { monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
 import type {
   SIEType,
   SIEEncoding,
@@ -524,15 +525,54 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
         case 'RAR': {
           // #RAR yearIndex start end
+          //
+          // Validated for EVERY year index, not just 0: prior-year records
+          // (#RAR -1, -2, ...) land in header.fiscalYears too, and a bogus
+          // entry there used to pass through silently. Malformed records are
+          // reported and skipped so fiscalYears never carries an entry the
+          // rest of the pipeline cannot trust. The one exception is the
+          // 18-month BFL 3 kap. cap: an over-long span is reported as a
+          // warning but the entry is KEPT, because executeSIEImport refuses
+          // the current year (#RAR 0) with a precise Swedish error that needs
+          // the real dates, and dropping the record here would degrade that
+          // message to "no fiscal year defined".
           const yearIndex = parseInt(fields[1], 10)
           const start = parseSIEDateString(fields[2])
           const end = parseSIEDateString(fields[3])
 
-          if (start && end) {
-            header.fiscalYears.push({ yearIndex, start, end })
-          } else {
-            addIssue(issues, 'warning', lineNum, 'Invalid fiscal year dates', tag)
+          if (!Number.isInteger(yearIndex)) {
+            addIssue(issues, 'warning', lineNum, `Ogiltigt årsindex i #RAR: "${fields[1] ?? ''}"`, tag)
+            break
           }
+
+          if (!start || !end) {
+            addIssue(issues, 'warning', lineNum, 'Invalid fiscal year dates', tag)
+            break
+          }
+
+          if (end < start) {
+            addIssue(
+              issues,
+              'warning',
+              lineNum,
+              `Räkenskapsårets slutdatum (${end}) ligger före startdatumet (${start}) i #RAR ${yearIndex}`,
+              tag
+            )
+            break
+          }
+
+          const rarMonths = monthsBetween(start, end)
+          if (rarMonths > 18) {
+            addIssue(
+              issues,
+              'warning',
+              lineNum,
+              `Räkenskapsåret i #RAR ${yearIndex} (${start} till ${end}) omfattar ${rarMonths} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.)`,
+              tag
+            )
+          }
+
+          header.fiscalYears.push({ yearIndex, start, end })
           break
         }
 

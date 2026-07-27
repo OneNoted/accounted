@@ -203,4 +203,46 @@ describe('buildInvoiceWriteData exchange rate', () => {
     expect(queries.some((q) => q.table === 'exchange_rates')).toBe(false)
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('populates the SEK twin columns for a SEK invoice instead of leaving them NULL', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { supabase } = createRecordingSupabase((q) => {
+      if (q.table === 'company_settings') return { data: { vat_registered: true }, error: null }
+      return { data: null, error: null }
+    })
+
+    const result = await build(supabase, { currency: 'SEK' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // The staged-operations commit path writes total_sek = total for SEK
+    // invoices (sekRate = 1); the web/REST path must produce the same row or
+    // the SEK-reporting readers see two different shapes for the same invoice.
+    expect(result.invoiceFields.exchange_rate).toBeNull()
+    expect(result.invoiceFields.subtotal_sek).toBe(1000)
+    expect(result.invoiceFields.vat_amount_sek).toBe(0)
+    expect(result.invoiceFields.total_sek).toBe(1000)
+  })
+
+  it('rounds the SEK twins to the ore for a SEK invoice with float-dust line math', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { supabase } = createRecordingSupabase((q) => {
+      if (q.table === 'company_settings') return { data: { vat_registered: true }, error: null }
+      return { data: null, error: null }
+    })
+
+    const result = await build(supabase, {
+      currency: 'SEK',
+      items: [{ description: 'Konsult', quantity: 3, unit: 'tim', unit_price: 33.33, vat_rate: 0 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.subtotal_sek).toBe(99.99)
+    expect(result.invoiceFields.total_sek).toBe(99.99)
+  })
 })
