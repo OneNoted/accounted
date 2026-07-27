@@ -4,6 +4,7 @@ import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import { RecaptIdentify } from '@/components/RecaptIdentify'
+import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
 import LazyCommandPalette from '@/components/common/LazyCommandPalette'
@@ -13,7 +14,7 @@ import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getBranding } from '@/lib/branding/service'
-import type { EntityType, CompanyRole, Team } from '@/types'
+import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -328,6 +329,25 @@ export default async function DashboardLayout({
             userId={user.id}
             email={user.email}
             displayName={settings?.company_name || undefined}
+          />
+        )}
+        {!isSandbox && (
+          <AnalyticsIdentify
+            user={{
+              userId: user.id,
+              email: user.email,
+              fullName: userProfile?.full_name ?? null,
+              role: memberRow.role as CompanyRole,
+            }}
+            company={{
+              id: companyId,
+              name: displayName,
+              entityType,
+              accountingFramework: companyRow.accounting_framework as AccountingFramework,
+              paysSalaries,
+              trialEndsAt: entitlements.trialEndsAt,
+              capabilities: entitlements.capabilities,
+            }}
           />
         )}
       </AgentSheetProvider>

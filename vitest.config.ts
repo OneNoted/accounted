@@ -1,7 +1,13 @@
 import { defineConfig } from 'vitest/config'
 import path from 'path'
 
-const alias = { '@': path.resolve(__dirname, '.') }
+const alias = {
+  '@': path.resolve(__dirname, '.'),
+  // `server-only` is a build-time guard whose real entry point always throws;
+  // Next.js swaps it out during bundling, Vitest cannot. Without this stub any
+  // test that transitively imports a server-only module fails at import time.
+  'server-only': path.resolve(__dirname, 'tests/stubs/server-only.ts'),
+}
 
 const unitProject = {
   resolve: { alias },
