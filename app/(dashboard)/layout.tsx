@@ -3,7 +3,6 @@ import { headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
-import { RecaptIdentify } from '@/components/RecaptIdentify'
 import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
@@ -324,13 +323,6 @@ export default async function DashboardLayout({
           <SettingsHotkey />
           {settingsModal}
         </div>
-        {!isSandbox && (
-          <RecaptIdentify
-            userId={user.id}
-            email={user.email}
-            displayName={settings?.company_name || undefined}
-          />
-        )}
         {!isSandbox && (
           <AnalyticsIdentify
             user={{
