@@ -70,3 +70,47 @@ logs. The authenticated RLS authorization is repeated through a stateless
 service-role client with explicit `user_id` and `company_id` predicates. Export
 queries filter by that company directly or use parent IDs fetched under the
 same filter. Recipients must store and transfer the ZIP as Confidential data.
+
+## Client-side storage inventory
+
+Everything this application persists on a user's device. It is inventoried here
+because the analytics posture is "no analytics data and no cookies on the
+device" (`persistence: 'memory'`), and the exceptions are only defensible if
+they are known, enumerated and reviewed rather than discovered in production.
+
+Application-owned keys:
+
+- `Accounted:chat-sidebar-collapsed` — assistant sidebar UI state.
+- `gnubok.inbox.onboarding.dismissed` — one-time onboarding hint dismissal.
+
+PostHog-owned keys. Both are written by PostHog's own modules straight to
+`localStorage`, bypassing the `persistence: 'memory'` setting, so neither is
+prevented by the SDK configuration:
+
+- `seenSurvey_<survey_id>` — `"true"`. Suppresses a survey the user already
+  answered or dismissed. Without it every survey re-prompts on each page load
+  under memory persistence.
+- `ph_conv_<project_token>` — `{"widgetSessionId": "<uuid>"}`. Lets a user
+  return to their own support ticket in the same browser. Created at page
+  load, before the user contacts support.
+
+Classification: neither PostHog key is personal data. Both are functional UI
+state: a random identifier and a boolean marker, with no name, address, email
+or accounting content, and neither is readable across origins. They are the
+basis for treating this storage as strictly necessary rather than requiring
+consent, so a change in their content changes that assessment.
+
+Controls:
+
+- `lib/analytics/purge-legacy-storage.ts` removes storage from the retired
+  Recapt processor (`recapt` / `glimt` substrings) on every boot. It
+  deliberately does NOT touch `seenSurvey_*` or `ph_conv_*`: clearing those
+  would re-prompt surveys and orphan the user's own ticket.
+- No cookies are set by the application or by PostHog under this configuration.
+
+Review trigger: **enabling any new PostHog product may silently add device
+storage**, because the products write directly to `localStorage` rather than
+through the SDK's persistence setting. After enabling one, inspect
+`localStorage` on production and update this section, `.compliance/ropa.yaml`
+and `app/(public)/privacy/page.tsx` together. The Support product was caught
+this way; the assumption that `persistence: 'memory'` was sufficient was wrong.
