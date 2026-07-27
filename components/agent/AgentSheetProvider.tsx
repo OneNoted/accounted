@@ -27,6 +27,40 @@ function AgentSheetSkeleton() {
   )
 }
 
+/**
+ * Serialize intent args into the sheet's remount key.
+ *
+ * The key used to be intent + contextRef + seed only, but some callers pass a
+ * CONSTANT contextRef with varying args: bulk-book always uses 'inbox:bulk' and
+ * carries the selected item ids. Selecting A+B, collapsing, then selecting C+D
+ * produced the same key, so the sheet did not remount and the earlier
+ * conversation reopened while the user believed C+D were being booked.
+ *
+ * Key order so the same selection reached by different routes stays one session.
+ */
+// Fallback identity for args that cannot be serialized (cycles, non-JSON
+// values). A timestamp would be wrong twice over: two different objects created
+// in the same millisecond would collide, and the same object would get a new
+// key on every render tick, remounting the sheet under the user mid-session.
+// A WeakMap gives each object one stable id for as long as it exists.
+const argsFallbackIds = new WeakMap<object, string>()
+let argsFallbackSeq = 0
+
+function stableArgsKey(args?: Record<string, unknown>): string {
+  if (!args) return ''
+  try {
+    const keys = Object.keys(args).sort()
+    return JSON.stringify(keys.map((k) => [k, args[k]]))
+  } catch {
+    let id = argsFallbackIds.get(args)
+    if (!id) {
+      id = `unserializable:${++argsFallbackSeq}`
+      argsFallbackIds.set(args, id)
+    }
+    return id
+  }
+}
+
 /** Warm the sheet chunk when the browser is idle, never on the critical path. */
 function useSheetPrefetch() {
   useEffect(() => {
@@ -174,7 +208,7 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
       {children}
       {activeArgs && (
         <AgentSheet
-          key={`${activeArgs.intentId}:${activeArgs.contextRef ?? ''}:${activeArgs.seedUserMessage ?? ''}:${restartNonce}`}
+          key={`${activeArgs.intentId}:${activeArgs.contextRef ?? ''}:${stableArgsKey(activeArgs.intentArgs)}:${activeArgs.seedUserMessage ?? ''}:${restartNonce}`}
           intentId={activeArgs.intentId}
           intentArgs={activeArgs.intentArgs}
           contextRef={activeArgs.contextRef}

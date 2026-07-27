@@ -10,6 +10,10 @@ import {
   BookmarkX,
   Check,
   Brain,
+  Copy,
+  ThumbsUp,
+  ThumbsDown,
+  ArrowDown,
 } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
@@ -19,6 +23,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { StoredStagedOperation } from '@/types'
 
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
@@ -109,6 +114,9 @@ export interface ChatMessage {
   toolCalls?: { tool_use_id: string; name: string; completed?: boolean }[]
   staged?: StagedOperation[]
   memoryEvents?: MemoryEvent[]
+  // Set when the user pressed Stop mid-stream: the partial text stays, with a
+  // marker so a truncated answer is never mistaken for a complete one.
+  interrupted?: boolean
 }
 
 // Emitted by run-turn.ts after a successful remember_fact / forget_fact call
@@ -249,12 +257,17 @@ export default function AgentChat({
   // bottom. Scrolling up to re-read a long answer should NOT yank the user
   // back on every streaming token. Threshold accounts for sub-pixel rounding.
   const wasAtBottomRef = useRef(true)
+  // True when the user has scrolled up AND new content has landed below them.
+  // Without this, reading back through a long answer while the next one streams
+  // silently buries the reply: no yank (that would be worse), but a way back.
+  const [hasUnseenBelow, setHasUnseenBelow] = useState(false)
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
     const onScroll = () => {
       const distance = el.scrollHeight - (el.scrollTop + el.clientHeight)
       wasAtBottomRef.current = distance < 64
+      if (wasAtBottomRef.current) setHasUnseenBelow(false)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
@@ -264,8 +277,19 @@ export default function AgentChat({
     if (!el) return
     if (wasAtBottomRef.current) {
       el.scrollTop = el.scrollHeight
+      setHasUnseenBelow(false)
+    } else {
+      setHasUnseenBelow(true)
     }
   }, [messages])
+
+  function jumpToLatest() {
+    const el = scrollerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    wasAtBottomRef.current = true
+    setHasUnseenBelow(false)
+  }
 
   async function startTurn(body: {
     conversationId: string | null
@@ -274,7 +298,10 @@ export default function AgentChat({
     // hidden so it never renders as a user bubble (e.g. a rejection correction
     // fed back into the chat). The caller also skips adding a visible bubble.
     hidden?: boolean
-  }): Promise<void> {
+    // Resolves false when the turn never reached the server (network error or
+    // a non-2xx), so the caller can hand the user's text back to the composer
+    // instead of stranding a bubble that was never persisted.
+  }): Promise<boolean> {
     // Abort any in-flight turn before starting a new one: guards against
     // racing two turns when handleSend is triggered twice fast.
     activeControllerRef.current?.abort()
@@ -306,11 +333,11 @@ export default function AgentChat({
         signal,
       })
     } catch (err) {
-      if (signal.aborted) return
+      if (signal.aborted) return false
       setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte nå assistenten.')
       setStreaming(false)
       activeControllerRef.current = null
-      return
+      return false
     }
 
     if (!response.ok || !response.body) {
@@ -328,7 +355,7 @@ export default function AgentChat({
       setErrorMessage(msg)
       setStreaming(false)
       activeControllerRef.current = null
-      return
+      return false
     }
 
     // Assistant bubble is appended LAZILY: only when the first event that
@@ -395,12 +422,24 @@ export default function AgentChat({
         activeControllerRef.current = null
       }
     }
+
+    // The request reached the server. A mid-stream failure is reported through
+    // errorMessage and leaves whatever streamed on screen, so it does not count
+    // as "never sent".
+    return true
   }
 
   function handleStop() {
     activeControllerRef.current?.abort()
     activeControllerRef.current = null
     setStreaming(false)
+    // Keep whatever streamed, but mark it: a half-finished answer that looks
+    // finished is worse than no answer, especially when it stopped mid-figure.
+    setMessages((prev) => {
+      const last = prev[prev.length - 1]
+      if (!last || last.role !== 'assistant' || last.interrupted) return prev
+      return [...prev.slice(0, -1), { ...last, interrupted: true }]
+    })
   }
 
   function handleRegenerate() {
@@ -418,8 +457,53 @@ export default function AgentChat({
     }
     if (lastUserIdx === -1) return
     const userMsg = messages[lastUserIdx]
-    setMessages(messages.slice(0, lastUserIdx + 1))
-    void startTurn({ conversationId, userMessage: userMsg.text })
+
+    // Anything the discarded turn staged has to be withdrawn BEFORE the
+    // replacement runs. Otherwise the operation stays pending server-side while
+    // the regenerated turn stages a second proposal for the same booking: two
+    // live proposals for one action, each with its own 30-day expiry. Rejecting
+    // is the same path the Avslå button uses, so the audit trail records why it
+    // went away.
+    const abandoned = messages
+      .slice(lastUserIdx + 1)
+      .flatMap((m) => m.staged ?? [])
+      .map((s) => s.operation_id)
+      .filter((id): id is string => typeof id === 'string')
+
+    void (async () => {
+      const withdrawn = await Promise.all(
+        abandoned.map(async (operationId) => {
+          try {
+            const res = await fetch(`/api/pending-operations/${operationId}/reject`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                rejection_category: 'other',
+                rejection_reason: 'Ersatt: användaren begärde ett nytt svar.',
+              }),
+            })
+            // 409 means someone already resolved it (approved in Granskning, or
+            // a parallel client): it is no longer pending either way, which is
+            // all we need.
+            return res.ok || res.status === 409
+          } catch {
+            return false
+          }
+        }),
+      )
+
+      if (withdrawn.some((ok) => !ok)) {
+        // Leave the turn on screen: hiding a card whose operation is still
+        // pending is the failure mode this whole change exists to remove.
+        setErrorMessage(
+          'Kunde inte dra tillbaka det tidigare förslaget, så svaret behölls. Försök igen.',
+        )
+        return
+      }
+
+      setMessages((prev) => prev.slice(0, lastUserIdx + 1))
+      void startTurn({ conversationId, userMessage: userMsg.text })
+    })()
   }
 
   // Fired after the user rejects a proposal with a reason. The rejection is
@@ -574,7 +658,18 @@ export default function AgentChat({
     if (!text || streaming) return
     setInput('')
     setMessages((prev) => [...prev, { role: 'user', text }])
-    await startTurn({ conversationId, userMessage: text })
+    const ok = await startTurn({ conversationId, userMessage: text })
+    if (!ok) {
+      // The turn never reached the server, so nothing was persisted and the
+      // dangling user bubble would vanish on reload. Put the text back in the
+      // composer instead of making the user retype it, and drop the bubble so
+      // what is on screen matches what was actually sent.
+      setMessages((prev) => {
+        const last = prev[prev.length - 1]
+        return last?.role === 'user' && last.text === text ? prev.slice(0, -1) : prev
+      })
+      setInput((current) => (current.length > 0 ? current : text))
+    }
   }
 
   // Auto-resize the textarea as the user types. Capped at 8rem (~128px) so
@@ -600,6 +695,10 @@ export default function AgentChat({
 
   return (
     <div className="relative flex flex-col h-full min-h-0">
+      {/* The pill is positioned against THIS box, not the whole component: the
+          composer below grows as the user types, and a fixed offset from the
+          bottom would slide the pill under it. */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
       <div
         ref={scrollerRef}
         className={cn(
@@ -632,6 +731,18 @@ export default function AgentChat({
             {errorMessage}
           </div>
         )}
+      </div>
+
+      {hasUnseenBelow && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-md hover:bg-secondary transition-colors"
+        >
+          <ArrowDown className="h-3 w-3" />
+          Nytt svar
+        </button>
+      )}
       </div>
 
       {/* Paywall: /api/agent/invoke 403s without the ai capability. Replace
@@ -725,7 +836,9 @@ function MessageBubble({
   const hideEmptyBubble = (!isUser && !message.text && !streamingTail) || isThinking
   const markdownLoaded = useMarkdownReady()
   return (
-    <div className={cn('flex flex-col gap-2', isUser ? 'items-end' : 'items-start')}>
+    <div
+      className={cn('group/msg flex flex-col gap-2', isUser ? 'items-end' : 'items-start')}
+    >
       {!isUser && message.reasoning && (
         <ReasoningBlock reasoning={message.reasoning} active={isThinking} />
       )}
@@ -755,6 +868,12 @@ function MessageBubble({
           <Cursor />
         ) : null}
       </div>
+      )}
+
+      {message.interrupted && (
+        <p className="text-[11px] text-muted-foreground border-t border-dashed border-border pt-1.5">
+          Avbrutet. Det som hann skrivas står kvar.
+        </p>
       )}
 
       {message.toolCalls && message.toolCalls.length > 0 && (
@@ -817,13 +936,81 @@ function MessageBubble({
         </div>
       )}
 
-      {showRegenerate && onRegenerate && (
-        <button
-          type="button"
-          onClick={onRegenerate}
-          className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-          title="Generera om svaret"
-        >
+      {!isUser && message.text && !streamingTail && (
+        <MessageActions
+          text={message.text}
+          onRegenerate={showRegenerate ? onRegenerate : undefined}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Hover row under a finished assistant answer: copy, feedback, regenerate.
+ *
+ * Feedback is deliberately fire-and-forget and local-only for now: the point of
+ * this row is that the affordances exist where users look for them. Wiring the
+ * thumbs to gnubok_feedback is a follow-up, and a failed vote must never
+ * interrupt reading an answer.
+ */
+function MessageActions({
+  text,
+  onRegenerate,
+}: {
+  text: string
+  onRegenerate?: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const [vote, setVote] = useState<'up' | 'down' | null>(null)
+
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(t)
+  }, [copied])
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+    } catch {
+      // Clipboard can be blocked (permissions, insecure context). Silent: the
+      // user can still select the text, and an error toast here would be noise.
+    }
+  }
+
+  const btn =
+    'inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors'
+
+  return (
+    <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/msg:opacity-100 transition-opacity">
+      <button type="button" onClick={handleCopy} className={btn} title="Kopiera svaret">
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        {copied ? 'Kopierat' : 'Kopiera'}
+      </button>
+      <button
+        type="button"
+        onClick={() => setVote(vote === 'up' ? null : 'up')}
+        className={cn(btn, vote === 'up' && 'text-foreground')}
+        title="Bra svar"
+        aria-pressed={vote === 'up'}
+      >
+        <ThumbsUp className="h-3 w-3" />
+        <span className="sr-only">Bra svar</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => setVote(vote === 'down' ? null : 'down')}
+        className={cn(btn, vote === 'down' && 'text-foreground')}
+        title="Dåligt svar"
+        aria-pressed={vote === 'down'}
+      >
+        <ThumbsDown className="h-3 w-3" />
+        <span className="sr-only">Dåligt svar</span>
+      </button>
+      {onRegenerate && (
+        <button type="button" onClick={onRegenerate} className={btn} title="Generera om svaret">
           <RotateCw className="h-3 w-3" />
           Generera om
         </button>
@@ -994,6 +1181,54 @@ function prettyToolName(name: string): string {
 // Helper used by /chat/[id] server component to normalize agent_messages
 // rows into the ChatMessage shape this component expects. Exported here so
 // both the sheet (for future "resume" support) and the page can use it.
+/**
+ * Re-attach unanswered proposals to a hydrated thread.
+ *
+ * Approval cards ride on streamed events that are never persisted, so without
+ * this a resumed conversation shows the tool trace and the answer but no card,
+ * and the proposal quietly waits out its 30-day expiry in Granskning. They land
+ * on the last assistant message so they read as that turn's proposal, which is
+ * where they were when the turn streamed.
+ */
+/**
+ * `pending_operations.operation_type` stores the bare action name
+ * ('categorize_transaction'), while the live streamed card carries the MCP tool
+ * name ('gnubok_categorize_transaction') and ApprovalCard's PreviewBlock
+ * dispatches on that. Without this, every hydrated card fell through to the
+ * flat generic preview instead of the journal-line one, so a resumed proposal
+ * looked materially worse than the same proposal did live.
+ */
+export function toolNameFor(operationType: string): string {
+  return operationType.startsWith('gnubok_') ? operationType : `gnubok_${operationType}`
+}
+
+export function attachStagedOperations(
+  messages: ChatMessage[],
+  staged: StoredStagedOperation[],
+): ChatMessage[] {
+  if (staged.length === 0) return messages
+
+  const cards: StagedOperation[] = staged.map((op) => ({
+    // Hydrated cards have no tool_use_id (it lived only in the stream); the
+    // operation id is the stable key and the only thing commit/reject need.
+    tool_use_id: `hydrated:${op.id}`,
+    operation_id: op.id,
+    risk_level:
+      op.risk_level === 'high' || op.risk_level === 'medium' ? op.risk_level : 'low',
+    message: op.title ?? 'Förslag väntar på granskning.',
+    tool_name: toolNameFor(op.operation_type),
+    preview: op.preview_data,
+  }))
+
+  const lastAssistantIdx = messages.map((m) => m.role).lastIndexOf('assistant')
+  if (lastAssistantIdx === -1) {
+    return [...messages, { role: 'assistant', text: '', staged: cards }]
+  }
+  return messages.map((m, i) =>
+    i === lastAssistantIdx ? { ...m, staged: [...(m.staged ?? []), ...cards] } : m,
+  )
+}
+
 export function normalizeStoredMessages(
   rows: { role: string; content: unknown; hidden?: boolean | null }[],
 ): ChatMessage[] {

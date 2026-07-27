@@ -3890,3 +3890,21 @@ export interface AGIDeclaration {
   created_at: string
   updated_at: string
 }
+
+/**
+ * A `pending_operations` row a chat conversation staged and nobody has answered
+ * yet, as returned by GET /api/agent/conversations/[id] and by the /chat/[id]
+ * server page.
+ *
+ * Approval cards ride on streamed events that are never persisted, so this is
+ * what lets a resumed thread show its still-open proposal instead of silently
+ * dropping it. `operation_type` is the bare action name as stored
+ * ('categorize_transaction'), not the prefixed MCP tool name.
+ */
+export interface StoredStagedOperation {
+  id: string
+  operation_type: string
+  title?: string | null
+  risk_level?: string | null
+  preview_data?: unknown
+}

@@ -3,7 +3,8 @@
 import { useMemo } from 'react'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import AgentChat, { normalizeStoredMessages } from './AgentChat'
+import AgentChat, { attachStagedOperations, normalizeStoredMessages } from './AgentChat'
+import type { StoredStagedOperation } from '@/types'
 import AgentAvatar from './AgentAvatar'
 import SandboxAgentPreview from './SandboxAgentPreview'
 import { useAgentSheet } from './AgentSheetProvider'
@@ -15,6 +16,10 @@ interface Props {
   contextRef: string | null
   title: string
   rawMessages: { role: string; content: unknown; hidden?: boolean }[]
+  // Proposals this conversation staged that are still awaiting an answer, so
+  // the approval card reappears on resume instead of the proposal silently
+  // waiting out its expiry in Granskning.
+  stagedOperations?: StoredStagedOperation[]
 }
 
 // Full-page conversation view. Wraps AgentChat with a header that shows the
@@ -25,8 +30,12 @@ export default function ChatConversationView({
   contextRef,
   title,
   rawMessages,
+  stagedOperations,
 }: Props) {
-  const initialMessages = useMemo(() => normalizeStoredMessages(rawMessages), [rawMessages])
+  const initialMessages = useMemo(
+    () => attachStagedOperations(normalizeStoredMessages(rawMessages), stagedOperations ?? []),
+    [rawMessages, stagedOperations],
+  )
   const { identity } = useAgentSheet()
   const companyCtx = useCompanyOptional()
   const isSandbox = companyCtx?.isSandbox ?? false

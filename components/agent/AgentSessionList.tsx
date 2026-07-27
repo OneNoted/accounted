@@ -1,16 +1,15 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Search, X, Loader2, MessageSquare, Pencil } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Search, X, Loader2, MessageSquare, Pencil, Pin, PinOff, Archive } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useToast } from '@/components/ui/use-toast'
 import {
   type ConversationRow,
   BUCKET_LABELS,
   relativeTime,
   intentLabel,
-  groupConversations,
 } from './conversation-display'
+import { useConversationList } from './use-conversation-list'
 
 interface Props {
   // Highlight the row for the conversation currently open in the sheet.
@@ -26,15 +25,26 @@ interface Props {
 // inline in the sheet and the user keeps chatting without leaving the page.
 // Rows are renameable inline (PATCH /api/agent/conversations/[id]).
 export default function AgentSessionList({ activeConversationId, onSelect }: Props) {
-  const [conversations, setConversations] = useState<ConversationRow[]>([])
+  // Same hook the /chat sidebar uses, so pin/archive/rename behave identically
+  // on both surfaces (optimistic, rolled back on failure, with a message).
+  // Pin and archive are new here: the sheet could only rename before.
+  const {
+    conversations,
+    setConversations,
+    query,
+    setQuery,
+    grouped,
+    togglePin,
+    archive,
+    editingId,
+    editValue,
+    setEditValue,
+    startEdit,
+    cancelEdit,
+    commitEdit,
+  } = useConversationList([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editValue, setEditValue] = useState('')
-  // Set by Esc so the blur that fires when the input unmounts doesn't save.
-  const cancelRef = useRef(false)
-  const { toast } = useToast()
 
   useEffect(() => {
     let cancelled = false
@@ -55,61 +65,10 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
     return () => {
       cancelled = true
     }
+    // setConversations is the hook's stable useState setter; listing it would
+    // not change when this runs, and this must fire exactly once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return conversations
-    return conversations.filter(
-      (c) =>
-        (c.title ?? '').toLowerCase().includes(q) ||
-        (c.last_message_preview ?? '').toLowerCase().includes(q) ||
-        (c.context_ref ?? '').toLowerCase().includes(q) ||
-        c.intent_id.toLowerCase().includes(q),
-    )
-  }, [conversations, query])
-
-  const grouped = useMemo(() => groupConversations(filtered), [filtered])
-
-  function startEdit(c: ConversationRow) {
-    setEditingId(c.id)
-    setEditValue(c.title ?? '')
-    cancelRef.current = false
-  }
-  function cancelEdit() {
-    cancelRef.current = true
-    setEditingId(null)
-  }
-  async function commitEdit(id: string) {
-    if (cancelRef.current) {
-      cancelRef.current = false
-      return
-    }
-    setEditingId(null)
-    const title = editValue.trim()
-    const current = conversations.find((c) => c.id === id)
-    if (!title || title === current?.title) return
-    // Capture the pre-rename title so we can roll back if the PATCH fails.
-    const previousTitle = current?.title ?? null
-    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)))
-    try {
-      const res = await fetch(`/api/agent/conversations/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    } catch {
-      // Revert the optimistic rename so the list stays in sync with the server.
-      setConversations((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, title: previousTitle } : c)),
-      )
-      toast({
-        variant: 'destructive',
-        title: 'Kunde inte byta namn på konversationen.',
-      })
-    }
-  }
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
@@ -207,15 +166,42 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                             </p>
                           </div>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => startEdit(c)}
-                          title="Byt namn"
-                          aria-label="Byt namn på konversation"
-                          className="shrink-0 flex w-10 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="shrink-0 flex items-center pr-1">
+                          <button
+                            type="button"
+                            onClick={() => void togglePin(c.id, c.pinned)}
+                            title={c.pinned ? 'Lossa' : 'Fäst överst'}
+                            aria-label={
+                              c.pinned ? 'Lossa konversationen' : 'Fäst konversationen överst'
+                            }
+                            aria-pressed={c.pinned}
+                            className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
+                          >
+                            {c.pinned ? (
+                              <PinOff className="h-3.5 w-3.5" />
+                            ) : (
+                              <Pin className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => startEdit(c)}
+                            title="Byt namn"
+                            aria-label="Byt namn på konversation"
+                            className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void archive(c.id)}
+                            title="Arkivera"
+                            aria-label="Arkivera konversationen"
+                            className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
+                          >
+                            <Archive className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
                     )}
                   </li>
