@@ -47,7 +47,11 @@ async function submitViaEmail(
 }
 
 /** Outcome of each channel, for the analytics breadcrumb. */
-type ChannelOutcome = 'ok' | 'failed' | 'unavailable'
+type ChannelOutcome = 'ok' | 'failed' | 'unavailable' | 'timeout'
+
+/** How long the ticket call may run before we stop waiting on it. The user is
+ *  waiting on this dialog, and the ticket is a complement, not the delivery. */
+const TICKET_TIMEOUT_MS = 4000
 
 /**
  * Breadcrumb on the user's PostHog timeline so a support message is visible
@@ -116,11 +120,31 @@ function composeTicketBody(message: string, subject?: string): string {
   return subject ? `[${subject}]\n\n${message}` : message
 }
 
+/** Resolve to `fallback` if the promise has not settled in time. Never rejects:
+ *  submitViaTicket already swallows its own errors. */
+function withTimeout(
+  promise: Promise<ChannelOutcome>,
+  ms: number,
+  fallback: ChannelOutcome
+): Promise<ChannelOutcome> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms)
+    void promise.then((value) => {
+      clearTimeout(timer)
+      resolve(value)
+    })
+  })
+}
+
 export async function submitFeedback(input: SubmitFeedbackInput): Promise<SubmitFeedbackResult> {
-  // Email first and awaited on its own: it is the delivery guarantee, and a
-  // slow or failing ticket call must never delay or affect it.
+  // Both channels start together, so the user waits max(email, ticket) rather
+  // than the sum. Email is the delivery guarantee and decides `ok`; the ticket
+  // is a complement, so it is additionally capped: a hung sendMessage must
+  // never hold the confirmation dialog open. It resolves to 'timeout' instead,
+  // which is reported rather than silently rounded to 'failed'.
+  const ticketPromise = submitViaTicket(input)
   const emailResult = await submitViaEmail(input)
-  const ticket = await submitViaTicket(input)
+  const ticket = await withTimeout(ticketPromise, TICKET_TIMEOUT_MS, 'timeout')
 
   noteInAnalytics(input, { email: emailResult.ok, ticket })
 

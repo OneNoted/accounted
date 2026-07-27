@@ -227,13 +227,42 @@ describe('submitFeedback', () => {
     })
 
     // The alerting signal: the user's message reached nobody at all.
-    it('sets lost: true only when BOTH channels failed', async () => {
+    it('sets lost when email failed and the ticket was unavailable', async () => {
       isAvailableMock.mockReturnValue(false)
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('down')))
       await submitFeedback({ message: 'msg' })
       expect(captureMock).toHaveBeenCalledWith(
         'support_feedback_submitted',
         expect.objectContaining({ email: 'failed', ticket: 'unavailable', lost: true })
+      )
+    })
+
+    it('sets lost when email failed and the ticket genuinely errored', async () => {
+      sendMessageMock.mockRejectedValueOnce(new Error('boom'))
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('down')))
+      await submitFeedback({ message: 'msg' })
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ email: 'failed', ticket: 'failed', lost: true })
+      )
+    })
+
+    // A hung sendMessage must not hold the confirmation dialog open: the ticket
+    // is capped and reported as 'timeout', while email still decides ok.
+    it('does not let a hanging ticket call block the user', async () => {
+      vi.useFakeTimers()
+      sendMessageMock.mockImplementationOnce(() => new Promise(() => {}))
+      stubFetchOk()
+      const pending = submitFeedback({ message: 'msg' })
+      await vi.advanceTimersByTimeAsync(5000)
+      const result = await pending
+      vi.useRealTimers()
+
+      expect(result.ok).toBe(true)
+      expect(result.channels).toEqual(['email'])
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ email: 'ok', ticket: 'timeout', lost: false })
       )
     })
 
