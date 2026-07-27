@@ -50,6 +50,12 @@ export interface BackupAlertInput {
   errorMessage: string | null
   /** App origin used to build the reconnect link. */
   origin: string
+  /**
+   * Destination that failed ("Google Drive", "Dropbox"). Named in the mail so
+   * a user backing up to both knows which one to reconnect. Defaults to Google
+   * Drive for callers written before the second provider existed.
+   */
+  providerLabel?: string
 }
 
 export async function sendBackupFailureAlert(
@@ -68,19 +74,20 @@ export async function sendBackupFailureAlert(
 
     const companyName = await fetchCompanyName(supabase, input.companyId)
     const link = `${input.origin}/import#cloud-backup`
+    const providerLabel = input.providerLabel || 'Google Drive'
 
     let subject: string
     let paragraphs: string[]
     if (input.kind === 'needs_reauth') {
-      subject = 'Säkerhetskopieringen till Google Drive är pausad'
+      subject = `Säkerhetskopieringen till ${providerLabel} är pausad`
       paragraphs = [
-        `Den automatiska säkerhetskopieringen för ${companyName} är pausad: åtkomsten till ditt Google-konto har gått ut eller återkallats.`,
-        'Koppla om Google Drive för att återuppta säkerhetskopieringen.',
+        `Den automatiska säkerhetskopieringen för ${companyName} är pausad: åtkomsten till ditt ${providerLabel}-konto har gått ut eller återkallats.`,
+        `Koppla om ${providerLabel} för att återuppta säkerhetskopieringen.`,
       ]
     } else {
-      subject = 'Säkerhetskopieringen till Google Drive misslyckas'
+      subject = `Säkerhetskopieringen till ${providerLabel} misslyckas`
       paragraphs = [
-        `Den automatiska säkerhetskopieringen för ${companyName} har misslyckats ${input.consecutiveFailures} nätter i rad.`,
+        `Den automatiska säkerhetskopieringen för ${companyName} till ${providerLabel} har misslyckats ${input.consecutiveFailures} nätter i rad.`,
         input.errorMessage ? `Senaste fel: ${input.errorMessage}` : '',
         'Kontrollera anslutningen under Importera/Exportera.',
       ].filter(Boolean)

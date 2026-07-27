@@ -50,9 +50,9 @@ function makeRequest() {
 }
 
 /**
- * The route issues two queries against extension_data: schedules
- * (key = google_drive_schedule) and connections (key = google_drive_connection,
- * with an .in() filter). Route rows to the right result by the `key` eq filter.
+ * The route issues two queries against extension_data: every provider's
+ * schedule keys, then the matching connection keys. Both use `.in('key', ...)`,
+ * so route rows to the right result by inspecting the key list.
  */
 function makeSupabaseStub(
   scheduleRows: unknown[],
@@ -63,16 +63,18 @@ function makeSupabaseStub(
   } = {}
 ) {
   const from = vi.fn().mockImplementation(() => {
-    let key: string | null = null
+    let kind: 'schedule' | 'connection' = 'schedule'
     const chain: any = {
       select: vi.fn().mockReturnThis(),
-      in: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockImplementation((column: string, value: string) => {
-        if (column === 'key') key = value
+      eq: vi.fn().mockReturnThis(),
+      in: vi.fn().mockImplementation((column: string, values: string[]) => {
+        if (column === 'key') {
+          kind = values.some((v) => v.endsWith('_connection')) ? 'connection' : 'schedule'
+        }
         return chain
       }),
       then: (resolve: (v: unknown) => void) => {
-        if (key === 'google_drive_connection') {
+        if (kind === 'connection') {
           return resolve({
             data: options.connectionRows ?? [],
             error: options.connectionError ?? null,
@@ -93,6 +95,7 @@ function scheduleRow(overrides: Record<string, unknown> = {}) {
   return {
     company_id: 'c-1',
     user_id: 'u-1',
+    key: 'google_drive_schedule',
     value: {
       enabled: true,
       hour_utc: 12,
@@ -102,6 +105,10 @@ function scheduleRow(overrides: Record<string, unknown> = {}) {
       ...overrides,
     },
   }
+}
+
+function connectionRow(companyId: string, value: unknown, key = 'google_drive_connection') {
+  return { company_id: companyId, key, value }
 }
 
 function okSyncResult() {
@@ -126,6 +133,12 @@ describe('cloud-backup auto-sync cron', () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
     process.env.NEXT_PUBLIC_APP_URL = 'https://app.test'
+    // Without credentials the cron deliberately skips a provider, so the
+    // Google flow has to look configured for these tests to exercise it.
+    process.env.GOOGLE_CLIENT_ID = 'client-id'
+    process.env.GOOGLE_CLIENT_SECRET = 'client-secret'
+    delete process.env.DROPBOX_APP_KEY
+    delete process.env.DROPBOX_APP_SECRET
     mockVerifyCronSecret.mockReturnValue(null)
     mockSendBackupFailureAlert.mockResolvedValue({ sent: true })
   })
@@ -338,10 +351,7 @@ describe('cloud-backup auto-sync cron', () => {
     mockCreateClient.mockReturnValueOnce(
       makeSupabaseStub([scheduleRow()], {
         connectionRows: [
-          {
-            company_id: 'c-1',
-            value: { status: 'needs_reauth', needs_reauth_at: '2026-07-10T03:00:00.000Z' },
-          },
+          connectionRow('c-1', { status: 'needs_reauth', needs_reauth_at: '2026-07-10T03:00:00.000Z' }),
         ],
       })
     )
@@ -352,7 +362,7 @@ describe('cloud-backup auto-sync cron', () => {
     expect(mockPerformSync).not.toHaveBeenCalled()
     expect(body.skipped).toBe(1)
     expect(body.results).toEqual([
-      { companyId: 'c-1', status: 'skipped', error: 'needs_reauth' },
+      { companyId: 'c-1', provider: 'google_drive', status: 'skipped', error: 'needs_reauth' },
     ])
     // The incident had not been alerted yet: one alert, persisted on the schedule.
     expect(mockSendBackupFailureAlert).toHaveBeenCalledWith(
@@ -372,10 +382,7 @@ describe('cloud-backup auto-sync cron', () => {
         [scheduleRow({ last_alert_at: '2026-07-10T04:00:00.000Z' })],
         {
           connectionRows: [
-            {
-              company_id: 'c-1',
-              value: { status: 'needs_reauth', needs_reauth_at: '2026-07-10T03:00:00.000Z' },
-            },
+            connectionRow('c-1', { status: 'needs_reauth', needs_reauth_at: '2026-07-10T03:00:00.000Z' }),
           ],
         }
       )
@@ -398,11 +405,8 @@ describe('cloud-backup auto-sync cron', () => {
         ],
         {
           connectionRows: [
-            {
-              company_id: 'c-dead',
-              value: { status: 'needs_reauth', needs_reauth_at: '2026-07-10T03:00:00.000Z' },
-            },
-            { company_id: 'c-live', value: { status: 'active' } },
+            connectionRow('c-dead', { status: 'needs_reauth', needs_reauth_at: '2026-07-10T03:00:00.000Z' }),
+            connectionRow('c-live', { status: 'active' }),
           ],
         }
       )
@@ -418,6 +422,78 @@ describe('cloud-backup auto-sync cron', () => {
     )
     expect(body.skipped).toBe(1)
     expect(body.successes).toBe(1)
+  })
+
+  it('runs both providers for the same company as independent jobs', async () => {
+    process.env.DROPBOX_APP_KEY = 'app-key'
+    process.env.DROPBOX_APP_SECRET = 'app-secret'
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub([
+        scheduleRow(),
+        { ...scheduleRow(), key: 'dropbox_schedule' },
+      ])
+    )
+    mockPerformSync.mockResolvedValue(okSyncResult())
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(mockPerformSync).toHaveBeenCalledTimes(2)
+    const targets = mockPerformSync.mock.calls.map((c) => c[0].provider?.id)
+    expect(targets).toEqual(['google_drive', 'dropbox'])
+    // Each writes back to its own schedule record.
+    const writtenKeys = mockSaveExtensionData.mock.calls.map((c) => c[3])
+    expect(writtenKeys).toEqual(['google_drive_schedule', 'dropbox_schedule'])
+    expect(body.successes).toBe(2)
+  })
+
+  it('keeps one provider running when the other holds a dead token', async () => {
+    process.env.DROPBOX_APP_KEY = 'app-key'
+    process.env.DROPBOX_APP_SECRET = 'app-secret'
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub(
+        [scheduleRow(), { ...scheduleRow(), key: 'dropbox_schedule' }],
+        {
+          connectionRows: [
+            connectionRow(
+              'c-1',
+              { status: 'needs_reauth', needs_reauth_at: '2026-07-10T03:00:00.000Z' },
+              'dropbox_connection'
+            ),
+            connectionRow('c-1', { status: 'active' }),
+          ],
+        }
+      )
+    )
+    mockPerformSync.mockResolvedValue(okSyncResult())
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    // A dead Dropbox token must not stop the healthy Drive backup.
+    expect(mockPerformSync).toHaveBeenCalledTimes(1)
+    expect(mockPerformSync.mock.calls[0][0].provider?.id).toBe('google_drive')
+    expect(body.successes).toBe(1)
+    expect(body.skipped).toBe(1)
+    expect(mockSendBackupFailureAlert).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ kind: 'needs_reauth', providerLabel: 'Dropbox' })
+    )
+  })
+
+  it('skips a due schedule whose provider has no credentials here', async () => {
+    // Dropbox stays unconfigured (see beforeEach): the schedule exists but the
+    // deployment cannot honour it, so it must not burn the failure counter.
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub([{ ...scheduleRow(), key: 'dropbox_schedule' }])
+    )
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(mockPerformSync).not.toHaveBeenCalled()
+    expect(mockSaveExtensionData).not.toHaveBeenCalled()
+    expect(body.processed).toBe(0)
   })
 
   it('fails open and attempts the sync when the connection lookup errors', async () => {
