@@ -46,19 +46,43 @@ async function submitViaEmail(
   }
 }
 
+/** Outcome of each channel, for the analytics breadcrumb. */
+type ChannelOutcome = 'ok' | 'failed' | 'unavailable'
+
 /**
  * Breadcrumb on the user's PostHog timeline so a support message is visible
  * next to the session replay that led to it: the genuinely useful half of what
  * the Recapt channel provided. NOT a delivery channel, and deliberately
  * carries no message body: free text is user content and would be PII in an
  * event property. Email remains the only thing that actually delivers.
+ *
+ * Both channels are reported, because both fail silently from the user's side.
+ * A ticket that never opened is invisible in the UI (email is the guarantee,
+ * so the user still sees success) and invisible in PostHog Support (no ticket
+ * exists to look at). Without `ticket` here, the only way to answer "did the
+ * ticket open?" is to reproduce it with devtools open, which is what happened
+ * the first time this shipped.
+ *
+ * 'unavailable' is kept distinct from 'failed' on purpose: unavailable is the
+ * expected steady state when Support is off or analytics is disabled, whereas
+ * failed means conversations were live and the call still did not land. Only
+ * the second is worth alerting on.
  */
-function noteInAnalytics({ subject }: SubmitFeedbackInput, delivered: boolean): void {
+function noteInAnalytics(
+  { subject }: SubmitFeedbackInput,
+  outcomes: { email: boolean; ticket: ChannelOutcome }
+): void {
   if (!isAnalyticsEnabled()) return
   try {
     posthog.capture('support_feedback_submitted', {
       subject: subject ?? null,
-      delivered,
+      // Kept for continuity: existing insights filter on `delivered`.
+      delivered: outcomes.email,
+      email: outcomes.email ? 'ok' : 'failed',
+      ticket: outcomes.ticket,
+      // True only when the user's message reached neither channel. This is the
+      // one that deserves an alert.
+      lost: !outcomes.email && outcomes.ticket !== 'ok',
     })
   } catch {
     // Telemetry must never affect whether the user's message went out.
@@ -76,15 +100,15 @@ function noteInAnalytics({ subject }: SubmitFeedbackInput, delivered: boolean): 
  * Never throws and never blocks: if conversations are unavailable (support
  * disabled, no analytics, older SDK) the user still gets the email path.
  */
-async function submitViaTicket({ message, subject }: SubmitFeedbackInput): Promise<boolean> {
-  if (!isAnalyticsEnabled()) return false
+async function submitViaTicket({ message, subject }: SubmitFeedbackInput): Promise<ChannelOutcome> {
+  if (!isAnalyticsEnabled()) return 'unavailable'
   try {
     const conversations = posthog.conversations
-    if (!conversations?.isAvailable?.()) return false
+    if (!conversations?.isAvailable?.()) return 'unavailable'
     await conversations.sendMessage(composeTicketBody(message, subject))
-    return true
+    return 'ok'
   } catch {
-    return false
+    return 'failed'
   }
 }
 
@@ -96,17 +120,17 @@ export async function submitFeedback(input: SubmitFeedbackInput): Promise<Submit
   // Email first and awaited on its own: it is the delivery guarantee, and a
   // slow or failing ticket call must never delay or affect it.
   const emailResult = await submitViaEmail(input)
-  const ticketOk = await submitViaTicket(input)
+  const ticket = await submitViaTicket(input)
 
-  noteInAnalytics(input, emailResult.ok)
+  noteInAnalytics(input, { email: emailResult.ok, ticket })
 
   if (emailResult.ok) {
-    return { ok: true, channels: ticketOk ? ['email', 'ticket'] : ['email'] }
+    return { ok: true, channels: ticket === 'ok' ? ['email', 'ticket'] : ['email'] }
   }
 
   return {
     ok: false,
-    channels: ticketOk ? ['ticket'] : [],
+    channels: ticket === 'ok' ? ['ticket'] : [],
     error: emailResult.error,
   }
 }
