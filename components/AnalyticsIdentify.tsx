@@ -29,9 +29,13 @@ import {
 export default function AnalyticsIdentify({
   user,
   company,
+  identityHash,
 }: {
   user: AnalyticsUserInput
   company: AnalyticsCompanyInput
+  /** Server-computed HMAC of userId (lib/analytics/identity-hash.ts). Null
+   *  when POSTHOG_SECRET_API_KEY is unset, which is normal off hosted. */
+  identityHash?: string | null
 }) {
   const { userId, email, fullName, role } = user
   const {
@@ -52,6 +56,12 @@ export default function AnalyticsIdentify({
 
   useEffect(() => {
     if (!isAnalyticsEnabled()) return
+
+    // Verified identity first: it tells PostHog Support this browser really
+    // is `userId`, so a support ticket follows the person across devices
+    // instead of being scoped to one browser session. Without the secret key
+    // this is skipped and tickets fall back to email recovery.
+    if (identityHash) posthog.setIdentity(userId, identityHash)
 
     posthog.identify(userId, buildPersonProperties({ userId, email, fullName, role }))
     posthog.group(
@@ -79,6 +89,7 @@ export default function AnalyticsIdentify({
     paysSalaries,
     trialEndsAt,
     capabilityKey,
+    identityHash,
   ])
 
   return null

@@ -7,13 +7,19 @@ export interface SubmitFeedbackInput {
 }
 
 /**
- * Delivery channels. Recapt used to be a second one: it accepted the message
- * through its feedback SDK, so a failing /api/support/contact still reported
- * success. With Recapt gone, email is the only delivery channel and its
- * failure is now a real, visible failure. That is correct: silently
- * "succeeding" while the message reached nobody was the worse behaviour.
+ * Delivery channels.
+ *
+ * 'email'  - Resend to the support inbox. The guarantee: it works with no
+ *            third party beyond the mail provider and needs no analytics.
+ * 'ticket' - PostHog Support conversation, linked to the person and their
+ *            session replay so we can see what they were doing.
+ *
+ * Recapt used to be the second channel and would report success on its own,
+ * masking a failing /api/support/contact. This does NOT repeat that: the
+ * result is `ok` only when email actually delivered. A ticket alone is not
+ * treated as delivery, because nobody is watching PostHog at 02:00.
  */
-export type SupportChannel = 'email'
+export type SupportChannel = 'email' | 'ticket'
 
 export interface SubmitFeedbackResult {
   ok: boolean
@@ -59,18 +65,48 @@ function noteInAnalytics({ subject }: SubmitFeedbackInput, delivered: boolean): 
   }
 }
 
+/**
+ * Open a PostHog Support ticket alongside the email.
+ *
+ * Unlike the analytics breadcrumb this DOES carry the message body: a support
+ * ticket the user deliberately wrote is the one place their words are the
+ * point. That makes tickets a distinct processing purpose from analytics, so
+ * it is declared separately in .compliance/ropa.yaml and on the privacy page.
+ *
+ * Never throws and never blocks: if conversations are unavailable (support
+ * disabled, no analytics, older SDK) the user still gets the email path.
+ */
+async function submitViaTicket({ message, subject }: SubmitFeedbackInput): Promise<boolean> {
+  if (!isAnalyticsEnabled()) return false
+  try {
+    const conversations = posthog.conversations
+    if (!conversations?.isAvailable?.()) return false
+    await conversations.sendMessage(composeTicketBody(message, subject))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function composeTicketBody(message: string, subject?: string): string {
+  return subject ? `[${subject}]\n\n${message}` : message
+}
+
 export async function submitFeedback(input: SubmitFeedbackInput): Promise<SubmitFeedbackResult> {
+  // Email first and awaited on its own: it is the delivery guarantee, and a
+  // slow or failing ticket call must never delay or affect it.
   const emailResult = await submitViaEmail(input)
+  const ticketOk = await submitViaTicket(input)
 
   noteInAnalytics(input, emailResult.ok)
 
   if (emailResult.ok) {
-    return { ok: true, channels: ['email'] }
+    return { ok: true, channels: ticketOk ? ['email', 'ticket'] : ['email'] }
   }
 
   return {
     ok: false,
-    channels: [],
+    channels: ticketOk ? ['ticket'] : [],
     error: emailResult.error,
   }
 }

@@ -153,9 +153,11 @@ export default function PrivacyPolicyPage() {
                   <tr className="border-b">
                     <td className="py-2 pr-4 font-medium">PostHog</td>
                     <td className="py-2 pr-4">
-                      Produktanalys, sessionsinspelning, felrapportering och
-                      enkäter. Överförda uppgifter: användar-ID,
-                      e-postadress, namn och företagsnamn. All text i
+                      Produktanalys, sessionsinspelning, felrapportering,
+                      enkäter och supportärenden. Överförda uppgifter:
+                      användar-ID, e-postadress, namn och företagsnamn. Om du
+                      själv skriver till supporten i appen skickas även ditt
+                      meddelande dit som ett ärende, så att vi kan svara. All text i
                       sessionsinspelningar maskeras: vi spelar in var i
                       gränssnittet du klickar, aldrig vad som står i din
                       bokföring. Organisationsnummer överförs aldrig.

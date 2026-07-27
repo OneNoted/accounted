@@ -537,7 +537,7 @@ processing_activities:
       - immutable_status_machine_trigger
 
   - id: product.analytics
-    name: Produktanalys, sessionsinspelning, felrapportering och enkäter (PostHog)
+    name: Produktanalys, sessionsinspelning, felrapportering, enkäter och supportärenden (PostHog)
     purpose: >-
       Förstå hur tjänsten faktiskt används (var användare fastnar i
       onboarding, vilka flöden som avbryts), fånga klientfel och serverfel så
@@ -557,6 +557,13 @@ processing_activities:
       - user.name             # profiles.full_name
       - user.behavior         # sidvisningar, klick, händelser, sessionsinspelning
       - user.device           # user agent, skärmstorlek, IP (trunkeras av PostHog)
+      # Supportärenden: fritext som användaren SJÄLV skriver till supporten via
+      # in-app-dialogen (components/ui/support-link.tsx). Till skillnad från
+      # analysdata bär ärendet meddelandetexten, eftersom det är hela poängen
+      # med att skriva till supporten. Kan i praktiken innehålla bokförings-
+      # detaljer som användaren väljer att beskriva. Widgeten är avstängd:
+      # endast vår egen dialog kan öppna ärenden.
+      - user.content.support  # fritext i supportmeddelanden, användarinitierat
       # EJ organisationsnummer: för enskild firma ÄR orgnr innehavarens
       # personnummer. buildGroupProperties() vägrar skicka det och ett
       # enhetstest låser fast beteendet.
@@ -586,3 +593,7 @@ processing_activities:
       - sandbox_companies_never_identified
       - disabled_entirely_when_self_hosted
       - server_side_payloads_redacted_before_send   # lib/observability/redact.ts
+      - support_widget_disabled                    # endast egen UI via conversations-API
+      - support_ticket_identity_hmac_signed        # POSTHOG_SECRET_API_KEY, serverside
+      - support_message_body_never_in_event_properties  # breadcrumb bär endast subject
+      - email_remains_the_delivery_guarantee       # ärendet är ett komplement, ej leveransväg
