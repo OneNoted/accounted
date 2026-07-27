@@ -15,8 +15,9 @@ import { cn } from '@/lib/utils'
  * which names the thing and links to it.
  *
  * Kind-agnostic on purpose (plan seam 8.4): the mapping lives in
- * route-mapping.ts, so a flow run's ref renders here with no change to either
- * surface. A ref this cannot read renders nothing rather than a broken link.
+ * route-mapping.ts, so teaching every surface about a new ref kind is one
+ * entry in that map and no component change. A kind the map does not know
+ * yet, a flow run for instance, renders nothing rather than a broken link.
  */
 export default function ContextChip({
   contextRef,

@@ -166,8 +166,9 @@ describe('contextRefToTarget', () => {
   })
 
   it('keeps the id intact when it contains a colon', () => {
-    // Split on the FIRST colon: a ref like kpi:översikt:2026 must not lose its
-    // tail or be read as an unknown kind.
-    expect(contextRefToTarget('kpi:översikt:2026')).toEqual({ label: 'Nyckeltal', href: '/kpi' })
+    // Split on the FIRST colon. Asserted on a kind that PUTS the id in the
+    // href: kpi discards its id, so the same assertion there would pass even
+    // if the parser dropped everything after the second colon.
+    expect(contextRefToTarget('invoice:abc:2026')?.href).toBe('/invoices/abc%3A2026')
   })
 })
