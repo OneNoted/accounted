@@ -29,14 +29,14 @@ const supabaseWsUrl =
 
 const cspDirectives = [
   "default-src 'self'",
-  // Recapt: scoped to the two specific hosts the SDK actually contacts:
-  // `cdn.recapt.app` for the script bundle and `api.recapt.app` for
-  // ingestion. The previous wildcard (`https://*.recapt.app`) allowed
-  // exfiltration to any subdomain of recapt.app and is intentionally
-  // narrowed.
-  `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com https://api.recapt.app https://cdn.recapt.app`,
+  // No analytics hosts here on purpose. PostHog replaced Recapt and is
+  // routed through the same-origin `/rl` rewrite below, so ingestion is
+  // covered by `connect-src 'self'` and its lazy-loaded replay/survey
+  // bundles by `script-src 'self'`. Adding `*.posthog.com` back would
+  // re-widen the policy for no benefit and undo the ad-blocker resistance.
+  `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com`,
   `style-src 'self' 'unsafe-inline' https://*.enablebanking.com`,
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com https://cdn.recapt.app`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com`,
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
