@@ -841,17 +841,17 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
 
     expect(res.status).toBe(201)
     expect(insertedInvoice).not.toBeNull()
-    // ROT = 30% of 10000 labor.
-    expect(insertedInvoice!.deduction_total).toBe(3000)
+    // ROT = 30% of the labor incl. moms (HUSFL 6-9 §§): 30% x 12 500 = 3 750.
+    expect(insertedInvoice!.deduction_total).toBe(3750)
     // Personnummer never stored in plaintext: ciphertext + last4 only.
     expect(insertedInvoice!.deduction_personnummer_encrypted).toBeTruthy()
     expect(insertedInvoice!.deduction_personnummer_encrypted).not.toContain(VALID_PNR)
     expect(insertedInvoice!.deduction_personnummer_last4).toBe('2388')
-    // Customer share: total 12500 minus the 3000 Skatteverket pays via 1513.
-    expect(insertedInvoice!.remaining_amount).toBe(9500)
+    // Customer share: total 12500 minus the 3750 Skatteverket pays via 1513.
+    expect(insertedInvoice!.remaining_amount).toBe(8750)
     expect(insertedItems).not.toBeNull()
     expect(insertedItems![0].deduction_type).toBe('rot')
-    expect(insertedItems![0].deduction_amount).toBe(3000)
+    expect(insertedItems![0].deduction_amount).toBe(3750)
     expect(insertedItems![0].work_type).toBe('BYGG')
     expect(insertedItems![0].labor_hours).toBe(10)
     // Invoice-level fastighetsbeteckning stamped onto the deduction line.
@@ -927,11 +927,11 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    // RUT = 50% of 2000 labor.
-    expect(body.data.preview.deduction_total).toBe(1000)
+    // RUT = 50% of the labor incl. moms (HUSFL 6-9 §§): 50% x 2 500 = 1 250.
+    expect(body.data.preview.deduction_total).toBe(1250)
     expect(body.data.preview.deduction_personnummer_last4).toBe('2388')
     expect(body.data.preview.deduction_personnummer_encrypted).toBeUndefined()
-    expect(body.data.preview.items[0].deduction_amount).toBe(1000)
+    expect(body.data.preview.items[0].deduction_amount).toBe(1250)
   })
 
   it('persists article_id + revenue_account on line items (validated against the chart)', async () => {

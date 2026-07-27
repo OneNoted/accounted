@@ -100,8 +100,8 @@
     "version": 2
   },
   "horizontal/swedish-payroll": {
-    "hash": "a01f7a3ded13ec38fe224f1770d1b628efdda8d225ccd1e75eb0354f51ffec60",
-    "version": 3
+    "hash": "8cbedb0245ae1f3a042bc2310d9563424ed58ef9fc6f3e853693844323653faa",
+    "version": 4
   },
   "horizontal/swedish-payroll/agi-filing": {
     "hash": "91aa490472fafff434088301dd193ed474589b36ae22bdaab640b42bc3b3c255",
@@ -124,8 +124,8 @@
     "version": 1
   },
   "horizontal/swedish-payroll/ob-overtime": {
-    "hash": "ba6b5dbdbb8e00edb9c592aae2185980ca52aa20888434bc5761ca307de712dd",
-    "version": 1
+    "hash": "4d4e079ae3178ab070ebd696c020d2598352e706430354de0f4bcbfcfcdbc471",
+    "version": 2
   },
   "horizontal/swedish-payroll/sick-pay": {
     "hash": "ba6b5dbdbb8e00edb9c592aae2185980ca52aa20888434bc5761ca307de712dd",

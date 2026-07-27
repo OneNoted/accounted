@@ -324,6 +324,119 @@ describe('gnubok_tag_journal_lines: staging', () => {
     expect(insertCalls.some((args) => args[0] === 'pending_operations')).toBe(false)
   })
 
+  it('walks multiple entry pages: a full first page continues, and entries on later pages still match', async () => {
+    // Regression target: the two-step fetch pages journal_entries with
+    // .range() while filtering already-seen ids client-side (seenEntryIds).
+    // This pins the interaction: a FULL first page (exactly ENTRY_PAGE_SIZE
+    // rows) must not end the walk, an overlapping row on the next page (as a
+    // shifted range can produce) must be dropped exactly once, and a genuinely
+    // new entry on that page must survive the dedup and contribute its lines.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: false }, error: null })
+
+    const entry = (i: number) => ({
+      id: `je-${i}`,
+      entry_date: '2024-03-01',
+      voucher_number: i,
+      voucher_series: 'A',
+      status: 'posted',
+    })
+    const bareLine = (i: number, journalEntryId: string, account: string) => ({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      journal_entry_id: journalEntryId,
+      account_number: account,
+      debit_amount: 250,
+      credit_amount: 0,
+      sort_order: 1,
+    })
+
+    // Page 1: exactly ENTRY_PAGE_SIZE (1000) entries, so the loop must fetch
+    // a second page. 1000 entries → 10 line chunks of 100 ids; only the first
+    // chunk has a matching line.
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => entry(i)), error: null })
+    enqueue({ data: [bareLine(1, 'je-0', '4010')], error: null })
+    for (let c = 1; c < 10; c++) enqueue({ data: [], error: null })
+
+    // Page 2 overlaps page 1 (je-999 returned again) and carries one new
+    // entry. The duplicate is skipped; the new entry gets its own line chunk.
+    enqueue({ data: [entry(999), entry(1000)], error: null })
+    enqueue({ data: [bareLine(2, 'je-1000', '5010')], error: null })
+
+    enqueue({ data: { id: 'op-paging-1' }, error: null }) // pending_operations insert
+
+    const result = (await tagJournalLines.execute(
+      { dimensions: { '6': 'P01' }, reason: 'Retro-taggning', filters: { only_untagged: true } },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: { matched_lines: number; sample: Array<{ account: string }> }
+    }
+
+    expect(result.staged).toBe(true)
+    // Both pages contributed: nothing on the far side of the page boundary
+    // was silently dropped by the dedup.
+    expect(result.preview.matched_lines).toBe(2)
+    const sampleAccounts = result.preview.sample.map((s) => s.account)
+    expect(sampleAccounts).toContain('4010') // line from page 1 (je-0)
+    expect(sampleAccounts).toContain('5010') // line from page 2 (je-1000)
+
+    const fromCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls
+    // Exactly two entry pages were read (the loop terminated on the short
+    // second page) and 11 line chunks ran: 10 for page 1, ONE for page 2:
+    // the overlapping je-999 was deduped, so only je-1000 needed lines.
+    expect(fromCalls.filter((args) => args[0] === 'journal_entries')).toHaveLength(2)
+    expect(fromCalls.filter((args) => args[0] === 'journal_entry_lines')).toHaveLength(11)
+  })
+
+  it('terminates when the match count is an exact multiple of the entry page size', async () => {
+    // 1000 matches exactly: the raw first page is full, so the loop probes a
+    // second page, finds it empty, and must stop instead of spinning (the
+    // termination check reads the RAW page length, before dedup).
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: false }, error: null })
+
+    enqueue({
+      data: Array.from({ length: 1000 }, (_, i) => ({
+        id: `je-${i}`,
+        entry_date: '2024-03-01',
+        voucher_number: i,
+        voucher_series: 'A',
+        status: 'posted',
+      })),
+      error: null,
+    })
+    enqueue({
+      data: [
+        {
+          id: '00000000-0000-4000-8000-000000000001',
+          journal_entry_id: 'je-0',
+          account_number: '4010',
+          debit_amount: 250,
+          credit_amount: 0,
+          sort_order: 1,
+        },
+      ],
+      error: null,
+    })
+    for (let c = 1; c < 10; c++) enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null }) // page 2: empty, ends the walk
+    enqueue({ data: { id: 'op-paging-2' }, error: null }) // pending_operations insert
+
+    const result = (await tagJournalLines.execute(
+      { dimensions: { '6': 'P01' }, reason: 'Retro-taggning', filters: { only_untagged: true } },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { matched_lines: number } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.matched_lines).toBe(1)
+    const fromCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls
+    expect(fromCalls.filter((args) => args[0] === 'journal_entries')).toHaveLength(2)
+  })
+
   it('dry_run previews the match without inserting a pending operation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null })

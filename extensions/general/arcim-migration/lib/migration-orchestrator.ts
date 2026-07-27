@@ -31,6 +31,7 @@ import {
   fetchSupplierInvoicesDirect,
 } from '@/lib/providers/provider-data-fetcher'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { createLogger } from '@/lib/logger'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import {
   mapCustomer,
@@ -42,6 +43,8 @@ import {
   buildFxRateIndex,
   type FxUnresolved,
 } from './entity-mapper'
+
+const log = createLogger('extensions/arcim-migration/migration-orchestrator')
 
 export interface MigrationOptions {
   consentId: string
@@ -91,11 +94,17 @@ function getOrgNumberFromParty(party: PartyDto): string | null {
  * migration reports it instead of passing it off as an ordinary import.
  */
 function logFxUnresolved(kind: string, invoiceNumber: string, fx: FxUnresolved): void {
-  console.error(
-    `[migration] ${kind} ${invoiceNumber}: imported without a SEK conversion ` +
-      `(${fx.currency} @ ${fx.date || 'okänt datum'}, reason=${fx.reason}). ` +
-      `Set an exchange rate before booking it.`
-  )
+  // Structured logger, not console.error: the record passes the observability
+  // redaction pipeline (lib/observability/redact.ts) before it can reach any
+  // sink, so invoice identifiers in log output stay inside the same PII
+  // controls as every other server log line.
+  log.error('document imported without a SEK conversion; set an exchange rate before booking it', {
+    entityType: kind,
+    entityId: invoiceNumber,
+    currency: fx.currency,
+    documentDate: fx.date || null,
+    reason: fx.reason,
+  })
 }
 
 // ── Main orchestrator ─────────────────────────────────────────────

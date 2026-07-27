@@ -3,8 +3,14 @@
  *
  * Implements the calculation and validation logic for Sweden's tax deduction
  * for household services (RUT) and home renovation (ROT). As of 2026:
- *   - ROT: 30% of labor cost, max 50 000 kr per person per year.
- *   - RUT: 50% of labor cost, max 75 000 kr per person per year.
+ *   - ROT: 30% of labor cost INCLUDING VAT, max 50 000 kr per person per year.
+ *   - RUT: 50% of labor cost INCLUDING VAT, max 75 000 kr per person per year.
+ *
+ * The base is arbetskostnaden inklusive moms per HUSFL (2009:194) 6-9 §§:
+ * Skatteverkets own worked example is 18 000 kr arbetskostnad = 22 500 kr
+ * inkl. moms (25%), ROT 30% = 6 750 kr. Callers must therefore pass the
+ * line's VAT rate; a missing/null rate is treated as 0% (momsfri labor),
+ * where inkl. and exkl. coincide.
  *
  * The deduction applies to labor only: material costs and travel time are
  * NOT eligible. In this v1 we treat the entire invoice item amount as labor
@@ -135,6 +141,13 @@ export interface ItemForDeduction {
   /** 'rot' | 'rut' | null. Drives whether the deduction kicks in at all. */
   deduction_type?: DeductionType | null
   /**
+   * The line's VAT rate in percent (25, 12, 6, 0). The statutory deduction
+   * base is the labor cost INCLUDING VAT (HUSFL 6-9 §§), so every caller
+   * that knows the rate must pass it. null/undefined means 0% (momsfri
+   * labor), where inkl. and exkl. moms coincide.
+   */
+  vat_rate?: number | null
+  /**
    * Optional. Reserved for a future iteration where the eligible portion of
    * the row is just the labor hours × hourly rate. v1 ignores this and
    * deducts on the full line total; we still take the field so the API
@@ -145,18 +158,27 @@ export interface ItemForDeduction {
 
 /**
  * Compute the deduction amount for a single invoice item. Returns 0 when
- * the item has no deduction_type. The result is always >= 0 and <= line
- * total (no over-deduction even if percentages are tweaked).
+ * the item has no deduction_type. The base is the line total INCLUDING VAT
+ * (HUSFL 6-9 §§: 30% av arbetskostnaden inklusive moms for ROT, 50% for
+ * RUT). The per-line VAT is reproduced with the exact rounding the write
+ * path stores on invoice_items.vat_amount (Math.round(lineTotal * rate /
+ * 100 * 100) / 100 in build-invoice-write.ts), so the deduction and the
+ * stored VAT can never disagree by an öre. The result is always >= 0 and
+ * <= line total incl. VAT (no over-deduction even if percentages are
+ * tweaked).
  */
 export function computeDeduction(item: ItemForDeduction): number {
   if (!item.deduction_type) return 0
   const lineTotal = item.unit_price * item.quantity
   if (lineTotal <= 0) return 0
+  const rate = item.vat_rate ?? 0
+  const lineVat = rate > 0 ? Math.round(lineTotal * rate / 100 * 100) / 100 : 0
+  const lineTotalInclVat = lineTotal + lineVat
   const percent = item.deduction_type === 'rot' ? ROT_PERCENT : RUT_PERCENT
-  const raw = lineTotal * percent
-  // Cap at line total: defensive against future rule changes that would
-  // push percent past 1.0.
-  const capped = Math.min(raw, lineTotal)
+  const raw = lineTotalInclVat * percent
+  // Cap at line total incl. VAT: defensive against future rule changes that
+  // would push percent past 1.0.
+  const capped = Math.min(raw, lineTotalInclVat)
   return Math.round(capped * 100) / 100
 }
 

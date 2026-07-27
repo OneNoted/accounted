@@ -1463,3 +1463,89 @@ describe('getEffectiveOpeningBalances: derive IB from #UB -1 (issue #675)', () =
     })
   })
 })
+
+// --- #RAR validation: prior-year records and malformed indexes ---
+//
+// The 18-month BFL 3 kap. cap is enforced as a hard refusal for #RAR 0 at
+// import time (ensureFiscalPeriod). The parser layer validates EVERY #RAR
+// record, including prior years (-1, -2, ...): malformed records (bad index,
+// invalid dates, reversed dates) are reported and skipped, an over-long span
+// is reported as a warning but kept so the import layer's precise error for
+// year 0 still sees the real dates.
+
+describe('parseSIEFile: #RAR record validation', () => {
+  const HEADER = ['#FLAGGA 0', '#SIETYP 4', '#FNAMN "Test AB"']
+
+  it('keeps parsing a well-formed multi-year file exactly as before', () => {
+    const content = [
+      ...HEADER,
+      '#RAR 0 20240101 20241231',
+      '#RAR -1 20230101 20231231',
+      '#RAR -2 20220101 20221231',
+    ].join('\n')
+
+    const result = parseSIEFile(content)
+    expect(result.header.fiscalYears).toHaveLength(3)
+    expect(result.header.fiscalYears.map((fy) => fy.yearIndex)).toEqual([0, -1, -2])
+    expect(result.header.fiscalYears[1].start).toBe('2023-01-01')
+    expect(result.header.fiscalYears[1].end).toBe('2023-12-31')
+    expect(result.issues.filter((i) => i.tag === 'RAR')).toHaveLength(0)
+  })
+
+  it('accepts an 18-month förlängt räkenskapsår without warnings', () => {
+    const content = [...HEADER, '#RAR 0 20230701 20241231'].join('\n')
+
+    const result = parseSIEFile(content)
+    expect(result.header.fiscalYears).toHaveLength(1)
+    expect(result.issues.filter((i) => i.tag === 'RAR')).toHaveLength(0)
+  })
+
+  it('skips a #RAR record whose year index does not parse to an integer', () => {
+    const content = [...HEADER, '#RAR 0 20240101 20241231', '#RAR abc 20230101 20231231'].join('\n')
+
+    const result = parseSIEFile(content)
+    expect(result.header.fiscalYears).toHaveLength(1)
+    expect(result.header.fiscalYears[0].yearIndex).toBe(0)
+    expect(result.issues.some((i) => i.message.includes('Ogiltigt årsindex'))).toBe(true)
+  })
+
+  it('skips a prior-year #RAR with an invalid calendar date', () => {
+    const content = [...HEADER, '#RAR 0 20240101 20241231', '#RAR -1 20230101 20230230'].join('\n')
+
+    const result = parseSIEFile(content)
+    expect(result.header.fiscalYears).toHaveLength(1)
+    expect(result.issues.some((i) => i.message.includes('Invalid fiscal year dates'))).toBe(true)
+  })
+
+  it('skips a prior-year #RAR whose end date precedes its start date', () => {
+    const content = [...HEADER, '#RAR 0 20240101 20241231', '#RAR -1 20231231 20230101'].join('\n')
+
+    const result = parseSIEFile(content)
+    expect(result.header.fiscalYears).toHaveLength(1)
+    expect(
+      result.issues.some((i) => i.message.includes('ligger före startdatumet'))
+    ).toBe(true)
+  })
+
+  it('warns about a 24-month prior-year #RAR but keeps the record', () => {
+    const content = [...HEADER, '#RAR 0 20240101 20241231', '#RAR -1 20220101 20231231'].join('\n')
+
+    const result = parseSIEFile(content)
+    expect(result.header.fiscalYears).toHaveLength(2)
+    expect(
+      result.issues.some(
+        (i) => i.message.includes('24 månader') && i.message.includes('BFL 3 kap.')
+      )
+    ).toBe(true)
+  })
+
+  it('warns about an over-long current-year #RAR but keeps the record for the import-layer refusal', () => {
+    const content = [...HEADER, '#RAR 0 20230101 20241231'].join('\n')
+
+    const result = parseSIEFile(content)
+    expect(result.header.fiscalYears).toHaveLength(1)
+    expect(result.header.fiscalYears[0].start).toBe('2023-01-01')
+    expect(result.header.fiscalYears[0].end).toBe('2024-12-31')
+    expect(result.issues.some((i) => i.message.includes('högst 18 månader'))).toBe(true)
+  })
+})

@@ -317,6 +317,101 @@ describe('runVatDeclarationChecks', () => {
     }
     const findings = runVatDeclarationChecks(rutor)
     expect(findings.find((f) => f.code === 'TAXABLE_SALES_WITHOUT_OUTPUT')).toBeUndefined()
+    expect(findings.find((f) => f.code === 'SALES_OUTPUT_VAT_SHORTFALL')).toBeUndefined()
+  })
+
+  // Regression (2026-07-27): the binary sales check cleared as soon as ANY
+  // output VAT existed, so 2 000 kr of missing utgående moms on a 400 000 kr
+  // base rendered "Inga fel hittades" with Skicka enabled. The proportional
+  // form warns (never blocks: periodisering legitimately drifts this way).
+  describe('SALES_OUTPUT_VAT_SHORTFALL (proportional, warning tier)', () => {
+    it('warns when the sales base implies more output VAT than declared', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta05: 400000,
+        ruta10: 98000, // 100 000 kr expected at 25%: 2 000 kr moms missing
+        ruta49: 98000,
+      }
+      const findings = runVatDeclarationChecks(rutor)
+      const finding = findings.find((f) => f.code === 'SALES_OUTPUT_VAT_SHORTFALL')
+      expect(finding?.status).toBe('WARNING')
+      expect(finding?.message).toMatch(/saknar/)
+      expect(finding?.message).toMatch(/periodisering/)
+      // Never a filing blocker: no ERROR may fire on this declaration, so
+      // isFilingBlocked (ERROR-only) keeps Skicka enabled while the banner
+      // stops claiming "Inga fel hittades".
+      expect(findings.find((f) => f.code === 'TAXABLE_SALES_WITHOUT_OUTPUT')).toBeUndefined()
+      expect(findings.every((f) => f.status === 'WARNING')).toBe(true)
+    })
+
+    it('stays green for an exact mixed-rate declaration', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta05: 170000, // 100 000 @25% + 50 000 @12% + 20 000 @6%
+        ruta10: 25000,
+        ruta11: 6000,
+        ruta12: 1200,
+        ruta49: 32200,
+      }
+      expect(runVatDeclarationChecks(rutor)).toEqual([])
+    })
+
+    it('absorbs drift inside the 0.5% tolerance', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta05: 100040, // implied base 100 000, tolerance 500
+        ruta10: 25000,
+        ruta49: 25000,
+      }
+      expect(
+        runVatDeclarationChecks(rutor).find((f) => f.code === 'SALES_OUTPUT_VAT_SHORTFALL'),
+      ).toBeUndefined()
+    })
+
+    it('warns just outside the 0.5% tolerance', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta05: 100600, // implied base 100 000, tolerance 500
+        ruta10: 25000,
+        ruta49: 25000,
+      }
+      expect(
+        runVatDeclarationChecks(rutor).find((f) => f.code === 'SALES_OUTPUT_VAT_SHORTFALL')?.status,
+      ).toBe('WARNING')
+    })
+
+    it('applies the 1 kr tolerance floor at a small base', () => {
+      const inside: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta05: 100.8, // implied 100, floor tolerance 1 kr
+        ruta10: 25,
+        ruta49: 25,
+      }
+      expect(
+        runVatDeclarationChecks(inside).find((f) => f.code === 'SALES_OUTPUT_VAT_SHORTFALL'),
+      ).toBeUndefined()
+
+      const outside: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta05: 104,
+        ruta10: 25,
+        ruta49: 25,
+      }
+      expect(
+        runVatDeclarationChecks(outside).find((f) => f.code === 'SALES_OUTPUT_VAT_SHORTFALL')?.status,
+      ).toBe('WARNING')
+    })
+
+    it('does not fire when output VAT is absent entirely (binary ERROR owns that case)', () => {
+      const rutor: VatDeclarationRutor = {
+        ...emptyRutor,
+        ruta05: 10000,
+        ruta49: 0,
+      }
+      const findings = runVatDeclarationChecks(rutor)
+      expect(findings.find((f) => f.code === 'TAXABLE_SALES_WITHOUT_OUTPUT')?.status).toBe('ERROR')
+      expect(findings.find((f) => f.code === 'SALES_OUTPUT_VAT_SHORTFALL')).toBeUndefined()
+    })
   })
 
   // Mirror: output VAT without taxable sales base.
@@ -506,6 +601,9 @@ describe('runVatDeclarationChecks', () => {
     const findings = runVatDeclarationChecks(rutor)
     expect(findings.find((f) => f.code === 'TAXABLE_SALES_WITHOUT_OUTPUT')).toBeUndefined()
     expect(findings.find((f) => f.code === 'OUTPUT_VAT_WITHOUT_SALES_BASE')).toBeUndefined()
+    // The proportional warning checks the OPPOSITE direction only: excess
+    // output (VMB, uthyrning, overrides) must never trigger it either.
+    expect(findings.find((f) => f.code === 'SALES_OUTPUT_VAT_SHORTFALL')).toBeUndefined()
   })
 
   // Multiple findings should surface together so the user sees the whole picture.

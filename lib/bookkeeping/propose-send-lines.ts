@@ -246,6 +246,7 @@ function buildSendLines(
       unit_price: item.unit_price,
       quantity: item.quantity,
       deduction_type: item.deduction_type,
+      vat_rate: item.vat_rate,
     })
     const amountSek = roundOre(toSek(deduction))
     if (amountSek <= 0) continue

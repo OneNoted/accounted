@@ -16,6 +16,18 @@ name: Scheduled Image Vulnerability Scan
 #   3. workflow_dispatch: run on demand from the Actions tab after a patch to
 #      confirm clean.
 #
+# Severity gate policy (both jobs): only fixable CRITICAL/HIGH CVEs may fail a
+# run; LOW/MEDIUM findings must never turn a run red. Every sarif-format Trivy
+# step MUST keep `limit-severities-for-sarif: true`, otherwise trivy-action
+# unsets TRIVY_SEVERITY for SARIF output and the gate silently widens to all
+# severities (that exact misconfiguration shipped once; see the scan step).
+#
+# The `sca` job is the dependency-level counterpart of the image scan: a daily
+# Trivy filesystem scan of the npm lockfile. It exists because Dependabot was
+# deliberately removed (PR #1084) and two HIGH Next.js CVEs then sat
+# undetected until a manual check; this job is the automated SCA alerting
+# that replaces it.
+#
 # NOTE: GitHub only runs `schedule` and `workflow_run` triggers from the default
 # branch, so both start firing once this is merged to main.
 on:
@@ -84,3 +96,47 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy
+
+  sca:
+    runs-on: ubuntu-latest
+    # The lockfile does not change when an image is published, so the
+    # workflow_run trigger is irrelevant here: run on the daily schedule and
+    # on manual dispatch only.
+    if: github.event_name != 'workflow_run'
+    permissions:
+      contents: read
+      # SARIF upload to the repo's "Security" tab.
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Scan npm lockfile with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          # Filesystem scan: picks up package-lock.json and reports known CVEs
+          # in the resolved dependency tree, including transitive pins. Same
+          # gate policy as the image scan above: fail only on fixable
+          # CRITICAL/HIGH, and keep limit-severities-for-sarif set (see the
+          # header comment for why dropping it silently widens the gate).
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-sca.sarif
+          limit-severities-for-sarif: true
+
+      - name: Upload Trivy SCA results to GitHub Security tab
+        # if: always() so findings reach the Security tab even when the scan
+        # step failed the run. Distinct category from the image scan so
+        # dependency alerts and image alerts stay separately traceable.
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-sca.sarif
+          category: trivy-sca

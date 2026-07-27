@@ -359,6 +359,7 @@ function generateRotRutLines(
       unit_price: side === 'credit' ? Math.abs(item.unit_price) : item.unit_price,
       quantity: side === 'credit' ? Math.abs(item.quantity) : item.quantity,
       deduction_type: item.deduction_type,
+      vat_rate: item.vat_rate,
     })
     if (amount <= 0) continue
     const amountSek = Math.round(toSek(amount) * 100) / 100
