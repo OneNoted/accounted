@@ -94,6 +94,9 @@ describe('submitFeedback', () => {
     expect(captureMock).toHaveBeenCalledWith('support_feedback_submitted', {
       subject: 'Hjälpsida',
       delivered: true,
+      email: 'ok',
+      ticket: 'ok',
+      lost: false,
     })
     // Free text is user content: it must never ride along as an event property.
     expect(JSON.stringify(captureMock.mock.calls)).not.toContain('känslig text')
@@ -178,6 +181,95 @@ describe('submitFeedback', () => {
       const result = await submitFeedback({ message: 'msg' })
       expect(result.channels).toEqual(['email'])
       expect(sendMessageMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('breadcrumb channel outcomes', () => {
+    it('reports ticket: ok when the ticket opened', async () => {
+      stubFetchOk()
+      await submitFeedback({ message: 'msg' })
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ ticket: 'ok', lost: false })
+      )
+    })
+
+    // 'unavailable' is the expected steady state (Support off, analytics off);
+    // 'failed' means conversations were live and the call still did not land.
+    // Only the second deserves an alert, so they must not collapse.
+    it("reports ticket: unavailable when conversations are not available", async () => {
+      isAvailableMock.mockReturnValue(false)
+      stubFetchOk()
+      await submitFeedback({ message: 'msg' })
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ ticket: 'unavailable' })
+      )
+    })
+
+    it('reports ticket: failed when sendMessage throws', async () => {
+      sendMessageMock.mockRejectedValueOnce(new Error('boom'))
+      stubFetchOk()
+      await submitFeedback({ message: 'msg' })
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ ticket: 'failed' })
+      )
+    })
+
+    it('reports email: failed but not lost when the ticket still opened', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }))
+      await submitFeedback({ message: 'msg' })
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ email: 'failed', ticket: 'ok', lost: false })
+      )
+    })
+
+    // The alerting signal: the user's message reached nobody at all.
+    it('sets lost when email failed and the ticket was unavailable', async () => {
+      isAvailableMock.mockReturnValue(false)
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('down')))
+      await submitFeedback({ message: 'msg' })
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ email: 'failed', ticket: 'unavailable', lost: true })
+      )
+    })
+
+    it('sets lost when email failed and the ticket genuinely errored', async () => {
+      sendMessageMock.mockRejectedValueOnce(new Error('boom'))
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('down')))
+      await submitFeedback({ message: 'msg' })
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ email: 'failed', ticket: 'failed', lost: true })
+      )
+    })
+
+    // A hung sendMessage must not hold the confirmation dialog open: the ticket
+    // is capped and reported as 'timeout', while email still decides ok.
+    it('does not let a hanging ticket call block the user', async () => {
+      vi.useFakeTimers()
+      sendMessageMock.mockImplementationOnce(() => new Promise(() => {}))
+      stubFetchOk()
+      const pending = submitFeedback({ message: 'msg' })
+      await vi.advanceTimersByTimeAsync(5000)
+      const result = await pending
+      vi.useRealTimers()
+
+      expect(result.ok).toBe(true)
+      expect(result.channels).toEqual(['email'])
+      expect(captureMock).toHaveBeenCalledWith(
+        'support_feedback_submitted',
+        expect.objectContaining({ email: 'ok', ticket: 'timeout', lost: false })
+      )
+    })
+
+    it('still carries no message body', async () => {
+      stubFetchOk()
+      await submitFeedback({ subject: 'Moms', message: 'hemlig fritext om bolaget' })
+      expect(JSON.stringify(captureMock.mock.calls)).not.toContain('hemlig fritext')
     })
   })
 })
