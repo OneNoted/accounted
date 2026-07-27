@@ -8,11 +8,36 @@
  * changes.
  */
 import { writeFileSync, mkdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 
-const errors = await import('@/lib/docs/content/errors')
-const reference = await import('@/lib/docs/content/reference')
-const connectClaude = await import('@/lib/docs/content/connect-claude')
+// `server-only` throws on import outside a Next.js server-component graph. The
+// reference builder pulls it in transitively (lib/api/v1/load-routes -> every
+// v1 route -> lib/init -> lib/analytics/posthog-observability ->
+// posthog-server), which broke this script the moment PostHog landed. Nothing
+// here executes request-time code: it only reads exported markdown builders,
+// so a no-op stub is the honest resolution.
+const require = createRequire(import.meta.url)
+const ModuleCtor = require('node:module') as {
+  _load: (request: string, ...rest: unknown[]) => unknown
+}
+const originalLoad = ModuleCtor._load
+ModuleCtor._load = function (request: string, ...rest: unknown[]) {
+  if (request === 'server-only') return {}
+  return originalLoad.call(this, request, ...rest)
+}
+
+let errors, reference, connectClaude
+try {
+  errors = await import('@/lib/docs/content/errors')
+  reference = await import('@/lib/docs/content/reference')
+  connectClaude = await import('@/lib/docs/content/connect-claude')
+} finally {
+  // Scope the stub to the imports that need it: leaving a global loader hook
+  // patched for the rest of the process would silently disarm the guard for
+  // anything imported later (compliance swarm, ISO 27001 A.8.28).
+  ModuleCtor._load = originalLoad
+}
 
 const buildErrorReferenceMd = errors.buildErrorReferenceMd ?? (errors as { default?: typeof errors }).default?.buildErrorReferenceMd
 const buildResourcePages = reference.buildResourcePages ?? (reference as { default?: typeof reference }).default?.buildResourcePages
