@@ -19,6 +19,7 @@ import AgentChat, {
 import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
 import ContextChip from './ContextChip'
+import { intentLabel } from './conversation-display'
 import AgentAvatar from './AgentAvatar'
 import AgentSessionList from './AgentSessionList'
 import SandboxAgentPreview from './SandboxAgentPreview'
@@ -105,8 +106,8 @@ export default function AgentSheet({
   const companyCtx = useCompanyOptional()
   const isSandbox = companyCtx?.isSandbox ?? false
   const agentName = identity.displayName?.trim() || null
-  const sheetTitle = intentToTitle(intentId, agentName)
-  const displayTitle = loaded ? (loaded.title ?? intentToTitle(loaded.intentId, agentName)) : sheetTitle
+  const sheetTitle = intentLabel(intentId, agentName)
+  const displayTitle = loaded ? (loaded.title ?? intentLabel(loaded.intentId, agentName)) : sheetTitle
   const activeConversationId = loaded?.id ?? conversationId
   // A resumed thread's stored ref wins: it says what THAT conversation was
   // about, which is the whole reason to show this. Falls back to the ref the
@@ -374,19 +375,4 @@ export default function AgentSheet({
   )
 }
 
-function intentToTitle(intentId: string, agentName: string | null): string {
-  switch (intentId) {
-    case 'general.help':
-      return agentName ? `Fråga ${agentName}` : 'Fråga din assistent'
-    case 'transaction.categorization':
-      return 'Hjälp med transaktion'
-    case 'verifikation.draft':
-      return 'Hjälp med verifikation'
-    case 'invoice.draft':
-      return 'Hjälp med faktura'
-    case 'supplier_invoice.review':
-      return 'Granska leverantörsfaktura'
-    default:
-      return agentName ? `Fråga ${agentName}` : 'Fråga din assistent'
-  }
-}
+

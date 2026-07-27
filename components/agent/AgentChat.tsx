@@ -196,6 +196,21 @@ export default function AgentChat({
   const firstTurnFiredRef = useRef(false)
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [])
+  // Read by the announcement effect, which must not re-run on every token: a
+  // `messages` dependency would fire it hundreds of times per turn. Written in
+  // an effect rather than during render: React may replay a render, and a
+  // render-phase ref write can therefore leave the announcement reading a
+  // snapshot the user never saw. Declared BEFORE the announcement effect so it
+  // is already current when that one runs for the same commit.
+  const messagesRef = useRef(messages)
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+  // Where the current turn's messages start. Without it the announcement
+  // searches the whole thread, so a turn that produces no text of its own (a
+  // tool-only turn, an error) finds the PREVIOUS answer and reads it out as
+  // though it were the new one.
+  const turnStartRef = useRef(0)
   const hasAi = useCapability(CAPABILITY.ai)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -204,13 +219,21 @@ export default function AgentChat({
   // erroring, aborting or being stopped, and a channel that misses one of
   // those leaves the trigger claiming the agent is still working forever.
   const turnOpenRef = useRef(false)
+  // Screen-reader announcement for the turn. Deliberately NOT the streaming
+  // text: a live region over token deltas re-announces on every delta and
+  // renders the chat unusable with a screen reader. Announce the two states
+  // that matter instead, and the finished answer once, when it is finished.
+  const [announcement, setAnnouncement] = useState('')
   useEffect(() => {
     if (streaming) {
       turnOpenRef.current = true
+      turnStartRef.current = messagesRef.current.length
       onStatus?.({ type: 'turn_start' })
+      setAnnouncement('Assistenten skriver ett svar.')
     } else if (turnOpenRef.current) {
       turnOpenRef.current = false
       onStatus?.({ type: 'turn_end' })
+      setAnnouncement(announceableAnswer(messagesRef.current.slice(turnStartRef.current)))
     }
   }, [streaming, onStatus])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -717,6 +740,13 @@ export default function AgentChat({
 
   return (
     <div className="relative flex flex-col h-full min-h-0">
+      {/* The chat had no live region at all, so a screen-reader user got no
+          signal that the assistant had answered: the reply simply appeared for
+          people who could see it. role="status" is the polite variant, which
+          waits for a pause rather than interrupting. */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </div>
       {/* The pill is positioned against THIS box, not the whole component: the
           composer below grows as the user types, and a fixed offset from the
           bottom would slide the pill under it. */}
@@ -1283,4 +1313,33 @@ export function normalizeStoredMessages(
     })
   }
   return out
+}
+
+/**
+ * What to read out when a turn finishes.
+ *
+ * Takes only the CURRENT turn's messages: given the whole thread, a turn that
+ * produced no text of its own would find the previous answer and announce it
+ * again as if it were new.
+ *
+ * The cap exists because a screen reader reads a live region straight through:
+ * a 900-word bokslut explanation announced in one uninterruptible burst is
+ * worse than not announcing it. It covers the WHOLE announcement, suffix
+ * included, so the promise the constant makes is the one the output keeps.
+ */
+export const ANNOUNCEMENT_LIMIT = 400
+const CONTINUES = '… Svaret fortsätter i meddelandet.'
+
+export function announceableAnswer(messages: ChatMessage[]): string {
+  const last = [...messages].reverse().find((m) => m.role === 'assistant')
+
+  // Stop leaves the partial text in place with a visible marker. Reading it
+  // out as a finished answer would tell a screen-reader user the opposite of
+  // what the marker tells everyone else.
+  if (last?.interrupted) return 'Assistenten avbröts. Ett ofullständigt svar står i meddelandet.'
+
+  const text = last?.text?.trim()
+  if (!text) return 'Assistenten är klar.'
+  if (text.length <= ANNOUNCEMENT_LIMIT) return text
+  return text.slice(0, ANNOUNCEMENT_LIMIT - CONTINUES.length).trimEnd() + CONTINUES
 }
