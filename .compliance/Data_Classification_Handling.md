@@ -100,17 +100,45 @@ or accounting content, and neither is readable across origins. They are the
 basis for treating this storage as strictly necessary rather than requiring
 consent, so a change in their content changes that assessment.
 
-Controls:
+Retention and deletion (ISO 27001 A.8.10). The two keys have different
+lifecycles, and the difference is a property of the PostHog SDK, not a choice:
+
+- `ph_conv_<project_token>` — **deleted on logout.** `resetAnalyticsIdentity()`
+  (`lib/analytics/reset.ts`) runs in both logout handlers before
+  `supabase.auth.signOut()`; `posthog.reset()` calls the conversations
+  manager's own reset, which removes this key. This is what stops a shared
+  device carrying one person's ticket session into the next person's session.
+  Verified by inspecting the SDK, not by executing a logout: confirm manually
+  when convenient.
+- `seenSurvey_<survey_id>` — **no deletion trigger; persists until the user
+  clears site data.** No PostHog bundle enumerates `localStorage` (verified:
+  zero occurrences of `localStorage.key(` or `Object.keys(localStorage)` in
+  `module.js`, `surveys.js` and `conversations.js`), so the SDK cannot
+  discover these keys to remove them, and neither `posthog.reset()` nor our
+  own purge can either without a substring sweep.
+
+  Accepted, and this is the retention position rather than an oversight: the
+  value is the string `"true"` under an opaque survey id, holds no personal
+  data, and is bounded in count by the number of surveys ever shown. Deleting
+  it on logout would re-prompt every survey to the next person on the device,
+  which is worse for the user and produces false survey responses.
+
+Other controls:
 
 - `lib/analytics/purge-legacy-storage.ts` removes storage from the retired
   Recapt processor (`recapt` / `glimt` substrings) on every boot. It
-  deliberately does NOT touch `seenSurvey_*` or `ph_conv_*`: clearing those
-  would re-prompt surveys and orphan the user's own ticket.
+  deliberately does NOT touch `seenSurvey_*` or `ph_conv_*`.
 - No cookies are set by the application or by PostHog under this configuration.
 
 Review trigger: **enabling any new PostHog product may silently add device
 storage**, because the products write directly to `localStorage` rather than
-through the SDK's persistence setting. After enabling one, inspect
-`localStorage` on production and update this section, `.compliance/ropa.yaml`
-and `app/(public)/privacy/page.tsx` together. The Support product was caught
-this way; the assumption that `persistence: 'memory'` was sufficient was wrong.
+through the SDK's persistence setting. Treat enabling one as a change to this
+section: before launch, inspect `localStorage` on production and update this
+section, `.compliance/ropa.yaml` and `app/(public)/privacy/page.tsx` together,
+including each new key's deletion trigger. The Support product was caught
+post-hoc rather than pre-launch; the assumption that `persistence: 'memory'`
+was sufficient was wrong, and it left the privacy page inaccurate in the
+interval.
+
+Last reviewed: 2026-07-27 (PostHog Support enablement). Next review: on the
+next PostHog product enablement, or 2027-01-27, whichever comes first.

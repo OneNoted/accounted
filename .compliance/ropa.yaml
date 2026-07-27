@@ -597,6 +597,13 @@ processing_activities:
       # innan användaren faktiskt kontaktar supporten. Verifierat i prod.
       - no_analytics_data_or_cookies_on_device
       - only_functional_ui_state_persisted   # seenSurvey_*, ph_conv_* (uuid, ingen PII)
+      # Radering (A.8.10), se .compliance/Data_Classification_Handling.md:
+      # ph_conv_* raderas vid utloggning (resetAnalyticsIdentity ->
+      # posthog.reset() -> conversations-managerns egen reset). seenSurvey_*
+      # har ingen raderingstrigger: ingen PostHog-bundle itererar över
+      # localStorage, så SDK:n kan inte hitta nycklarna. Accepterat: värdet är
+      # "true" under ett ogenomskinligt survey-id, utan personuppgifter.
+      - ph_conv_cleared_on_logout           # hindrar delad enhet från att ärva ärendesession
       - same_origin_reverse_proxy            # /rl-rewrite; ingen tredjepartsvärd i CSP
       - sandbox_companies_never_identified
       - disabled_entirely_when_self_hosted
