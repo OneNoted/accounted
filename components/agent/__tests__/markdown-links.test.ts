@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { isInternalHref } from '../markdown-links'
-import { announceableAnswer } from '../AgentChat'
+import { ANNOUNCEMENT_LIMIT, announceableAnswer } from '../AgentChat'
 import { intentLabel } from '../conversation-display'
 
 describe('isInternalHref', () => {
@@ -47,20 +47,39 @@ describe('announceableAnswer', () => {
     ).toBe('Andra svaret.')
   })
 
-  it('caps a long answer and says where the rest is', () => {
+  it('caps the WHOLE announcement, suffix included, and says where the rest is', () => {
     // A screen reader reads a live region straight through: a full bokslut
     // explanation announced in one uninterruptible burst is worse than not
-    // announcing at all.
-    const long = 'a'.repeat(1000)
-    const out = announceableAnswer([msg('assistant', long)])
-    expect(out.length).toBeLessThan(500)
+    // announcing at all. Asserted against the constant, and at the real limit
+    // rather than a looser number the suffix could sneak past.
+    const out = announceableAnswer([msg('assistant', 'a'.repeat(1000))])
+    expect(out.length).toBeLessThanOrEqual(ANNOUNCEMENT_LIMIT)
     expect(out).toContain('Svaret fortsätter i meddelandet')
   })
 
+  it('does not read an interrupted answer as a finished one', () => {
+    // Stop leaves the partial text with a visible marker. Announcing it as the
+    // answer tells a screen-reader user the opposite of what everyone else sees.
+    const out = announceableAnswer([
+      { role: 'assistant', text: 'Momsen för juli blev 12 4', interrupted: true } as Parameters<
+        typeof announceableAnswer
+      >[0][number],
+    ])
+    expect(out).toContain('avbröts')
+    expect(out).not.toContain('12 4')
+  })
+
+  it('never re-announces an earlier answer for a turn that produced no text', () => {
+    // The caller passes only THIS turn's messages. Given the whole thread, a
+    // tool-only turn would find the previous answer and read it out again as
+    // though it were new: the user hears a stale answer to a new question.
+    const thisTurn = [msg('user', 'Boka detta')]
+    expect(announceableAnswer(thisTurn)).toBe('Assistenten är klar.')
+  })
+
   it('still says something when the turn produced no text', () => {
-    // A tool-only turn, or one stopped before any text arrived: silence would
-    // be indistinguishable from the request never having been sent.
-    expect(announceableAnswer([msg('user', 'Boka detta')])).toBe('Assistenten är klar.')
+    // Silence would be indistinguishable from the request never having been
+    // sent. An assistant bubble that only ever held whitespace counts as none.
     expect(announceableAnswer([msg('assistant', '   ')])).toBe('Assistenten är klar.')
     expect(announceableAnswer([])).toBe('Assistenten är klar.')
   })
@@ -86,6 +105,15 @@ describe('intentLabel', () => {
     expect(intentLabel('general.help', 'Anna')).toBe('Fråga Anna')
     expect(intentLabel('general.help')).toBe('Fråga din assistent')
     expect(intentLabel('general.help', '   ')).toBe('Fråga din assistent')
+  })
+
+  it('does not resolve inherited Object keys as labels', () => {
+    // A plain object literal inherits from Object.prototype, so a lookup of
+    // 'toString' returned a FUNCTION, passed the truthiness check and reached
+    // React as a conversation title. intent_id comes from the database.
+    expect(intentLabel('toString')).toBe('Fråga din assistent')
+    expect(intentLabel('constructor', 'Anna')).toBe('Fråga Anna')
+    expect(intentLabel('__proto__')).toBe('Fråga din assistent')
   })
 
   it('keeps momsdeklaration spelled correctly through the soft hyphen', () => {

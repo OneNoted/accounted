@@ -33,12 +33,22 @@ export default function MarkdownMessage({ text }: { text: string }) {
  * documents, and target="_blank" without it hands the opened page a
  * window.opener handle back into an authenticated session.
  */
-function MarkdownLink({ href, children }: { href?: string; children?: React.ReactNode }) {
+function MarkdownLink({
+  href,
+  title,
+  children,
+}: {
+  href?: string
+  // Markdown carries an optional title: [text](url "title"). Dropping it here
+  // would silently discard something the answer's author wrote.
+  title?: string
+  children?: React.ReactNode
+}) {
   if (!href) return <>{children}</>
 
   if (isInternalHref(href)) {
     return (
-      <Link href={href} className="underline underline-offset-2">
+      <Link href={href} title={title} className="underline underline-offset-2">
         {children}
       </Link>
     )
@@ -47,6 +57,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: React.Reac
   return (
     <a
       href={href}
+      title={title}
       target="_blank"
       rel="noopener noreferrer"
       className="underline underline-offset-2"

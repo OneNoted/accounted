@@ -71,7 +71,10 @@ export function relativeTime(iso: string | null | undefined): string {
  * bokslut", and this one's fallback returned the raw intent id, putting
  * "bokslut.step" in front of the user as the name of their own conversation.
  */
-const INTENT_LABELS: Record<string, string> = {
+// Null-prototype: a plain literal inherits from Object.prototype, so
+// intentLabel('toString') would resolve to a FUNCTION, pass the truthiness
+// check, and be handed to React as a title. intent_id comes from the database.
+const INTENT_LABELS: Record<string, string> = Object.assign(Object.create(null), {
   'transaction.categorization': 'Hjälp med transaktion',
   'invoice.draft': 'Hjälp med faktura',
   'supplier_invoice.review': 'Granska leverantörsfaktura',
@@ -81,7 +84,7 @@ const INTENT_LABELS: Record<string, string> = {
   'kpi.explain': 'Förklara nyckeltal',
   'settings.help': 'Hjälp med inställningar',
   'inbox.bulk-book': 'Bokför från inkorgen',
-}
+})
 
 /**
  * `agentName` personalises the general-help and unknown cases ("Fråga Anna").

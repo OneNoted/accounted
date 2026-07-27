@@ -197,9 +197,20 @@ export default function AgentChat({
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [])
   // Read by the announcement effect, which must not re-run on every token: a
-  // `messages` dependency would fire it hundreds of times per turn.
+  // `messages` dependency would fire it hundreds of times per turn. Written in
+  // an effect rather than during render: React may replay a render, and a
+  // render-phase ref write can therefore leave the announcement reading a
+  // snapshot the user never saw. Declared BEFORE the announcement effect so it
+  // is already current when that one runs for the same commit.
   const messagesRef = useRef(messages)
-  messagesRef.current = messages
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+  // Where the current turn's messages start. Without it the announcement
+  // searches the whole thread, so a turn that produces no text of its own (a
+  // tool-only turn, an error) finds the PREVIOUS answer and reads it out as
+  // though it were the new one.
+  const turnStartRef = useRef(0)
   const hasAi = useCapability(CAPABILITY.ai)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -216,12 +227,13 @@ export default function AgentChat({
   useEffect(() => {
     if (streaming) {
       turnOpenRef.current = true
+      turnStartRef.current = messagesRef.current.length
       onStatus?.({ type: 'turn_start' })
       setAnnouncement('Assistenten skriver ett svar.')
     } else if (turnOpenRef.current) {
       turnOpenRef.current = false
       onStatus?.({ type: 'turn_end' })
-      setAnnouncement(announceableAnswer(messagesRef.current))
+      setAnnouncement(announceableAnswer(messagesRef.current.slice(turnStartRef.current)))
     }
   }, [streaming, onStatus])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -1306,16 +1318,28 @@ export function normalizeStoredMessages(
 /**
  * What to read out when a turn finishes.
  *
- * The visible answer, capped: screen readers read a live region straight
- * through, and a 900-word bokslut explanation announced in one uninterruptible
- * burst is worse than not announcing it. The cap points the user at the
- * message they can then navigate normally.
+ * Takes only the CURRENT turn's messages: given the whole thread, a turn that
+ * produced no text of its own would find the previous answer and announce it
+ * again as if it were new.
+ *
+ * The cap exists because a screen reader reads a live region straight through:
+ * a 900-word bokslut explanation announced in one uninterruptible burst is
+ * worse than not announcing it. It covers the WHOLE announcement, suffix
+ * included, so the promise the constant makes is the one the output keeps.
  */
+export const ANNOUNCEMENT_LIMIT = 400
+const CONTINUES = '… Svaret fortsätter i meddelandet.'
+
 export function announceableAnswer(messages: ChatMessage[]): string {
   const last = [...messages].reverse().find((m) => m.role === 'assistant')
+
+  // Stop leaves the partial text in place with a visible marker. Reading it
+  // out as a finished answer would tell a screen-reader user the opposite of
+  // what the marker tells everyone else.
+  if (last?.interrupted) return 'Assistenten avbröts. Ett ofullständigt svar står i meddelandet.'
+
   const text = last?.text?.trim()
   if (!text) return 'Assistenten är klar.'
-  const limit = 400
-  if (text.length <= limit) return text
-  return `${text.slice(0, limit).trimEnd()}… Svaret fortsätter i meddelandet.`
+  if (text.length <= ANNOUNCEMENT_LIMIT) return text
+  return text.slice(0, ANNOUNCEMENT_LIMIT - CONTINUES.length).trimEnd() + CONTINUES
 }
