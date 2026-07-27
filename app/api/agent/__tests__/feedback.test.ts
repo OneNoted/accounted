@@ -156,7 +156,11 @@ describe('POST /api/agent/feedback', () => {
     expect(event.payload.context).toContain('#4')
   })
 
-  it('uses the user comment as the report body when given one', async () => {
+  it('never carries user free text into the telemetry log', async () => {
+    // A comment box here would put whatever the user typed, in an accounting
+    // product, verbatim into event_log under telemetry retention: client
+    // names, personnummer, case details. The field is not accepted, and a
+    // caller that sends one anyway must not have it stored.
     enqueue({
       data: {
         id: CONVERSATION_ID,
@@ -168,11 +172,13 @@ describe('POST /api/agent/feedback', () => {
 
     const req = createMockRequest('/api/agent/feedback', {
       method: 'POST',
-      body: body({ comment: 'Fel konto föreslogs' }),
+      body: body({ comment: 'Anna Andersson 19850101-1234 fick fel konto' }),
     })
     await POST(req, routeParams)
 
     const event = emitMock.mock.calls[0]![0] as { payload: { context: string } }
-    expect(event.payload.context).toContain('Fel konto föreslogs')
+    expect(event.payload.context).not.toContain('Anna Andersson')
+    expect(event.payload.context).not.toContain('19850101')
+    expect(JSON.stringify(event.payload)).not.toContain('19850101')
   })
 })

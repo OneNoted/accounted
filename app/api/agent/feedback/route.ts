@@ -30,10 +30,6 @@ ensureInitialized()
 const BodySchema = z.object({
   conversation_id: z.string().uuid(),
   sentiment: z.enum(['positive', 'negative']),
-  // What the user was reading when they voted. Free text is the only way a
-  // thumbs-down says anything actionable, but it stays optional: requiring a
-  // reason turns one click into a form and the vote never gets cast.
-  comment: z.string().trim().max(2000).optional(),
   // Which answer, so a vote can be traced to the turn it was about.
   message_index: z.number().int().min(0).optional(),
 })
@@ -80,11 +76,15 @@ export const POST = withRouteContext(
     await eventBus.emit({
       type: 'agent.feedback',
       payload: {
-        // The payload has no message field, so the turn is named in the free
-        // text: a thumbs-down that cannot be traced to an answer is a number,
-        // not a report.
+        // Deliberately NOT free text. A comment box here would put whatever
+        // the user typed, in an accounting product, verbatim into event_log
+        // under telemetry retention: names, personnummer, client details. The
+        // vote carries only what it needs to be actionable, which is the intent
+        // and which answer it was about. If a comment field is ever wanted, it
+        // needs its own data-classification and redaction decision first, made
+        // with the UI in front of it rather than as an unused parameter.
         context: [
-          body.comment?.trim() || `Chattbetyg på svar i ${conversation.intent_id}.`,
+          `Chattbetyg på svar i ${conversation.intent_id}.`,
           body.message_index === undefined ? null : `(svar #${body.message_index})`,
         ]
           .filter(Boolean)
