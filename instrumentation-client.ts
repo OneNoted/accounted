@@ -1,5 +1,11 @@
 import posthog from 'posthog-js'
 import { isAnalyticsEnabled, warnIfAnalyticsMisconfigured } from '@/lib/analytics/enabled'
+import { purgeLegacyAnalyticsStorage } from '@/lib/analytics/purge-legacy-storage'
+
+// Clear anything Recapt left on the device. Runs unconditionally, BEFORE the
+// analytics gate: a browser carrying `__recapt_record_engine` must get cleaned
+// up even on a build where PostHog itself is switched off.
+purgeLegacyAnalyticsStorage()
 
 /**
  * Hostnames that get the X-POSTHOG-DISTINCT-ID / X-POSTHOG-SESSION-ID headers,
