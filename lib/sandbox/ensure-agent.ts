@@ -4,6 +4,24 @@ import { createLogger } from '@/lib/logger'
 const log = createLogger('sandbox:ensure-agent')
 
 /**
+ * The sandbox assistant is called "Assistenten", not a first name.
+ *
+ * A named persona is right once someone has been through onboarding and chosen
+ * it: it is their assistant, and they named it. In the sandbox nobody chose
+ * anything, so a first name reads as a character the product invented and
+ * implies a relationship the visitor has not opted into. "Assistenten" says
+ * what it is.
+ *
+ * The summary is the agent's own self-description in the system prompt, so it
+ * has to agree with the display name: otherwise the header says one thing and
+ * the assistant introduces itself as another in its first sentence.
+ */
+export const SANDBOX_AGENT_NAME = 'Assistenten'
+
+export const SANDBOX_PROFILE_SUMMARY =
+  'Du är Assistenten, en revisorsassistent för en svensk enskild firma som tillhandahåller IT-konsulttjänster i Stockholm. Företaget är momsregistrerat (kvartalsvis), använder kontantmetoden och fakturerar både svenska och utländska kunder.'
+
+/**
  * Backfill a verified agent_profile for sandbox companies. Single source of
  * truth for the sandbox assistant's persona (name, avatar, atoms, summary):
  * the seed route, dashboard layout, dashboard page, and chat layout all call
@@ -35,7 +53,7 @@ export async function ensureSandboxAgentProfile(
 
     const { error } = await supabase.from('agent_profiles').insert({
       company_id: companyId,
-      display_name: 'Anna',
+      display_name: SANDBOX_AGENT_NAME,
       avatar_id: 'notionists-3',
       horizontal_atoms: [
         'horizontal/swedish-vat',
@@ -43,8 +61,7 @@ export async function ensureSandboxAgentProfile(
       ],
       vertical_atoms: ['vertical/consulting'],
       modifier_atoms: [],
-      profile_summary:
-        'Du är Anna, en revisorsassistent för en svensk enskild firma som tillhandahåller IT-konsulttjänster i Stockholm. Företaget är momsregistrerat (kvartalsvis), använder kontantmetoden och fakturerar både svenska och utländska kunder.',
+      profile_summary: SANDBOX_PROFILE_SUMMARY,
       source_signals: { is_sandbox: true },
       field_overrides: {},
       composer_model: 'sandbox-demo',
