@@ -60,7 +60,12 @@ processing_activities:
     purpose: >-
       Identifiera en privatkund när företagets avtal, fakturering eller
       kundadministration kräver en entydig identitet. Personnumret får endast
-      sparas på kundtypen privatkund och exponeras endast maskerat i API och UI.
+      sparas på kundtypen privatkund. Samtliga listnings- och exportytor i API
+      och UI exponerar det endast maskerat (fyra sista siffrorna). Undantaget är
+      en enskild uppslagsyta (GET /api/customers/{id}/personal-number) som
+      returnerar hela värdet för en kund i taget, kräver skrivroll och loggas
+      med aktör men aldrig med värdet, så att den som registrerat ett
+      personnummer kan kontrollera vad som faktiskt sparats.
     lawful_basis: art_6_1_b
     special_category_basis: null
     controller: gnubok-tenant

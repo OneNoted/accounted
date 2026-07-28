@@ -12,8 +12,12 @@ import {
   countVerifikatMissingDocument,
   listSuggestedMatches,
 } from '../categories'
+import {
+  MATCHABLE_INVOICE_STATUSES,
+  MATCHABLE_SUPPLIER_INVOICE_STATUSES,
+} from '@/lib/invoices/matchable-statuses'
 
-const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
 const COMPANY = 'company-1'
 
@@ -242,9 +246,18 @@ describe('listSuggestedMatches', () => {
 
     await listSuggestedMatches(supabase, COMPANY)
 
-    expect(findCall('invoices', 'in')).toEqual(['id', ['inv-1']])
+    // Both revalidation conditions, not just the id filter: findCall returns
+    // only the FIRST .in() per table, which is the id one, so the status
+    // filter needs findCalls to be covered at all.
+    expect(findCalls('invoices', 'in')).toEqual([
+      ['id', ['inv-1']],
+      ['status', [...MATCHABLE_INVOICE_STATUSES]],
+    ])
     expect(findCall('invoices', 'gt')).toEqual(['remaining_amount', 0])
-    expect(findCall('supplier_invoices', 'in')).toEqual(['id', ['sinv-1']])
+    expect(findCalls('supplier_invoices', 'in')).toEqual([
+      ['id', ['sinv-1']],
+      ['status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES]],
+    ])
     expect(findCall('supplier_invoices', 'gt')).toEqual(['remaining_amount', 0])
   })
 

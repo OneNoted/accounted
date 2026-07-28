@@ -1,7 +1,16 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+
+interface ChartRow {
+  account_number: string
+  account_name: string
+  account_class: number | null
+  account_type: string | null
+  is_active: boolean | null
+}
 
 /**
  * GET /api/bookkeeping/accounts/bas-lookup?numbers=5010,2641
@@ -38,19 +47,29 @@ export const GET = withRouteContext('bookkeeping.accounts.bas-lookup', async (re
     return NextResponse.json({ error: 'Too many account numbers' }, { status: 400 })
   }
 
-  const { data: chartRows, error } = await supabase
-    .from('chart_of_accounts')
-    .select('account_number, account_name, account_class, account_type, is_active')
-    .eq('company_id', companyId)
-    .in('account_number', numbers)
-
-  if (error) {
+  // Paginated: `numbers` can hold up to 2000 entries and PostgREST silently
+  // caps an unranged select at 1000 rows. A truncated chart read would report
+  // accounts that ARE in the chart as known:false / in_chart:false, so the
+  // dialog would offer "create" for an account that already exists.
+  let chartRows: ChartRow[]
+  try {
+    chartRows = await fetchAllRows<ChartRow>(
+      ({ from, to }) =>
+        supabase
+          .from('chart_of_accounts')
+          .select('account_number, account_name, account_class, account_type, is_active')
+          .eq('company_id', companyId)
+          .in('account_number', numbers)
+          // Paging is only stable under a unique total order.
+          .order('account_number', { ascending: true })
+          .range(from, to),
+      { dedupeBy: (row) => row.account_number },
+    )
+  } catch (error) {
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
-  const inChart = new Map(
-    (chartRows || []).map((row) => [row.account_number, row]),
-  )
+  const inChart = new Map(chartRows.map((row) => [row.account_number, row]))
 
   const data = numbers.map((num) => {
     const own = inChart.get(num)

@@ -243,8 +243,14 @@ export default function BankingSettingsPanel() {
 
   async function handleConnectBank(bank: Bank, psuTypeOverride?: 'personal' | 'business') {
     if (connectingRef.current) return
-    if (!(await confirmSameBankConnections(bank.name))) return
+    // Claim the lock BEFORE the confirm await. The dialog can sit open
+    // indefinitely, and a second click in that window would otherwise sail
+    // past the guard above and start a concurrent connect flow.
     connectingRef.current = true
+    if (!(await confirmSameBankConnections(bank.name))) {
+      connectingRef.current = false
+      return
+    }
     setIsConnecting(true)
     setConnectingBankName(bank.name)
 
@@ -306,8 +312,12 @@ export default function BankingSettingsPanel() {
   // back through account selection to active.
   async function handleReconnect(connection: BankConnection, psuTypeOverride?: 'personal' | 'business') {
     if (connectingRef.current) return
-    if (!(await confirmSameBankConnections(connection.bank_name))) return
+    // Lock before the confirm await, same reason as handleConnectBank.
     connectingRef.current = true
+    if (!(await confirmSameBankConnections(connection.bank_name))) {
+      connectingRef.current = false
+      return
+    }
     setIsConnecting(true)
     setConnectingBankName(connection.bank_name)
 

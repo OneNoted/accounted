@@ -361,22 +361,42 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     }
     if (provenAlive.has(connection.id)) continue
 
-    const health = await probeSessionHealth(connection.session_id as string)
-    if (health !== 'dead') continue
+    // Per-connection isolation, matching the sync loop above: without it a
+    // single network blip aborts probing for every remaining candidate in the
+    // batch and the coverage gap stays silent until tomorrow's run.
+    try {
+      const health = await probeSessionHealth(connection.session_id as string)
+      if (health !== 'dead') continue
 
-    await supabase
-      .from('bank_connections')
-      .update({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
-      .eq('id', connection.id)
+      const { error: updateError } = await supabase
+        .from('bank_connections')
+        .update({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
+        .eq('id', connection.id)
 
-    await sendConsentExpiryNotification(supabase, connection, 0, true, baseUrl)
+      // Only claim the connection was marked dead once the write landed.
+      // Notifying (and counting) on an unpersisted update would tell the user
+      // to re-authorize while the row still reads 'active'.
+      if (updateError) {
+        ctx.log.error('failed to mark probed-dead connection as expired', updateError, {
+          connectionId: connection.id,
+        })
+        continue
+      }
 
-    ctx.log.info('health probe found a dead session', {
-      connectionId: connection.id,
-      bankName: connection.bank_name,
-      previousStatus: connection.status,
-    })
-    probeResults.push({ connectionId: connection.id, bankName: connection.bank_name })
+      await sendConsentExpiryNotification(supabase, connection, 0, true, baseUrl)
+
+      ctx.log.info('health probe found a dead session', {
+        connectionId: connection.id,
+        bankName: connection.bank_name,
+        previousStatus: connection.status,
+      })
+      probeResults.push({ connectionId: connection.id, bankName: connection.bank_name })
+    } catch (err) {
+      ctx.log.error('health probe failed for connection', err as Error, {
+        connectionId: connection.id,
+        bankName: connection.bank_name,
+      })
+    }
   }
 
   const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
