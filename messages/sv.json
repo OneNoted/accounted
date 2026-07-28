@@ -2589,6 +2589,8 @@
     "different_currencies": " (olika valutor)",
     "partial_payment_note": ": fakturan blir delbetald.",
     "ore_rounding_note": "Differens {amount} bokförs som öresavrundning (konto 3740). Fakturan markeras som betald.",
+    "target_settled_title": "Fakturan är redan slutbetald",
+    "target_settled_description": "Matchningsförslaget är inaktuellt: fakturan har betalats av en annan transaktion och kan inte matchas igen. Stäng dialogen och matcha transaktionen mot rätt faktura, eller bokför den som vanligt.",
     "fx_title": "Valutaomräkning",
     "fx_rate_description": "Riksbankens mittkurs {date}: 1 {invoiceCurrency} = {rate} SEK",
     "fx_paid_in_invoice_currency": "Inbetalning motsvarar: {amount}",

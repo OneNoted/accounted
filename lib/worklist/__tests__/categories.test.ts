@@ -13,7 +13,7 @@ import {
   listSuggestedMatches,
 } from '../categories'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
 const COMPANY = 'company-1'
 
@@ -206,6 +206,67 @@ describe('listSuggestedMatches', () => {
 
   it('returns [] on transaction query error', async () => {
     enqueue({ error: { message: 'boom' } })
+    await expect(listSuggestedMatches(supabase, COMPANY)).resolves.toEqual([])
+  })
+
+  // Regression: the hint columns are written once and never revisited, so an
+  // invoice paid off by a DIFFERENT transaction leaves a stale pointer. The
+  // candidate lookup must revalidate instead of trusting it, or the worklist
+  // renders a one-click confirm row whose endpoint can only answer
+  // ALREADY_PAID.
+  it('revalidates hinted candidates against the matchable statuses', async () => {
+    enqueue({
+      data: [
+        {
+          id: 'tx-1',
+          date: '2026-06-01',
+          description: 'X',
+          amount: 100,
+          currency: 'SEK',
+          potential_invoice_id: 'inv-1',
+          potential_supplier_invoice_id: null,
+        },
+        {
+          id: 'tx-2',
+          date: '2026-06-02',
+          description: 'Y',
+          amount: -100,
+          currency: 'SEK',
+          potential_invoice_id: null,
+          potential_supplier_invoice_id: 'sinv-1',
+        },
+      ],
+    })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+
+    await listSuggestedMatches(supabase, COMPANY)
+
+    expect(findCall('invoices', 'in')).toEqual(['id', ['inv-1']])
+    expect(findCall('invoices', 'gt')).toEqual(['remaining_amount', 0])
+    expect(findCall('supplier_invoices', 'in')).toEqual(['id', ['sinv-1']])
+    expect(findCall('supplier_invoices', 'gt')).toEqual(['remaining_amount', 0])
+  })
+
+  it('drops a hint whose invoice has since been settled elsewhere', async () => {
+    enqueue({
+      data: [
+        {
+          id: 'tx-1',
+          date: '2026-06-01',
+          description: 'MONTHLY FEE',
+          amount: -549,
+          currency: 'SEK',
+          potential_invoice_id: null,
+          potential_supplier_invoice_id: 'sinv-paid',
+        },
+      ],
+    })
+    enqueue({ data: [] })
+    // The status/remaining filters exclude the settled invoice server-side, so
+    // the lookup comes back empty and the row must not be offered.
+    enqueue({ data: [] })
+
     await expect(listSuggestedMatches(supabase, COMPANY)).resolves.toEqual([])
   })
 })

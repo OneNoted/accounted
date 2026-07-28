@@ -2589,6 +2589,8 @@
     "different_currencies": " (different currencies)",
     "partial_payment_note": ": the invoice will become partially paid.",
     "ore_rounding_note": "The {amount} difference is booked as rounding (account 3740). The invoice is marked as paid.",
+    "target_settled_title": "This invoice is already fully paid",
+    "target_settled_description": "This match suggestion is out of date: the invoice was paid by another transaction and cannot be matched again. Close this dialog and match the transaction against the right invoice, or book it as usual.",
     "fx_title": "Currency conversion",
     "fx_rate_description": "Riksbanken mid-rate {date}: 1 {invoiceCurrency} = {rate} SEK",
     "fx_paid_in_invoice_currency": "Payment equals: {amount}",
