@@ -43,6 +43,7 @@ function makeSupabase(opts: {
         select: () => ({
           eq: () => ({
             eq: () => ({
+              // The builder's own period read.
               single: () =>
                 Promise.resolve({
                   data: {
@@ -53,6 +54,11 @@ function makeSupabase(opts: {
                   },
                   error: null,
                 }),
+              // sumPostedYearEndDispositions reads closing_entry_id with
+              // .eq('id').eq('company_id').maybeSingle() to exclude the final
+              // bokslutsverifikation from the add-back (#1051).
+              maybeSingle: () =>
+                Promise.resolve({ data: { closing_entry_id: null }, error: null }),
             }),
           }),
         }),
