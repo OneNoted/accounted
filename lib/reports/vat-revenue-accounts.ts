@@ -46,14 +46,40 @@ export const RUTA_05_EXCLUDED_ACCOUNTS = new Set([
 /** VAT rates that mark a konto as momspliktig försäljning. 0 and NULL do not. */
 const TAXABLE_RATES = [0.25, 0.12, 0.06]
 
+/**
+ * Ruta 05 accounts that ACCOUNT_TO_BOX already sums, but whose per-rate bucket
+ * cannot be inferred from the account number.
+ *
+ * 3000 "Försäljning inom Sverige" is the BAS gruppkonto for the 30xx range. A
+ * BAS-conformant company posts to 3001/3002/3003 and never to 3000, but a
+ * company that does post to it has genuine domestic taxable sales, so ruta 05
+ * stays the right box and the filed figure is already correct. What is missing
+ * is only the rate split: unlike 3001/3002/3003 the number carries no sats, so
+ * `breakdown.invoices.base25/12/6` would not add up to ruta 05.
+ *
+ * These accounts therefore contribute a RATE ONLY. Adding them to `accounts`
+ * would double-count them, since ACCOUNT_TO_BOX already puts them in the sum.
+ */
+const RUTA_05_STATIC_RATE_ACCOUNTS = new Set(['3000'])
+
 export interface DynamicRuta05Accounts {
   /** Accounts to add to the ledger fetch and to the ruta 05 sum. */
   accounts: string[]
   /** account_number → 0.25 | 0.12 | 0.06, for the per-rate base breakdown. */
   rateByAccount: Map<string, number>
+  /**
+   * Rates for accounts ALREADY counted in ruta 05 by the static map. Feeds the
+   * base breakdown only, never the sum. Empty unless the user set a
+   * "Standard moms" on one of RUTA_05_STATIC_RATE_ACCOUNTS.
+   */
+  staticRateByAccount: Map<string, number>
 }
 
-const EMPTY: DynamicRuta05Accounts = { accounts: [], rateByAccount: new Map() }
+const EMPTY: DynamicRuta05Accounts = {
+  accounts: [],
+  rateByAccount: new Map(),
+  staticRateByAccount: new Map(),
+}
 
 /**
  * Fetch the company-specific ruta 05 accounts.
@@ -100,17 +126,25 @@ export async function fetchDynamicRuta05Accounts(
 
   const accounts: string[] = []
   const rateByAccount = new Map<string, number>()
+  const staticRateByAccount = new Map<string, number>()
   for (const row of rows) {
     const account = row.account_number
-    if (ACCOUNT_TO_BOX[account]) continue
-    if (RUTA_05_EXCLUDED_ACCOUNTS.has(account)) continue
-
     const rate = Number(row.default_vat_rate)
     if (!TAXABLE_RATES.includes(rate)) continue
+
+    // Checked before the ACCOUNT_TO_BOX skip: these accounts ARE in that map,
+    // which is precisely why they need the rate surfaced separately.
+    if (RUTA_05_STATIC_RATE_ACCOUNTS.has(account)) {
+      staticRateByAccount.set(account, rate)
+      continue
+    }
+
+    if (ACCOUNT_TO_BOX[account]) continue
+    if (RUTA_05_EXCLUDED_ACCOUNTS.has(account)) continue
 
     accounts.push(account)
     rateByAccount.set(account, rate)
   }
 
-  return { accounts, rateByAccount }
+  return { accounts, rateByAccount, staticRateByAccount }
 }

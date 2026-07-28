@@ -1170,6 +1170,10 @@ const SKV_AGI_STATUS_OUTPUT_SCHEMA = {
  *  covers non-standard charts (Accounted's BAS chart ships no varugrupp
  *  accounts at all). */
 const RUTA_05_ACCOUNTS = [
+  // The 30xx gruppkonto. ACCOUNT_RUTA maps it to ruta05, so leaving it out here
+  // made a balance on 3000 appear in the filed projection but not in
+  // report.rutor.ruta05.
+  '3000',
   // Domestic sales by VAT rate (canonical BAS)
   '3001', '3002', '3003', '3005', '3006', '3007', '3008',
   // Taxable EU goods (momspliktig, buyer's VAT number invalid or buyer is private)

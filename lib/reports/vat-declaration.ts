@@ -531,8 +531,13 @@ export async function calculateVatDeclaration(
   // Compute per-rate base amounts from individual revenue accounts. The
   // company's own accounts carry their rate on the konto itself, so they land
   // in the same three buckets: without that, a 3013 company would show a
-  // ruta 05 base that none of base25/12/6 accounts for, and the proportional
-  // SALES_OUTPUT_VAT_SHORTFALL check would read it as missing utgående moms.
+  // ruta 05 base that none of base25/12/6 accounts for.
+  //
+  // These three are REPORTING metadata (breakdown.invoices), not check inputs:
+  // vat-declaration-checks.ts derives its expected base from the output-VAT
+  // rutor (ruta10/0.25 + ruta11/0.12 + ruta12/0.06) and never reads base25/12/6.
+  // So an incomplete split understates nothing that gets filed; it only makes
+  // the breakdown fail to add up to ruta 05.
   const revenueByRate = {
     base25: 0,  // 3001
     base12: 0,  // 3002
@@ -544,6 +549,17 @@ export async function calculateVatDeclaration(
     if (t) revenueByRate[rate] = round(t.credit - t.debit)
   }
   for (const [account, rate] of dynamicRuta05.rateByAccount) {
+    const t = totals.get(account)
+    if (!t) continue
+    const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
+    if (!bucket) continue
+    revenueByRate[bucket] = round(revenueByRate[bucket] + (t.credit - t.debit))
+  }
+  // Accounts the static map ALREADY sums into ruta 05 (3000, the 30xx
+  // gruppkonto) but whose rate only exists as the konto's "Standard moms".
+  // Rate-only on purpose: their balance is in ruta 05 either way, so adding
+  // them to dynamicRuta05.accounts would double the filed figure.
+  for (const [account, rate] of dynamicRuta05.staticRateByAccount) {
     const t = totals.get(account)
     if (!t) continue
     const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]

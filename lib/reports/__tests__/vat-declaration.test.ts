@@ -974,6 +974,49 @@ describe('calculateVatDeclaration: company-specific ruta 05 accounts', () => {
     expect(result.breakdown.invoices.base12).toBe(0)
   })
 
+  it('counts a 3000 gruppkonto balance in ruta 05 exactly once', async () => {
+    // 3000 is already summed into ruta 05 by the static map. Surfacing its
+    // "Standard moms" must not also add it to the dynamic account list, which
+    // would double the filed figure.
+    chartAccounts = [{ account_number: '3000', default_vat_rate: 0.25 }]
+    seedLedger([
+      { account_number: '3000', debit_amount: 0, credit_amount: 5000 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 1250 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(5000)
+    expect(result.rutor.ruta10).toBe(1250)
+  })
+
+  it('books a rated 3000 into its base bucket so the split adds up to ruta 05', async () => {
+    chartAccounts = [{ account_number: '3000', default_vat_rate: 0.25 }]
+    seedLedger([
+      { account_number: '3000', debit_amount: 0, credit_amount: 5000 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 2000 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(7000)
+    expect(result.breakdown.invoices.base25).toBe(7000)  // 3001 + 3000
+    expect(result.breakdown.invoices.base12).toBe(0)
+    expect(result.breakdown.invoices.base6).toBe(0)
+  })
+
+  it('leaves 3000 in ruta 05 with no base bucket when no sats is set', async () => {
+    // The filed figure is unaffected: only the breakdown is incomplete, and
+    // the checks derive their expected base from the output-VAT rutor.
+    chartAccounts = []
+    seedLedger([{ account_number: '3000', debit_amount: 0, credit_amount: 5000 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(5000)
+    expect(result.breakdown.invoices.base25).toBe(0)
+  })
+
   it('nets a credit note booked as a debit on the account', async () => {
     chartAccounts = [{ account_number: '3013', default_vat_rate: 0.06 }]
     seedLedger([
