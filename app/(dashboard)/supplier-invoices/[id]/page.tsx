@@ -123,12 +123,19 @@ export default function SupplierInvoiceDetailPage() {
   async function fetchInvoice() {
     setIsLoading(true)
     const res = await fetch(`/api/supplier-invoices/${params.id}`)
-    const { data, error } = await res.json()
-    if (error) {
-      toast({ title: t('load_failed_title'), description: error, variant: 'destructive' })
+    const body = await res.json()
+    // See the identical fix in suppliers/[id]: `body.error` is the canonical
+    // envelope object, and rendering an object as a toast description throws
+    // out of the root layout into global-error.
+    if (!res.ok || body?.error || !body?.data) {
+      toast({
+        title: t('load_failed_title'),
+        description: getErrorMessage(body, { statusCode: res.status, context: 'supplier_invoice' }),
+        variant: 'destructive',
+      })
     } else {
-      setInvoice(data)
-      setPayAmount(String(data.remaining_amount))
+      setInvoice(body.data)
+      setPayAmount(String(body.data.remaining_amount))
       setPaymentDate(new Date().toISOString().split('T')[0])
     }
     setIsLoading(false)
