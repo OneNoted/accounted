@@ -1157,7 +1157,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           the same action on the list. */}
       <ConfirmDialog
         open={showCommitConfirm}
-        onOpenChange={(open) => { if (!open && !isCommitting) setShowCommitConfirm(false) }}
+        onOpenChange={setShowCommitConfirm}
         title={t('confirm_post_title')}
         description={
           commitVoucherPreview

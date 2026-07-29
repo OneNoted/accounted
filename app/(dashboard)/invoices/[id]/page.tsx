@@ -1838,7 +1838,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           in a toast afterwards. */}
       <ConfirmDialog
         open={showBookConfirm}
-        onOpenChange={(open) => { if (!open && !isUpdating) setShowBookConfirm(false) }}
+        onOpenChange={setShowBookConfirm}
         title={t('confirm_book_title')}
         description={
           bookVoucherPreview
