@@ -1,5 +1,13 @@
 import { NextResponse, after } from 'next/server'
 import {
+  TASKS_EXTENSION_ID,
+  isTaskCapableClient,
+  createMcpTask,
+  resolveMcpTask,
+  taskToWire,
+  type McpTaskRow,
+} from './tasks'
+import {
   extractBearerToken,
   validateApiKey,
   createServiceClientNoCookies,
@@ -244,6 +252,11 @@ interface McpTool {
   // _meta.ui.resourceUri on the RESULT, so the host renders the widget only when
   // asked. (Contrast _meta above, on the definition, which renders on every call.)
   uiResourceUri?: string
+  // Tasks extension: when this predicate returns true for a call from a
+  // task-capable client, the dispatcher returns a CreateTaskResult and runs
+  // execute() after the response instead of blocking on it. Not serialized
+  // into tools/list.
+  shouldRunAsTask?: (args: Record<string, unknown>) => boolean
   execute: (
     args: Record<string, unknown>,
     companyId: string,
@@ -12234,6 +12247,10 @@ export const tools: McpTool[] = [
       idempotentHint: true,  // repeat calls produce equivalent archives, fresh URL
       openWorldHint: false,
     },
+    // Archive generation is the one genuinely long-running synchronous call
+    // in the catalog: task-capable clients get a durable handle instead of a
+    // multi-minute blocking response. Size estimates stay synchronous.
+    shouldRunAsTask: (args) => args.estimate_only !== true,
     async execute(args, companyId, userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -15455,9 +15472,13 @@ const SERVER_CAPABILITIES = {
   tools: { listChanged: false },
   resources: { listChanged: false },
   prompts: { listChanged: false },
-  // MCP Apps (ratified extension): widgets are served as ui:// resources and
-  // referenced from tool _meta.ui.resourceUri (see widgets/).
-  extensions: { 'io.modelcontextprotocol/ui': {} },
+  extensions: {
+    // MCP Apps (ratified extension): widgets are served as ui:// resources
+    // and referenced from tool _meta.ui.resourceUri (see widgets/).
+    'io.modelcontextprotocol/ui': {},
+    // MCP Tasks: durable handles for long-running tool calls (see tasks.ts).
+    [TASKS_EXTENSION_ID]: {},
+  },
 }
 
 function jsonRpc(id: string | number | null, result: unknown): JsonRpcResponse {
@@ -15833,6 +15854,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   // Revisions are ISO dates, so string comparison orders them correctly.
   const statelessClient =
     typeof metaVersion === 'string' && metaVersion >= STATELESS_PROTOCOL_VERSION
+  // Tasks extension: only a client that declared it in THIS request's
+  // capabilities may ever receive a CreateTaskResult.
+  const taskCapable = statelessClient && isTaskCapableClient(requestMeta)
 
   // Standard request headers (2026-07-28): when present they must agree with
   // the JSON-RPC body. Absence stays accepted: handshake-era clients and the
@@ -16194,6 +16218,90 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // mcp.next_hint_followed when the agent's behaviour matches the hint.
       checkAndEmitNextHintFollowed(sessionId, toolName, actor, userId, effectiveCompanyId)
 
+      // ── Tasks extension (io.modelcontextprotocol/tasks) ──
+      // Long-running tools return a durable handle immediately to a client
+      // that declared the extension; the work completes after the response
+      // (after() keeps the function alive) and the result lands in mcp_tasks
+      // for tasks/get polling. Runs after every auth/scope/capability guard
+      // so nothing is ever started for a call that would have been refused.
+      if (taskCapable && tool.shouldRunAsTask?.(toolArgs)) {
+        const task = await createMcpTask(supabase, {
+          companyId: effectiveCompanyId,
+          userId,
+          apiKeyId,
+          toolName,
+        })
+        const taskStartedAt = Date.now()
+        emitAfterResponse(async () => {
+          try {
+            const rawResult = await tool.execute(toolArgs, effectiveCompanyId, userId, supabase, actor)
+            const canonicalResult = addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
+            const result = projectMcpPayload(canonicalResult, toolNamespace)
+            const stored: Record<string, unknown> = {
+              resultType: 'complete',
+              content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+            }
+            if (result !== null && result !== undefined) {
+              stored.structuredContent =
+                typeof result === 'object' && !Array.isArray(result) ? result : { value: result }
+            }
+            await resolveMcpTask(supabase, task.id, { status: 'completed', result: stored })
+            emitToolCallTelemetry({
+              tool: toolName,
+              requiredScope: requiredScope ?? null,
+              actor,
+              latencyMs: Date.now() - taskStartedAt,
+              success: true,
+              isError: false,
+              errorCode: null,
+              errorKind: null,
+              errorMessage: null,
+              requestId: id ?? null,
+              userId,
+              companyId: effectiveCompanyId,
+            })
+          } catch (err) {
+            // Tool failures complete the task with the standard isError
+            // envelope: exactly what the synchronous call would have
+            // returned. `failed` stays reserved for infrastructure errors.
+            const structured = toToolError(err, { toolName })
+            const publicStructured = projectMcpPayload(structured, toolNamespace)
+            await resolveMcpTask(supabase, task.id, {
+              status: 'completed',
+              result: {
+                resultType: 'complete',
+                content: [{ type: 'text', text: JSON.stringify(publicStructured, null, 2) }],
+                isError: true,
+              },
+              statusMessage: structured.error.message_sv,
+            }).catch((updateErr) => {
+              log.error('Failed to store MCP task failure result', { taskId: task.id, updateErr })
+            })
+            emitToolCallTelemetry({
+              tool: toolName,
+              requiredScope: requiredScope ?? null,
+              actor,
+              latencyMs: Date.now() - taskStartedAt,
+              success: false,
+              isError: true,
+              errorCode: structured.error.code,
+              errorKind: 'execution',
+              errorMessage: structured.error.message_sv,
+              requestId: id ?? null,
+              userId,
+              companyId: effectiveCompanyId,
+            })
+          }
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, {
+            resultType: 'task',
+            task: taskToWire(task),
+            _meta: { [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace] },
+          })
+        )
+      }
+
       const callStartedAt = Date.now()
       try {
         // gnubok_search_tools needs the caller's scopes to filter results to
@@ -16491,6 +16599,51 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           ],
         }))
       )
+    }
+
+    case 'tasks/get': {
+      const taskId = (params as Record<string, unknown>)?.taskId
+      if (typeof taskId !== 'string' || !taskId) {
+        return NextResponse.json(jsonRpcError(id ?? null, -32602, 'taskId is required'))
+      }
+      // Scoped to the creating user: an API key can only poll its own tasks.
+      const { data: taskRow } = await supabase
+        .from('mcp_tasks')
+        .select('*')
+        .eq('id', taskId)
+        .eq('user_id', userId)
+        .single()
+      if (!taskRow) {
+        return NextResponse.json(jsonRpcError(id ?? null, -32602, `Task not found: "${taskId}"`))
+      }
+      const row = taskRow as McpTaskRow
+      const wire: Record<string, unknown> = { resultType: 'complete', ...taskToWire(row) }
+      if (row.status === 'completed' && row.result) wire.result = row.result
+      if (row.status === 'failed' && row.error) wire.error = row.error
+      wire._meta = { [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace] }
+      return NextResponse.json(jsonRpc(id ?? null, wire))
+    }
+
+    case 'tasks/update':
+      // No input_required flows exist yet: acknowledge and ignore unknown or
+      // already-satisfied inputResponses, as the extension spec instructs.
+      return NextResponse.json(jsonRpc(id ?? null, { resultType: 'complete' }))
+
+    case 'tasks/cancel': {
+      const taskId = (params as Record<string, unknown>)?.taskId
+      if (typeof taskId !== 'string' || !taskId) {
+        return NextResponse.json(jsonRpcError(id ?? null, -32602, 'taskId is required'))
+      }
+      // Cooperative cancellation: flip a still-working row; an in-flight
+      // execution is not interrupted, and its late completion becomes a
+      // no-op against the now-terminal row.
+      await supabase
+        .from('mcp_tasks')
+        .update({ status: 'cancelled' })
+        .eq('id', taskId)
+        .eq('user_id', userId)
+        .eq('status', 'working')
+      return NextResponse.json(jsonRpc(id ?? null, { resultType: 'complete' }))
     }
 
     default:

@@ -100,7 +100,7 @@ describe('MCP spec revision 2026-07-28', () => {
       ])
       const capabilities = result?.capabilities as Record<string, unknown>
       expect(capabilities.tools).toEqual({ listChanged: false })
-      expect(capabilities.extensions).toEqual({ 'io.modelcontextprotocol/ui': {} })
+      expect(capabilities.extensions).toMatchObject({ 'io.modelcontextprotocol/ui': {} })
       expect(typeof result?.ttlMs).toBe('number')
       expect(result?.cacheScope).toBe('private')
       const meta = result?._meta as Record<string, Record<string, unknown>>
@@ -268,7 +268,7 @@ describe('MCP spec revision 2026-07-28', () => {
       expect(result?.protocolVersion).toBe('2025-06-18')
       expect((result?.serverInfo as Record<string, unknown>).name).toBe('gnubok')
       const capabilities = result?.capabilities as Record<string, unknown>
-      expect(capabilities.extensions).toEqual({ 'io.modelcontextprotocol/ui': {} })
+      expect(capabilities.extensions).toMatchObject({ 'io.modelcontextprotocol/ui': {} })
     })
 
     it('negotiates an initialize requesting 2026-07-28 down to the handshake default', async () => {
