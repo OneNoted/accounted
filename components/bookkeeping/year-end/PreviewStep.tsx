@@ -82,8 +82,9 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
             <div className="h-px flex-1 bg-border/60" />
           </div>
           <p className="px-1 text-xs leading-5 text-muted-foreground">
-            Öppna fordringar/skulder i utländsk valuta värderas om till balansdagens kurs innan
-            bokslut. Detta sker automatiskt som en del av verkställandet.
+            Fordringar/skulder i utländsk valuta som var öppna på balansdagen värderas om till
+            balansdagens kurs. Raderna nedan bokförs som en del av verkställandet: kontrollera
+            dem innan du går vidare.
           </p>
           <div className="px-1 pt-4">
             <div className="grid grid-cols-3 gap-4 text-sm">
@@ -106,6 +107,42 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
                 </p>
               </div>
             </div>
+          </div>
+          {/* Capped height: a company with hundreds of open FX invoices must
+              not push the wizard's own actions off the screen. */}
+          <div className="max-h-80 overflow-y-auto px-1 pt-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Faktura</TableHead>
+                  <TableHead>Typ</TableHead>
+                  <TableHead className="text-right">Belopp</TableHead>
+                  <TableHead className="text-right">Kurs → balansdag</TableHead>
+                  <TableHead className="text-right">Differens</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {preview.currencyRevaluation.items.map((item) => (
+                  <TableRow key={`${item.type}-${item.source_id}`}>
+                    <TableCell className="text-sm">{item.reference || '-'}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {item.type === 'receivable' ? 'Kundfordran' : 'Leverantörsskuld'}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(item.amount_in_currency, item.currency)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+                      {item.original_rate.toFixed(4)} → {item.closing_rate.toFixed(4)}
+                    </TableCell>
+                    <TableCell
+                      className={`text-right tabular-nums ${item.difference_sek < 0 ? 'text-destructive' : ''}`}
+                    >
+                      {formatCurrency(item.difference_sek)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         </section>
       )}

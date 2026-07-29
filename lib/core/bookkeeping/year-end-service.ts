@@ -884,9 +884,17 @@ function hasUsableFxRate(rate: number | string | null | undefined): boolean {
  * cannot be dated, so its live outstanding is assumed to have stood at
  * balansdagen; and an invoice cancelled or credited since is treated as never
  * having been open, because neither event carries a reliable date. The status
- * population is kept identical to what the revaluation engine actually acts on
- * (`getOpenForeignCurrencyReceivables` / `...Payables`), so the warning never
- * points at rows for which no remedy exists.
+ * population, date scoping and outstanding reconstruction are kept identical
+ * to what the revaluation engine acts on (`getOpenForeignCurrencyReceivables`
+ * / `...Payables` with the same as-of date).
+ *
+ * Deliberately NOT gated by `fxExposureScope`, unlike the revaluation itself.
+ * An unbooked FX row is exactly the case worth warning about: it is not on
+ * 1510/2440 yet, so the revaluation skips it, but POST /api/invoices/[id]/book
+ * still books it at its own invoice_date, i.e. into the year about to close.
+ * Once step 7/8 lock and close the period that remedy is gone for good, so
+ * suppressing the warning here would convert a recoverable state into a
+ * permanent misstatement.
  */
 async function countOpenFxItemsAtBalansdagen(
   supabase: SupabaseClient,
