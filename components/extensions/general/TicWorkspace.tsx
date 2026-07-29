@@ -60,6 +60,11 @@ function normalizeProfile(raw: unknown): TICCompanyProfile {
     representatives: list(p.representatives),
     payrolls: list(p.payrolls),
     statuses: list(p.statuses),
+    // Declared nullable, so undefined would already read as falsy at the
+    // render guards; normalised anyway so the object matches its own type.
+    fiscalYear: p.fiscalYear ?? null,
+    board: p.board ?? null,
+    financials: p.financials ?? null,
   }
 }
 
@@ -194,7 +199,12 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
   useEffect(() => {
     if (isDataLoading) return
     const cached = getByKey('company_profile')
-    if (cached?.value) {
+    // Blobs written before the TIC v2 upgrade (#584) predate the statuses /
+    // board / payroll sections entirely. Rendering one normalized would show
+    // a permanently section-less profile, because the success path has no
+    // refresh button to repair it: leaving `profile` null instead lets the
+    // auto-fetch effect below pull the current shape and re-save it.
+    if (cached?.value && 'statuses' in cached.value) {
       setProfile(normalizeProfile(cached.value))
     }
     setInitialLoad(false)
