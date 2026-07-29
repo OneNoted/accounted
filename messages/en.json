@@ -4697,6 +4697,8 @@
     "no_results": "No matching companies"
   },
   "transactions": {
+    "counterparty_suggestion_gone_title": "That counterparty is no longer available",
+    "counterparty_suggestion_gone_description": "The suggestion was refreshed. Close the dialog, open it again and pick the counterparty once more.",
     "page_title": "Transactions",
     "subtitle_to_post": "to post",
     "subtitle_matches": "{count} invoice matches",
