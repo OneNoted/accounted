@@ -205,6 +205,8 @@ interface QuickReviewState {
   template: BookingTemplate | null
   templateId: string | undefined
   linePattern: LinePatternEntry[] | null
+  // Learned counterparty bag; prefills the review dialog's dimension picker.
+  defaultDimensions?: Record<string, string> | null
 }
 
 export default function TransactionsPage() {
@@ -910,8 +912,8 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions.length])
 
-  const handleCategorize: CategorizeHandler = async (id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId) => {
-    return runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, confirmNoMatch: false })
+  const handleCategorize: CategorizeHandler = async (id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions) => {
+    return runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch: false })
   }
 
   async function runCategorize(args: {
@@ -922,6 +924,7 @@ export default function TransactionsPage() {
     accountOverride?: string
     templateId?: string
     inboxItemId?: string
+    dimensions?: Record<string, string>
     confirmNoMatch: boolean
     // Set after the user confirms the booking-time duplicate warning. force
     // bypasses the guard; the bypass is bound to the reviewed candidate's
@@ -930,7 +933,7 @@ export default function TransactionsPage() {
     force?: boolean
     expectedDuplicateJournalEntryId?: string
   }): Promise<string | null> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, confirmNoMatch, force, expectedDuplicateJournalEntryId } = args
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch, force, expectedDuplicateJournalEntryId } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -943,6 +946,7 @@ export default function TransactionsPage() {
           account_override: accountOverride,
           template_id: templateId,
           inbox_item_id: inboxItemId,
+          ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
           ...(confirmNoMatch ? { confirm_no_match: true } : {}),
           ...(force && expectedDuplicateJournalEntryId
             ? { force: true, expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }
@@ -2162,6 +2166,7 @@ export default function TransactionsPage() {
         template: { id: templateId, name_sv: cpSuggestion.name_sv } as BookingTemplate,
         templateId: undefined,
         linePattern: cpSuggestion.line_pattern ?? null,
+        defaultDimensions: cpSuggestion.default_dimensions ?? null,
       })
       setQuickReviewOpen(true)
       return
@@ -2213,7 +2218,8 @@ export default function TransactionsPage() {
     category: TransactionCategory,
     vatTreatment: VatTreatment | undefined,
     accountOverride: string | undefined,
-    templateId?: string
+    templateId?: string,
+    dimensions?: Record<string, string>
   ): Promise<string | null> {
     let journalEntryId: string | null
     if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
@@ -2222,7 +2228,11 @@ export default function TransactionsPage() {
         const r = await fetch(`/api/transactions/${id}/categorize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ is_business: true, counterparty_template_id: cpTemplateId }),
+          body: JSON.stringify({
+            is_business: true,
+            counterparty_template_id: cpTemplateId,
+            ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
+          }),
         })
         const b = await r.json()
         return { ok: r.ok, status: r.status, result: b, journalEntryId: b?.journal_entry_id || null }
@@ -2303,7 +2313,7 @@ export default function TransactionsPage() {
       setExitingIds((prev) => new Set(prev).add(id))
       journalEntryId = cpJeId
     } else {
-      journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId)
+      journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId, undefined, dimensions)
     }
     // Always close: whether the server created a verifikation, returned a
     // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a
@@ -2793,6 +2803,7 @@ export default function TransactionsPage() {
           template={quickReview?.template ?? null}
           templateId={quickReview?.templateId}
           counterpartyLinePattern={quickReview?.linePattern ?? null}
+          counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
         />

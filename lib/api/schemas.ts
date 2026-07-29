@@ -707,6 +707,9 @@ export const RecurringScheduleItemSchema = z.object({
     .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
     .nullable()
     .optional(),
+  // Copied onto the generated invoice_items.dimensions; merges over the
+  // schedule's default_dimensions on that item's revenue line.
+  dimensions: DimensionsBagSchema.optional(),
 })
 
 export const CreateRecurringScheduleSchema = z.object({
@@ -721,6 +724,8 @@ export const CreateRecurringScheduleSchema = z.object({
   our_reference: z.string().optional(),
   notes: z.string().optional(),
   auto_send: z.boolean().default(false),
+  // Copied onto invoices.default_dimensions for every generated invoice.
+  default_dimensions: DimensionsBagSchema.optional(),
   // Optional: when to first run. Defaults to next occurrence of day_of_month
   // (today if day_of_month === today, otherwise next month).
   start_date: isoDate.optional(),
@@ -739,6 +744,8 @@ export const UpdateRecurringScheduleSchema = z.object({
   notes: z.string().nullable().optional(),
   auto_send: z.boolean().optional(),
   status: z.enum(['active', 'paused']).optional(),
+  // Replaces the whole bag if provided ({} clears all tags). Omit to keep.
+  default_dimensions: DimensionsBagSchema.optional(),
   // Replace all items if provided. Omit to keep existing items unchanged.
   items: z.array(RecurringScheduleItemSchema).min(1).optional(),
 })
@@ -1286,6 +1293,10 @@ export const CategorizeTransactionSchema = z
     vat_treatment: VatTreatmentSchema.optional(),
     account_override: accountNumber.optional(),
     counterparty_template_id: z.string().uuid().optional(),
+    // Dimensions bag {sie_dim_no: code} applied to the business lines of the
+    // generated verifikat (bank/VAT legs stay untagged). Wins over a learned
+    // counterparty-template bag when both are present.
+    dimensions: DimensionsBagSchema.optional(),
     user_description: z.string().max(500).optional(),
     inbox_item_id: z.string().uuid().optional(),
     confirm_no_match: z.boolean().optional(),
@@ -1365,6 +1376,10 @@ export const BulkBookInboxSchema = z.object({
   vat_amount: z.number().positive().nullish().transform((v) => v ?? undefined),
   notes: z.string().max(2000).nullish().transform((v) => v ?? undefined),
   allow_duplicate: z.boolean().nullish().transform((v) => v ?? undefined),
+  // Shared dimensions bag applied to the business lines of every generated
+  // verifikat (same semantics as single categorize). nullish for the same
+  // staged-params reason as the fields above.
+  dimensions: DimensionsBagSchema.nullish().transform((v) => v ?? undefined),
 })
 export type BulkBookInboxInput = z.infer<typeof BulkBookInboxSchema>
 

@@ -50,6 +50,7 @@ import {
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
 import {
@@ -165,6 +166,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   // #967: register/send without booking; ekonomi books in a separate step.
   const [deferInvoiceBooking, setDeferInvoiceBooking] = useState(false)
+  const [showBookConfirm, setShowBookConfirm] = useState(false)
+  const [bookVoucherPreview, setBookVoucherPreview] = useState<string | null>(null)
   const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
@@ -349,6 +352,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   // #967: deferred booking: create the revenue verifikat afterwards.
+  // Confirm-before-posting (convention 10): booking an invoice writes an
+  // immutable verifikat, so describe the outcome first. The predicted voucher
+  // number is indicative; the toast afterwards reports what actually landed.
+  function openBookConfirm() {
+    setShowBookConfirm(true)
+    setBookVoucherPreview(null)
+    fetch('/api/bookkeeping/voucher-sequences/next')
+      .then((r) => r.json())
+      .then(({ data }) => {
+        if (data?.next != null) setBookVoucherPreview(`${data.series}${data.next}`)
+      })
+      .catch(() => {})
+  }
+
   async function handleBook() {
     if (!invoice) return
     setIsUpdating(true)
@@ -1294,7 +1311,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     <div className="flex items-center gap-3">
                       <span className="text-sm text-muted-foreground">{t('not_booked_yet')}</span>
                       {canWrite && (
-                        <Button size="sm" onClick={handleBook} disabled={isUpdating}>
+                        <Button size="sm" onClick={openBookConfirm} disabled={isUpdating}>
                           {t('book_action')}
                         </Button>
                       )}
@@ -1815,6 +1832,31 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           onSuccess={() => fetchInvoice()}
         />
       )}
+
+      {/* Confirm-before-posting (convention 10): booking writes an immutable
+          verifikat, so the outcome is described before the POST, not narrated
+          in a toast afterwards. */}
+      <ConfirmDialog
+        open={showBookConfirm}
+        onOpenChange={setShowBookConfirm}
+        title={t('confirm_book_title')}
+        description={
+          bookVoucherPreview
+            ? t('confirm_book_description', {
+                voucher: bookVoucherPreview,
+                number: invoiceDisplayNumber(invoice as Invoice),
+                amount: formatCurrency(
+                  getDisplayTotal(invoice, { ore_rounding: oreRounding }).displayed,
+                  invoice.currency,
+                ),
+              })
+            : t('confirm_book_description_generic', {
+                number: invoiceDisplayNumber(invoice as Invoice),
+              })
+        }
+        confirmLabel={t('book_action')}
+        onConfirm={handleBook}
+      />
     </div>
   )
 }

@@ -3869,7 +3869,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_categorize_transaction',
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the verifikat — cost line booked NET of moms, bank line gross; preview.lines shows the exact entry. Commit via gnubok_approve_pending_operation. vat_amount overrides computed moms; reverse_charge rejected when the underlag shows seller VAT.',
+    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross; dimensions bag tags the cost line. vat_amount overrides computed moms; reverse_charge rejected when the underlag shows seller VAT. Commit via gnubok_approve_pending_operation.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4539,7 +4539,7 @@ export const tools: McpTool[] = [
 
       let query = supabase
         .from('invoices')
-        .select('id, invoice_number, status, customer_id, total, currency, invoice_date, due_date, document_type, customers(name)', { count: 'exact' })
+        .select('id, invoice_number, status, customer_id, total, currency, invoice_date, due_date, document_type, default_dimensions, customers(name)', { count: 'exact' })
         .eq('company_id', companyId)
 
       if (status) {
@@ -4562,6 +4562,7 @@ export const tools: McpTool[] = [
         invoice_date: inv.invoice_date,
         due_date: inv.due_date,
         document_type: inv.document_type,
+        default_dimensions: inv.default_dimensions ?? {},
       }))
 
       return {
@@ -5721,7 +5722,7 @@ export const tools: McpTool[] = [
 
       let query = supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, supplier:suppliers(id, name)')
+        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, default_dimensions, supplier:suppliers(id, name)')
         .eq('company_id', companyId)
 
       if (status !== 'all') {
@@ -7021,7 +7022,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_query_journal',
     title: 'Query Journal Lines',
-    description: "Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher series/number, source type, status, project, cost center, free-text. Optional group_by aggregation. Returns lines + totals over the full match set (see totals_scope).",
+    description: "Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher, source, status, dimensions bag, free-text. group_by/group_by_dimension aggregation; include_dimensions returns each line's bag. Lines + totals over the full match set (totals_scope).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7039,8 +7040,17 @@ export const tools: McpTool[] = [
         voucher_number_to: { type: 'number', description: 'Highest voucher number (inclusive)' },
         source_type: { type: 'string', description: 'Filter by source: bank_transaction, invoice_created, supplier_invoice, currency_revaluation, year_end, opening_balance, etc.' },
         status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: 'Default: posted' },
-        project: { type: 'string', description: 'Filter by project code' },
-        cost_center: { type: 'string', description: 'Filter by cost center' },
+        project: { type: 'string', description: 'Filter by project code (SIE dim 6)' },
+        cost_center: { type: 'string', description: 'Filter by cost center (SIE dim 1)' },
+        dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Filter: SIE dim no → value (code OR name, resolved server-side), e.g. {"6":"P001"}. Containment match; covers custom dims unlike project/cost_center.',
+        },
+        include_dimensions: {
+          type: 'boolean',
+          description: "Return each line's dimensions bag (default false).",
+        },
         group_by: { type: 'string', enum: ['account_number', 'voucher_series', 'source_type', 'cost_center', 'project'], description: 'Aggregate matching lines into groups by this field. Mutually exclusive with group_by_dimension.' },
         group_by_dimension: { type: 'string', description: 'Aggregate by SIE dimension number (e.g. "6" = projekt) from each line\'s dimensions bag; untagged → "(utan dimension)". Mutually exclusive with group_by.' },
         limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1-500 (default 100). Totals/groups cover the FULL match set even when truncated, except under free-text search (see totals_scope).' },
@@ -7084,6 +7094,7 @@ export const tools: McpTool[] = [
           description: 'Present when group_by/group_by_dimension is set; sorted by |net| desc. Scope follows totals_scope.',
         },
         applied_filters: { type: 'object' },
+        ...DIMENSION_FILTER_OUTPUT_PROPS,
       },
       required: ['lines', 'total_lines', 'returned_lines', 'totals', 'totals_scope'],
     },
@@ -7112,6 +7123,10 @@ export const tools: McpTool[] = [
       const sourceType = args.source_type as string | undefined
       const project = args.project as string | undefined
       const costCenter = args.cost_center as string | undefined
+      const includeDimensions = args.include_dimensions === true
+      // Resolve-don't-select: value NAMES resolve to registry codes; the
+      // containment filter then hits the GIN index on the jsonb bag.
+      const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
 
       const GROUP_BY_FIELDS = ['account_number', 'voucher_series', 'source_type', 'cost_center', 'project'] as const
       const groupBy = args.group_by as (typeof GROUP_BY_FIELDS)[number] | undefined
@@ -7133,9 +7148,10 @@ export const tools: McpTool[] = [
       }
       const wantsGroups = Boolean(groupBy || groupByDimension)
 
-      // The dimensions jsonb only rides along when a group needs it: it is
+      // The dimensions jsonb only rides along when something needs it (a
+      // dimension group, the bag filter's echo, or include_dimensions): it is
       // the widest column on the line and the aggregate pass fetches ALL rows.
-      const dimsSelect = groupByDimension ? ', dimensions' : ''
+      const dimsSelect = groupByDimension || includeDimensions || dimFilter.filter ? ', dimensions' : ''
       // Free-text legs only. The embed survives here on purpose: each leg is
       // capped at `legLimit` rows, and that cap (which drives legCapHit and
       // the `truncated` signal) has no equivalent in the two-step fetch,
@@ -7183,6 +7199,7 @@ export const tools: McpTool[] = [
 
         if (project) q = q.eq('project', project)
         if (costCenter) q = q.eq('cost_center', costCenter)
+        if (dimFilter.filter) q = q.contains('dimensions', dimFilter.filter)
 
         return q
       }
@@ -7213,6 +7230,7 @@ export const tools: McpTool[] = [
         }
         if (project) l = l.eq('project', project)
         if (costCenter) l = l.eq('cost_center', costCenter)
+        if (dimFilter.filter) l = l.contains('dimensions', dimFilter.filter)
         return l
       }
 
@@ -7420,6 +7438,7 @@ export const tools: McpTool[] = [
           line_description: r.line_description,
           project: r.project,
           cost_center: r.cost_center,
+          ...(includeDimensions ? { dimensions: r.dimensions ?? {} } : {}),
           currency: r.currency,
         }
       })
@@ -7508,9 +7527,12 @@ export const tools: McpTool[] = [
           status,
           project: project ?? null,
           cost_center: costCenter ?? null,
+          dimensions: dimFilter.filter ?? null,
           group_by: groupBy ?? null,
           group_by_dimension: groupByDimension ?? null,
         },
+        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
       }
     },
   },
@@ -8245,6 +8267,11 @@ export const tools: McpTool[] = [
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: "The underlag's exact moms override; only valid with a rate-based vat_treatment. Rarely needed in bulk: all items share one value." },
         notes: { type: 'string', description: 'Audit-trail note appended to every verifikation. Keep under 200 chars.' },
         allow_duplicate: { type: 'boolean', description: 'Override the per-item duplicate-booking guard (default false). Set true only after the user confirms these bank lines are genuinely separate events.' },
+        dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Shared dims bag {sie_dim_no: kod eller namn} applied to the business lines of every verifikat. Unknown values rejected: never auto-created.',
+        },
       },
       required: ['item_ids', 'category'],
     },
@@ -8264,6 +8291,15 @@ export const tools: McpTool[] = [
       const notes = typeof args.notes === 'string' && args.notes.trim().length > 0
         ? args.notes.trim()
         : undefined
+
+      // Resolve-don't-select: codes AND natural-language names resolve against
+      // the registry; the staged params carry only resolved codes.
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [parseDimensionsArg(args.dimensions, 'dimensions')],
+      )
+      const resolvedDimensions = resolvedDimBags[0]
 
       // Pre-flight: classify the selection so the preview (and the agent) sees
       // the real shape before staging. Tenant isolation via company_id.
@@ -8323,6 +8359,9 @@ export const tools: McpTool[] = [
           vat_amount: vatAmount ?? null,
           notes: notes ?? null,
           allow_duplicate: args.allow_duplicate === true,
+          dimensions: resolvedDimensions && Object.keys(resolvedDimensions).length > 0
+            ? resolvedDimensions
+            : null,
         },
         {
           item_count: itemIds.length,
@@ -8334,6 +8373,12 @@ export const tools: McpTool[] = [
           total_sek: Math.round(totalSek * 100) / 100,
           category: args.category,
           vat_treatment: args.vat_treatment ?? null,
+          ...(resolvedDimensions && Object.keys(resolvedDimensions).length > 0
+            ? { dimensions: resolvedDimensions }
+            : {}),
+          // Echoed for every non-exact dimension resolution (resolve-don't-
+          // select) so the agent can verify what a name attached to.
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
         {
@@ -11194,12 +11239,29 @@ export const tools: McpTool[] = [
         jamkning_percentage: { type: 'number' },
         jamkning_valid_from: { type: 'string' },
         jamkning_valid_to: { type: 'string' },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag {sie_dim_no: kod eller namn} tagging this employee\'s salary cost lines on every run. Never auto-created.',
+        },
       },
       required: ['first_name', 'last_name', 'personnummer', 'employment_start'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
+      // Resolve-don't-select BEFORE schema validation: the bag may carry
+      // registry value NAMES, which the strict DimensionsBagSchema inside
+      // CreateEmployeeSchema would reject.
+      const { bags: employeeDimBags } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [parseDimensionsArg(args.default_dimensions, 'default_dimensions')],
+      )
+      if (args.default_dimensions !== undefined) {
+        args = { ...args, default_dimensions: employeeDimBags[0] ?? {} }
+      }
+
       const { CreateEmployeeSchema } = await import('@/lib/api/schemas')
       const parsed = CreateEmployeeSchema.safeParse(args)
       if (!parsed.success) {
@@ -11290,6 +11352,11 @@ export const tools: McpTool[] = [
         jamkning_percentage: { type: ['number', 'null'], description: 'null clears the beslut' },
         jamkning_valid_from: { type: ['string', 'null'] },
         jamkning_valid_to: { type: ['string', 'null'] },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag {sie_dim_no: kod eller namn} tagging salary cost lines. Replaces the whole bag; {} clears all tags. Omit to keep.',
+        },
       },
       required: ['employee_id'],
     },
@@ -11300,6 +11367,17 @@ export const tools: McpTool[] = [
       if (!employee_id) throw new Error('employee_id is required')
       if ('personnummer' in rest) {
         throw new Error('personnummer cannot be changed: identity is immutable post-create')
+      }
+
+      // Resolve-don't-select: names resolve to registry codes; an explicit {}
+      // stays {} (the clear-all-tags update).
+      if (rest.default_dimensions !== undefined) {
+        const { bags: employeeDimBags } = await resolveDimensionBags(
+          supabase,
+          companyId,
+          [parseDimensionsArg(rest.default_dimensions, 'default_dimensions')],
+        )
+        rest.default_dimensions = employeeDimBags[0] ?? {}
       }
 
       const patch: Record<string, unknown> = {}
@@ -12937,7 +13015,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_update_invoice',
     title: 'Update Draft Invoice',
-    description: 'Stage an edit to a DRAFT invoice: header fields and/or items (items = FULL REPLACE of all lines). Only editable drafts: no verifikat, not self-billed, not a credit note. Sent/paid invoices need gnubok_credit_invoice. Find invoice_id with gnubok_list_invoices.',
+    description: 'Stage an edit to a DRAFT invoice: header fields (incl. default_dimensions) and/or items (items = FULL REPLACE). Drafts only: no verifikat, not self-billed, not a credit note. Sent/paid invoices need gnubok_credit_invoice. Find invoice_id with gnubok_list_invoices.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -13332,7 +13410,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_voucher',
     title: 'Create Manual Voucher (Verifikation)',
-    description: 'Stage a manual verifikation with arbitrary balanced lines: capitalization (1010), accruals, FX adjustments, rättelser outside categorize_transaction. Pass inbox_item_id to book a kvitto direct. HIGH risk.',
+    description: 'Stage a manual verifikation with arbitrary balanced lines: capitalization (1010), accruals, FX adjustments, rättelser outside categorize_transaction. Lines accept dimensions bags {sie_dim_no: code or name}. Pass inbox_item_id to book a kvitto direct. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -13602,7 +13680,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_correct_entry',
     title: 'Correct Posted Entry (Rättelse)',
-    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645. Account drives ruta. HIGH risk.',
+    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§: storno + corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645; lines accept dimensions bags. Account drives ruta. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -14817,6 +14895,10 @@ export const tools: McpTool[] = [
         last_run_warning: { type: ['string', 'null'] },
         generated_count: { type: 'number' },
         monthly_total_excl_vat: { type: 'number' },
+        default_dimensions: {
+          type: 'object',
+          description: 'Dims bag {sie_dim_no: code} copied onto every generated invoice',
+        },
         items: {
           type: 'array',
           items: {
@@ -14827,6 +14909,7 @@ export const tools: McpTool[] = [
               unit: { type: 'string' },
               unit_price: { type: 'number' },
               vat_rate: { type: ['number', 'null'], description: 'null = customer default at spawn time' },
+              dimensions: { type: 'object', description: 'Per-item dims bag; wins per key over default_dimensions' },
             },
           },
         },
@@ -14846,7 +14929,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('recurring_invoice_schedules')
         .select(
-          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, auto_send, next_run_date, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, sort_order)',
+          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, auto_send, default_dimensions, next_run_date, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
           { count: 'exact' },
         )
         .eq('company_id', companyId)
@@ -14871,6 +14954,7 @@ export const tools: McpTool[] = [
             unit: it.unit,
             unit_price: it.unit_price,
             vat_rate: it.vat_rate ?? null,
+            dimensions: it.dimensions ?? {},
           }))
         const monthlyTotalExclVat =
           Math.round(items.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unit_price), 0) * 100) / 100
@@ -14891,6 +14975,7 @@ export const tools: McpTool[] = [
           last_run_warning: row.last_run_warning ?? null,
           generated_count: row.generated_count,
           monthly_total_excl_vat: monthlyTotalExclVat,
+          default_dimensions: row.default_dimensions ?? {},
           items,
         }
       })
@@ -14936,6 +15021,11 @@ export const tools: McpTool[] = [
           description: 'Default false: invoices are created as drafts for manual review. true emails every generated invoice to the customer with no further approval; requires the customer to have an email address.',
         },
         start_date: { type: 'string', description: 'YYYY-MM-DD first run date. Omit to run on the next occurrence of day_of_month.' },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"6":"P001"}. Copied onto every generated invoice. Unknown values rejected: never auto-created.',
+        },
         items: {
           type: 'array',
           minItems: 1,
@@ -14951,6 +15041,11 @@ export const tools: McpTool[] = [
                 type: ['number', 'null'],
                 enum: [0, 6, 12, 25, null],
                 description: 'Omit or null to use the customer default VAT rate at spawn time.',
+              },
+              dimensions: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
               },
             },
             required: ['description', 'quantity', 'unit_price'],
@@ -14969,6 +15064,27 @@ export const tools: McpTool[] = [
     },
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
+      // Resolve-don't-select: parse the schedule-level default bag + each
+      // item's own bag, then resolve codes AND natural-language names against
+      // the registry in ONE pass (mirrors gnubok_create_invoice). The staged
+      // params carry only resolved codes; the cron copies them verbatim onto
+      // every generated invoice.
+      const rawItems = Array.isArray(args.items)
+        ? (args.items as Array<Record<string, unknown>>)
+        : []
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [defaultDimensions, ...rawItems.map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`))],
+      )
+      const resolvedDefaultDimensions = resolvedDimBags[0]
+      const stagedItems = rawItems.map((item, i) => {
+        const { dimensions: _rawDimensions, ...rest } = item
+        const bag = resolvedDimBags[i + 1]
+        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+      })
+
       const candidate: Record<string, unknown> = {}
       for (const key of [
         'customer_id',
@@ -14982,9 +15098,16 @@ export const tools: McpTool[] = [
         'notes',
         'auto_send',
         'start_date',
-        'items',
       ]) {
         if (args[key] !== undefined) candidate[key] = args[key]
+      }
+      if (args.items !== undefined) {
+        // Non-array garbage passes through verbatim so the schema error below
+        // names the real problem instead of a synthetic empty list.
+        candidate.items = Array.isArray(args.items) ? stagedItems : args.items
+      }
+      if (resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0) {
+        candidate.default_dimensions = resolvedDefaultDimensions
       }
 
       const parsed = CreateRecurringScheduleParamsSchema.safeParse(candidate)
@@ -15025,6 +15148,12 @@ export const tools: McpTool[] = [
         projected_first_run_date: computeInitialRunDate(new Date(), params.day_of_month, params.start_date),
         monthly_total_excl_vat: monthlyTotalExclVat,
         items: params.items,
+        ...(params.default_dimensions && Object.keys(params.default_dimensions).length > 0
+          ? { default_dimensions: params.default_dimensions }
+          : {}),
+        // Echoed for every non-exact dimension resolution (resolve-don't-
+        // select) so the agent can verify what a name attached to.
+        ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
       }
 
       return stagePendingOperation(supabase, companyId, userId, 'create_recurring_schedule',
@@ -15077,6 +15206,11 @@ export const tools: McpTool[] = [
           enum: ['active', 'paused'],
           description: 'paused stops generating invoices; active resumes. Reactivating from a stale date rolls next_run_date to the next future occurrence, never today.',
         },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag {sie_dim_no: kod eller namn} copied onto every generated invoice. Replaces the whole bag; {} clears all tags. Omit to keep.',
+        },
         items: {
           type: 'array',
           minItems: 1,
@@ -15092,6 +15226,11 @@ export const tools: McpTool[] = [
                 type: ['number', 'null'],
                 enum: [0, 6, 12, 25, null],
                 description: 'Omit or null to use the customer default VAT rate at spawn time.',
+              },
+              dimensions: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
               },
             },
             required: ['description', 'quantity', 'unit_price'],
@@ -15110,6 +15249,24 @@ export const tools: McpTool[] = [
     },
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
+      // Resolve-don't-select for both the replacement default bag and any
+      // per-item bags (mirrors gnubok_create_recurring_schedule). An explicit
+      // {} default_dimensions passes through as the clear-all-tags update.
+      const rawItems = Array.isArray(args.items)
+        ? (args.items as Array<Record<string, unknown>>)
+        : []
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [defaultDimensions, ...rawItems.map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`))],
+      )
+      const stagedItems = rawItems.map((item, i) => {
+        const { dimensions: _rawDimensions, ...rest } = item
+        const bag = resolvedDimBags[i + 1]
+        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+      })
+
       const changes: Record<string, unknown> = {}
       for (const key of [
         'customer_id',
@@ -15123,9 +15280,16 @@ export const tools: McpTool[] = [
         'notes',
         'auto_send',
         'status',
-        'items',
       ]) {
         if (args[key] !== undefined) changes[key] = args[key]
+      }
+      if (args.default_dimensions !== undefined) {
+        changes.default_dimensions = resolvedDimBags[0] ?? {}
+      }
+      if (args.items !== undefined) {
+        // Non-array garbage passes through verbatim so the schema error below
+        // names the real problem instead of a synthetic empty list.
+        changes.items = Array.isArray(args.items) ? stagedItems : args.items
       }
 
       const parsed = UpdateRecurringScheduleParamsSchema.safeParse({
@@ -15141,7 +15305,7 @@ export const tools: McpTool[] = [
       const { data: current, error } = await supabase
         .from('recurring_invoice_schedules')
         .select(
-          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, auto_send, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, sort_order)',
+          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, auto_send, default_dimensions, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
         )
         .eq('id', parsed.data.schedule_id)
         .eq('company_id', companyId)
@@ -15183,6 +15347,7 @@ export const tools: McpTool[] = [
           unit: it.unit,
           unit_price: it.unit_price,
           vat_rate: it.vat_rate ?? null,
+          dimensions: it.dimensions ?? {},
         }))
 
       const currentPreview = {
@@ -15199,6 +15364,7 @@ export const tools: McpTool[] = [
         our_reference: current.our_reference ?? null,
         notes: current.notes ?? null,
         auto_send: current.auto_send,
+        default_dimensions: current.default_dimensions ?? {},
         next_run_date: current.next_run_date,
         items: currentItems,
       }
@@ -15220,6 +15386,9 @@ export const tools: McpTool[] = [
             ...fieldChanges,
             ...(newItems ? { items: newItems } : {}),
           },
+          // Echoed for every non-exact dimension resolution (resolve-don't-
+          // select) so the agent can verify what a name attached to.
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
         undefined,

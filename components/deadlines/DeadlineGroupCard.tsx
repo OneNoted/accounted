@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl'
 import { Deadline } from '@/types'
 import { cn } from '@/lib/utils'
 import { isDeadlineOverdue } from '@/lib/calendar/utils'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { deadlineDateLabel } from './DeadlineRow'
 import { Pencil } from 'lucide-react'
 
@@ -92,10 +92,7 @@ export function DeadlineGroupCard({ deadlines, onEdit, onRequestToggle }: Deadli
                   e.stopPropagation()
                   onRequestToggle(deadline)
                 }}
-                className={cn(
-                  QUIET_LINK_CLASS,
-                  'shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100',
-                )}
+                className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, 'shrink-0')}
               >
                 {t('group_mark_done')}
               </button>
