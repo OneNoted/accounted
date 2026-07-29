@@ -16,6 +16,13 @@ export const VTD_CLASS = 'py-[7px] pr-4 border-b border-border/60 align-top'
 export const QUIET_LINK_CLASS =
   'text-[12.5px] text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground'
 
+// Row controls that stay out of the way until the row is hovered. Coarse
+// pointers never fire hover, so without pointer-coarse: the control would be
+// permanently invisible and the action unreachable on touch. Always use this
+// constant instead of hand-rolling `opacity-0 group-hover:opacity-100`.
+export const HOVER_REVEAL_CLASS =
+  'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100'
+
 // Animated row expansion (concept vwrap/vinner): grid-rows 0fr -> 1fr on
 // mount; the global reduced-motion rule collapses the transition.
 export function RowFoldout({ children }: { children: React.ReactNode }) {
