@@ -15426,6 +15426,40 @@ const SERVER_INFO_BY_NAMESPACE = {
 
 const PROTOCOL_VERSION = '2025-06-18'
 
+// ── Spec revision 2026-07-28 (stateless core) ────────────────
+// New-style clients skip the initialize handshake and instead carry their
+// protocol version and capabilities in _meta on every request. The handshake
+// path keeps serving 2025-06-18-and-earlier clients unchanged: their
+// responses stay byte-identical.
+const STATELESS_PROTOCOL_VERSION = '2026-07-28'
+const SUPPORTED_PROTOCOL_VERSIONS = [
+  STATELESS_PROTOCOL_VERSION,
+  '2025-06-18',
+  '2025-03-26',
+  '2024-11-05',
+]
+const META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion'
+const META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo'
+// 2026-07-28 reserves -32020..-32099 for spec-defined errors.
+const JSONRPC_HEADER_MISMATCH = -32020
+const JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
+// CacheableResult freshness hints. The tool/prompt catalog and widget HTML
+// change only on deploy; skills live in the DB and can change between
+// deploys; data resources are live ledger state and must never be cached.
+// Everything is served behind Authorization, so cacheScope stays private.
+const CACHE_STATIC = { ttlMs: 3_600_000, cacheScope: 'private' } as const
+const CACHE_SKILLS = { ttlMs: 300_000, cacheScope: 'private' } as const
+const CACHE_LIVE = { ttlMs: 0, cacheScope: 'private' } as const
+
+const SERVER_CAPABILITIES = {
+  tools: { listChanged: false },
+  resources: { listChanged: false },
+  prompts: { listChanged: false },
+  // MCP Apps (ratified extension): widgets are served as ui:// resources and
+  // referenced from tool _meta.ui.resourceUri (see widgets/).
+  extensions: { 'io.modelcontextprotocol/ui': {} },
+}
+
 function jsonRpc(id: string | number | null, result: unknown): JsonRpcResponse {
   return { jsonrpc: '2.0', id, result }
 }
@@ -15779,25 +15813,89 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     )
   }
 
+  // ── Stateless core (spec 2026-07-28) ──
+  // New-style clients carry their protocol version in _meta on every request
+  // instead of an initialize handshake. Requests without the key come from
+  // handshake-era clients and keep byte-identical responses.
+  const requestMeta = (body.params?._meta ?? {}) as Record<string, unknown>
+  const metaVersion = requestMeta[META_PROTOCOL_VERSION]
+  if (typeof metaVersion === 'string' && !SUPPORTED_PROTOCOL_VERSIONS.includes(metaVersion)) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_UNSUPPORTED_PROTOCOL_VERSION,
+        `Unsupported protocol version: "${metaVersion}"`,
+        { supported: SUPPORTED_PROTOCOL_VERSIONS }
+      ),
+      { status: 400 }
+    )
+  }
+  // Revisions are ISO dates, so string comparison orders them correctly.
+  const statelessClient =
+    typeof metaVersion === 'string' && metaVersion >= STATELESS_PROTOCOL_VERSION
+
+  // Standard request headers (2026-07-28): when present they must agree with
+  // the JSON-RPC body. Absence stays accepted: handshake-era clients and the
+  // stdio bridges do not send them.
+  const headerMethod = request.headers.get('mcp-method')
+  if (headerMethod && headerMethod !== body.method) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_HEADER_MISMATCH,
+        `Header mismatch: Mcp-Method "${headerMethod}" does not match body method "${body.method}"`
+      ),
+      { status: 400 }
+    )
+  }
+  const headerName = request.headers.get('mcp-name')
+  const bodyParamName = body.params?.name
+  if (headerName && typeof bodyParamName === 'string' && headerName !== bodyParamName) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_HEADER_MISMATCH,
+        `Header mismatch: Mcp-Name "${headerName}" does not match params.name "${bodyParamName}"`
+      ),
+      { status: 400 }
+    )
+  }
+
+  /**
+   * Decorate a result for stateless-core clients: required resultType,
+   * serverInfo identification, and CacheableResult freshness hints. A no-op
+   * for handshake-era clients so existing connections see unchanged payloads.
+   */
+  const decorate = (
+    result: Record<string, unknown>,
+    cache?: { ttlMs: number; cacheScope: 'public' | 'private' }
+  ): Record<string, unknown> => {
+    if (!statelessClient) return result
+    const decorated: Record<string, unknown> = { resultType: 'complete', ...result }
+    if (cache) {
+      decorated.ttlMs = cache.ttlMs
+      decorated.cacheScope = cache.cacheScope
+    }
+    decorated._meta = {
+      ...((result._meta as Record<string, unknown> | undefined) ?? {}),
+      [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace],
+    }
+    return decorated
+  }
+
   // ── Dispatch ──
   const { method, id, params } = body
 
   switch (method) {
+    case 'server/discover':
     case 'initialize': {
-      const SUPPORTED_VERSIONS = new Set(['2025-06-18', '2025-03-26', '2024-11-05'])
+      // Handshake-era set: a 2026-07-28 stateless client never sends
+      // initialize; one that does anyway negotiates down to 2025-06-18.
+      const HANDSHAKE_VERSIONS = new Set(['2025-06-18', '2025-03-26', '2024-11-05'])
       const clientVersion = (params as Record<string, unknown>)?.protocolVersion as string | undefined
       const negotiatedVersion =
-        clientVersion && SUPPORTED_VERSIONS.has(clientVersion) ? clientVersion : PROTOCOL_VERSION
-      return NextResponse.json(
-        jsonRpc(id ?? null, {
-          protocolVersion: negotiatedVersion,
-          capabilities: {
-            tools: { listChanged: false },
-            resources: { listChanged: false },
-            prompts: { listChanged: false },
-          },
-          serverInfo: SERVER_INFO_BY_NAMESPACE[toolNamespace],
-          instructions: projectToolReferencesInText([
+        clientVersion && HANDSHAKE_VERSIONS.has(clientVersion) ? clientVersion : PROTOCOL_VERSION
+      const instructions = projectToolReferencesInText([
             'Accounted: Swedish double-entry bookkeeping via conversation.',
             '',
             'Discovery:',
@@ -15827,7 +15925,30 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             toolNamespace === 'gnubok'
               ? 'Tool names carry the legacy gnubok_ prefix (a stable identifier kept across the rebrand); the server and app are "Accounted". Same product: the prefix is not a different system.'
               : 'Tool names use the accounted_ prefix. Legacy gnubok_ aliases remain accepted for existing integrations.',
-          ].join('\n'), toolNamespace, getCanonicalToolNames()),
+          ].join('\n'), toolNamespace, getCanonicalToolNames())
+      // 2026-07-28 MUST: server/discover advertises supported revisions,
+      // capabilities, and identity so stateless clients can select a version
+      // up front or use it as a compatibility probe. Always answers in the
+      // stateless result shape regardless of the request's _meta.
+      if (method === 'server/discover') {
+        return NextResponse.json(
+          jsonRpc(id ?? null, {
+            resultType: 'complete',
+            supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
+            capabilities: SERVER_CAPABILITIES,
+            instructions,
+            ttlMs: CACHE_STATIC.ttlMs,
+            cacheScope: CACHE_STATIC.cacheScope,
+            _meta: { [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace] },
+          })
+        )
+      }
+      return NextResponse.json(
+        jsonRpc(id ?? null, {
+          protocolVersion: negotiatedVersion,
+          capabilities: SERVER_CAPABILITIES,
+          serverInfo: SERVER_INFO_BY_NAMESPACE[toolNamespace],
+          instructions,
         })
       )
     }
@@ -15837,7 +15958,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       return new Response(null, { status: 202 })
 
     case 'ping':
-      return NextResponse.json(jsonRpc(id ?? null, {}))
+      return NextResponse.json(jsonRpc(id ?? null, decorate({})))
 
     case 'tools/list': {
       const listStartedAt = Date.now()
@@ -15855,7 +15976,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         companyId,
       })
       return NextResponse.json(
-        jsonRpc(id ?? null, {
+        jsonRpc(id ?? null, decorate({
           tools: allowedTools.map((t) => {
             // Merge derived staging metadata with any literal _meta (e.g. UI
             // widget hints). Literal _meta wins on key collision so explicit
@@ -15877,7 +15998,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               toolNamespace
             )
           }),
-        })
+        }, CACHE_STATIC))
       )
     }
 
@@ -15945,10 +16066,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         })
         const publicScopeError = projectMcpPayload(scopeError, toolNamespace)
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             content: [{ type: 'text', text: JSON.stringify(publicScopeError, null, 2) }],
             isError: true,
-          })
+          }))
         )
       }
 
@@ -15989,10 +16110,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId,
         })
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             content: [{ type: 'text', text: JSON.stringify(publicStructured, null, 2) }],
             isError: true,
-          })
+          }))
         )
       }
 
@@ -16019,10 +16140,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId: effectiveCompanyId,
         })
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             content: [{ type: 'text', text: JSON.stringify(publicCapError, null, 2) }],
             isError: true,
-          })
+          }))
         )
       }
 
@@ -16060,10 +16181,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             companyId: effectiveCompanyId,
           })
           return NextResponse.json(
-            jsonRpc(id ?? null, {
+            jsonRpc(id ?? null, decorate({
               content: [{ type: 'text', text: JSON.stringify(publicBlocked, null, 2) }],
               isError: true,
-            })
+            }))
           )
         }
       }
@@ -16130,7 +16251,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           userId,
           companyId: effectiveCompanyId,
         })
-        return NextResponse.json(jsonRpc(id ?? null, response))
+        return NextResponse.json(jsonRpc(id ?? null, decorate(response)))
       } catch (err) {
         const latencyMs = Date.now() - callStartedAt
         const structured = toToolError(err, { toolName })
@@ -16153,10 +16274,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId: effectiveCompanyId,
         })
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             content: [{ type: 'text', text: JSON.stringify(publicStructured, null, 2) }],
             isError: true,
-          })
+          }))
         )
       }
     }
@@ -16164,7 +16285,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     case 'resources/list': {
       const allSkills = await loadAllSkills(supabase)
       return NextResponse.json(
-        jsonRpc(id ?? null, projectMcpPayload({
+        jsonRpc(id ?? null, decorate(projectMcpPayload({
           resources: [
             ...uiWidgets.map((w) => ({
               uri: w.uri,
@@ -16185,7 +16306,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               mimeType: r.mimeType,
             })),
           ],
-        }, toolNamespace))
+        }, toolNamespace), CACHE_SKILLS))
       )
     }
 
@@ -16207,7 +16328,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId,
         })
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             contents: [
               {
                 uri,
@@ -16219,7 +16340,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 ),
               },
             ],
-          })
+          }, CACHE_STATIC))
         )
       }
 
@@ -16242,7 +16363,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             companyId,
           })
           return NextResponse.json(
-            jsonRpc(id ?? null, {
+            jsonRpc(id ?? null, decorate({
               contents: [
                 {
                   uri,
@@ -16254,7 +16375,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                   ),
                 },
               ],
-            })
+            }, CACHE_SKILLS))
           )
         }
       }
@@ -16281,7 +16402,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             companyId,
           })
           return NextResponse.json(
-            jsonRpc(id ?? null, {
+            jsonRpc(id ?? null, decorate({
               contents: [
                 {
                   uri,
@@ -16289,7 +16410,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                   text: JSON.stringify(projectMcpPayload(result, toolNamespace), null, 2),
                 },
               ],
-            })
+            }, CACHE_LIVE))
           )
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Resource read failed'
@@ -16336,12 +16457,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
     case 'prompts/list':
       return NextResponse.json(
-        jsonRpc(id ?? null, projectMcpPayload({
+        jsonRpc(id ?? null, decorate(projectMcpPayload({
           prompts: prompts.map((p) => ({
             name: p.name,
             description: p.description,
           })),
-        }, toolNamespace))
+        }, toolNamespace), CACHE_STATIC))
       )
 
     case 'prompts/get': {
@@ -16353,7 +16474,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
       return NextResponse.json(
-        jsonRpc(id ?? null, {
+        jsonRpc(id ?? null, decorate({
           description: prompt.description,
           messages: [
             {
@@ -16368,7 +16489,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               },
             },
           ],
-        })
+        }))
       )
     }
 
