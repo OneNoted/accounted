@@ -395,3 +395,37 @@ describe('generateINK2Declaration: guards', () => {
     expect(result.warnings.some((w) => w.includes('1305'))).toBe(false)
   })
 })
+
+describe('generateINK2Declaration: cross-surface self-check', () => {
+  it('warns when the declared result disagrees with the booked 2099', async () => {
+    // Exactly the shape a customer reported on 2026-07-29: the form said
+    // 0 kr while the books carried 442 000 kr on 2099. Nothing warned then,
+    // because the balance sheet still tied out on its own.
+    const zeroedIncome = CLOSED_ROWS
+    stubTrialBalances(CLOSED_ROWS, zeroedIncome)
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2r['7450']).toBe(0)
+    expect(result.warnings.some((w) => w.includes('stämmer inte med det bokförda resultatet'))).toBe(true)
+  })
+
+  it('stays silent when the declaration agrees with the books', async () => {
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2r['7450']).toBe(442_000)
+    expect(result.warnings.some((w) => w.includes('stämmer inte med det bokförda resultatet'))).toBe(false)
+  })
+
+  it('does not fire on an open year, where 2099 is legitimately empty', async () => {
+    stubTrialBalances(PRE_CLOSING_ROWS, PRE_CLOSING_ROWS)
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ closingEntryId: null, isClosed: false })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.warnings.some((w) => w.includes('stämmer inte med det bokförda resultatet'))).toBe(false)
+  })
+})

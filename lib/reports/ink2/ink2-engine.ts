@@ -683,11 +683,17 @@ function truncateToKrona(value: number): number {
 }
 
 /**
+ * Slack allowed before a difference counts as a real disagreement. Every INK2
+ * field is truncated to whole kronor per SFL 22 kap. 1 §, so a few öre of
+ * truncation residual can accumulate across the form legitimately.
+ */
+const ROUNDING_TOLERANCE_KR = 2
+
+/**
  * Check if the balance sheet totals differ beyond the expected rounding tolerance.
  */
 export function checkBalanceWarning(totalAssets: number, totalEquityLiabilities: number): string | null {
   const balanceDiff = Math.abs(totalAssets - totalEquityLiabilities)
-  const ROUNDING_TOLERANCE_KR = 2
   if (balanceDiff > ROUNDING_TOLERANCE_KR && (totalAssets > 0 || totalEquityLiabilities > 0)) {
     return `Balansräkningen är inte i balans. Tillgångar: ${totalAssets} kr, Eget kapital och skulder: ${totalEquityLiabilities} kr (differens: ${balanceDiff} kr).`
   }
@@ -1047,6 +1053,25 @@ export async function generateINK2Declaration(
   const balanceWarning = checkBalanceWarning(totalAssets, adjustedEquityLiabilities)
   if (balanceWarning) {
     warnings.push(balanceWarning)
+  }
+
+  // Cross-surface self-check. When the year is closed, the resultaträkning the
+  // form reports must equal the årets resultat the books actually carry on 2099,
+  // which is also the figure the fastställda årsredovisningen shows. Mirrors the
+  // equivalent check in lib/bokslut/ixbrl/k2-mapper.ts so both statutory reports
+  // catch the same disagreement.
+  //
+  // This is the alarm that was missing: when INK2R reported 0 kr against a
+  // booked result of 469 542 kr, nothing warned, because the balance sheet
+  // still tied out on its own. A customer found it instead.
+  if (resultClosedIntoEquity) {
+    const bookedResult = truncateToKrona(-(balanceSheetBalances.get('2099') ?? 0))
+    const declaredResult = resultAfterFinancial
+    if (Math.abs(bookedResult - declaredResult) > ROUNDING_TOLERANCE_KR) {
+      warnings.push(
+        `Årets resultat enligt resultaträkningen (${declaredResult} kr) stämmer inte med det bokförda resultatet på konto 2099 (${bookedResult} kr). Deklarationen stämmer då inte med det fastställda bokslutet.`,
+      )
+    }
   }
 
   return {
