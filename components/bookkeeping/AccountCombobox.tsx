@@ -216,9 +216,20 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       // editing an already-committed number doesn't keep stealing focus. On
       // commit, close the dropdown too: focus advances to the amount field, so
       // a lingering open list would just cover the rows below.
+      //
+      // Unless the number matches nothing. Then the dropdown is showing the
+      // empty state, which carries the only way forward for a number outside
+      // BAS (a retired account such as 8022, or a company-specific
+      // underkonto): the "Skapa konto" affordance. Closing on the fourth
+      // keystroke used to hide it before it was ever painted, which made the
+      // affordance unreachable for exactly the numbers that need it.
       if (newValue !== value) {
         onCommit?.(newValue)
-        setIsOpen(false)
+        if (searchAccounts(accountIndex, newValue).length > 0) {
+          setIsOpen(false)
+          return
+        }
+        setIsOpen(true)
         return
       }
     }

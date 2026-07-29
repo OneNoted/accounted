@@ -28,6 +28,7 @@ import { TemplateForm } from '@/components/settings/TemplateForm'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
+import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
 import DuplicateBookingDialog, { type DuplicateMatchTransaction } from '@/components/transactions/DuplicateBookingDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -2004,8 +2005,7 @@ export default function JournalEntryForm({
             setCreateAccountPrefill('')
           }
         }}
-        initialAccountNumber={/^\d{1,4}$/.test(createAccountPrefill) ? createAccountPrefill : undefined}
-        initialAccountName={/^\d{1,4}$/.test(createAccountPrefill) ? undefined : createAccountPrefill}
+        {...splitCreateAccountPrefill(createAccountPrefill)}
         onCreated={handleAccountCreated}
       />
 

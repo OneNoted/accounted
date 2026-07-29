@@ -7,6 +7,7 @@ import {
   calculateVacationAccrual,
   prorateBaseSalaryForPeriod,
 } from '../calculation-engine'
+import { calculateVacationPay } from '../absence-calculator'
 import type { PayrollConfig } from '../payroll-config'
 import type { TaxTableRate } from '../tax-tables'
 
@@ -641,8 +642,8 @@ describe('hardening: vacation rule contract', () => {
     )
     expect(r.grossSalary).toBe(40000)
     expect(r.vacationCompensation).toBe(0)
-    // dagslön 40000/21 × 0.43% × 25 ≈ 204.76
-    expect(r.vacationAccrual).toBeCloseTo(204.76, 1)
+    // månadslön 40000 × 0.43% × 25/12 ≈ 358.33
+    expect(r.vacationAccrual).toBeCloseTo(358.33, 1)
   })
 
   it('none: nothing accrued, nothing paid out', () => {
@@ -755,8 +756,48 @@ describe('hardening: sammalöneregeln', () => {
       }),
       config2026, emptyTaxRates
     )
-    // 40000/21 × 0.8% × 25 ≈ 380.95
-    expect(r.vacationAccrual).toBeCloseTo(380.95, 1)
+    // 40000 × 0.8% × 25/12 ≈ 666.67
+    expect(r.vacationAccrual).toBeCloseTo(666.67, 1)
+  })
+
+  it('values the tillägg on the monthly salary, not the dagslön', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'sammaloneregeln', monthlySalary: 36000,
+        lineItems: [baseLineItem(36000)],
+      }),
+      config2026, emptyTaxRates
+    )
+    // Semesterlagen 16a §: the tillägg is a share of the MONTHLY salary per
+    // vacation day (154.80/day here), and only the month's earned share
+    // (25/12 days) accrues. Valuing it off a dagslön (36000/21) and booking
+    // all 25 days every run produced 184.29, under-provisioning 2920 by ~43%.
+    expect(r.vacationAccrual).toBeCloseTo(322.5, 1)
+  })
+
+  it('accrues a day at exactly what absence-calculator later pays out for it', () => {
+    const monthlySalary = 36000
+    const semestertillaggRate = 0.0043
+    const run = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'sammaloneregeln', monthlySalary, semestertillaggRate,
+        lineItems: [baseLineItem(monthlySalary)],
+      }),
+      config2026, emptyTaxRates
+    )
+    const accrualPerDay = run.vacationAccrual / (25 / 12)
+    const payoutPerDay = calculateVacationPay({
+      monthlySalary,
+      vacationDaysTaken: 1,
+      vacationRule: 'sammaloneregeln',
+      semestertillaggRate,
+      vacationDaysPerYear: 25,
+    }).tillagg
+
+    // 2920 is credited here and relieved there. When the two bases disagreed
+    // the liability drifted negative on every taken day, which is the defect
+    // this pins: provision and payout must value a day identically.
+    expect(accrualPerDay).toBeCloseTo(payoutPerDay, 2)
   })
 })
 
@@ -945,8 +986,8 @@ describe('calculateVacationAccrual (standalone export)', () => {
       vacationBasis: 40000,
     })
     expect(partTime.accrual).toBeCloseTo(fullTime.accrual / 2, 1)
-    // Independent check: 20000/21 × 0.43% × 25 ≈ 102.38
-    expect(partTime.accrual).toBeCloseTo(102.38, 1)
+    // Independent check: 20000 × 0.43% × 25/12 ≈ 179.17
+    expect(partTime.accrual).toBeCloseTo(179.17, 1)
   })
 
   it('semesterersattning: 0 accrual with the correct step label', () => {
