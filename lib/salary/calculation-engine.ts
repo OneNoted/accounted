@@ -36,8 +36,10 @@ export interface SalaryCalculationInput {
   semestertillaggRate: number
   /** Work-schedule daily-rate divisor (arbetsschema-lite). Defaults to the
    *  legacy 21 (5-day week); callers with a part-time schedule pass
-   *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. Used by
-   *  the sammalöneregeln day valuation. */
+   *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. Feeds the
+   *  daily-rate absence paths only. Deliberately NOT the sammalöneregeln
+   *  accrual: semestertillägg is a share of the monthly salary per vacation
+   *  day and does not vary with workdays per week. */
   dailyDivisor?: number
 
   /** Växa-stöd */
@@ -545,19 +547,36 @@ export function calculateSalary(
     })
   } else {
     // Sammalöneregeln (§16a): employee keeps regular salary during vacation
-    // + semestertillägg per day (min 0.43%, often 0.8% per CBA)
+    // + semestertillägg per vacation day (min 0.43%, often 0.8% per CBA)
     // Accrual = tillägg only (salary cost is already in normal monthly expense)
     // The liability (2920) for sammalöneregeln is the tillägg portion,
     // since the base salary is expensed monthly regardless of vacation.
+    //
+    // The tillägg is a share of the MONTHLY salary per vacation day, never of
+    // the dagslön. Valuing it off a daily rate under-provisioned 2920 by the
+    // whole divisor, while absence-calculator.ts relieves that same 2920 at
+    // the correct monthly base when a day is taken, so the liability drifted
+    // further negative with every taken day.
+    //
+    // Only the month's earned share accrues. The full annual entitlement used
+    // to be booked in every single run; the two errors partly cancelled, which
+    // is why the monthly total looked plausible while both halves were wrong.
+    //
     // Use baseSalary (degree-adjusted): a 50% part-timer's tillägg should be
-    // half a full-timer's, not the same.
-    const dailyRate = r(baseSalary / (input.dailyDivisor ?? 21))
-    const tillagg = r(dailyRate * input.semestertillaggRate * input.vacationDaysPerYear)
+    // half a full-timer's, not the same. The schedule divisor deliberately
+    // plays no part: semestertillägg does not depend on workdays per week.
+    const daysEarnedThisMonth = input.vacationDaysPerYear / 12
+    const tillagg = r(baseSalary * input.semestertillaggRate * daysEarnedThisMonth)
     vacationAccrual = tillagg
     steps.push({
       label: `Semesteravsättning (sammalöneregeln, tillägg ${fmtPct(input.semestertillaggRate)})`,
-      formula: `dagslön × ${fmtPct(input.semestertillaggRate)} × semesterdagar`,
-      input: { daily_rate: dailyRate, semestertillagg_rate: input.semestertillaggRate, vacation_days: input.vacationDaysPerYear },
+      formula: `månadslön × ${fmtPct(input.semestertillaggRate)} × semesterdagar / 12`,
+      input: {
+        monthly_base: baseSalary,
+        semestertillagg_rate: input.semestertillaggRate,
+        vacation_days_per_year: input.vacationDaysPerYear,
+        days_earned_this_month: r(daysEarnedThisMonth),
+      },
       output: vacationAccrual,
     })
   }
@@ -775,8 +794,6 @@ export function calculateVacationAccrual(params: {
   vacationDaysPerYear: number
   semestertillaggRate: number
   vacationBasis: number
-  /** Arbetsschema-lite daily-rate divisor; legacy 21 when omitted. */
-  dailyDivisor?: number
 }): { accrual: number; steps: CalculationStep[] } {
   const steps: CalculationStep[] = []
 
@@ -811,15 +828,23 @@ export function calculateVacationAccrual(params: {
     })
     return { accrual, steps }
   } else {
-    // Sammalöneregeln: tillägg per vacation day. Use vacationBasis as the
-    // degree-adjusted reference: callers must pass the part-time-adjusted
-    // monthly amount, never the raw full-time monthlySalary.
-    const dailyRate = r(params.vacationBasis / (params.dailyDivisor ?? 21))
-    const accrual = r(dailyRate * params.semestertillaggRate * params.vacationDaysPerYear)
+    // Sammalöneregeln: tillägg per vacation day, valued on the MONTHLY salary
+    // and accrued one month's earned share at a time. See the mirrored branch
+    // in calculateSalary for why neither a dagslön base nor the full annual
+    // entitlement belongs here. Use vacationBasis as the degree-adjusted
+    // reference: callers must pass the part-time-adjusted monthly amount,
+    // never the raw full-time monthlySalary.
+    const daysEarnedThisMonth = params.vacationDaysPerYear / 12
+    const accrual = r(params.vacationBasis * params.semestertillaggRate * daysEarnedThisMonth)
     steps.push({
       label: `Semesteravsättning (sammalöneregeln ${fmtPct(params.semestertillaggRate)})`,
-      formula: `dagslön × ${fmtPct(params.semestertillaggRate)} × semesterdagar`,
-      input: { daily_rate: dailyRate, rate: params.semestertillaggRate, days: params.vacationDaysPerYear },
+      formula: `månadslön × ${fmtPct(params.semestertillaggRate)} × semesterdagar / 12`,
+      input: {
+        monthly_base: params.vacationBasis,
+        rate: params.semestertillaggRate,
+        vacation_days_per_year: params.vacationDaysPerYear,
+        days_earned_this_month: r(daysEarnedThisMonth),
+      },
       output: accrual,
     })
     return { accrual, steps }

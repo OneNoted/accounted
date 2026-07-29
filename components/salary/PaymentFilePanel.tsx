@@ -150,6 +150,16 @@ export function PaymentFilePanel({
               </p>
             </div>
 
+            {/* The flow looked clean all the way until the bank said no: the
+                file downloads fine and only fails at upload, on the pay date.
+                Say the delivery precondition up front instead. */}
+            {format === 'pain001' && (
+              <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span className="text-muted-foreground">{t('pain001_agreement_warning')}</span>
+              </div>
+            )}
+
             {format === 'bg_lb' && (
               <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />

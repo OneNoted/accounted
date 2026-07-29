@@ -81,24 +81,20 @@ describe('non-default schedule: 4-day week (divisor 17.33)', () => {
     expect(unpaid.amount).toBe(-1731.1)
   })
 
-  it('sammalöneregeln accrual values days by the schedule divisor', () => {
-    const fourDay = calculateVacationAccrual({
-      monthlySalary: 30000,
-      vacationRule: 'sammaloneregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 30000,
-      dailyDivisor: divisor,
-    })
-    const fiveDay = calculateVacationAccrual({
+  it('sammalöneregeln accrual does NOT take the schedule divisor', () => {
+    const accrual = calculateVacationAccrual({
       monthlySalary: 30000,
       vacationRule: 'sammaloneregeln',
       vacationDaysPerYear: 25,
       semestertillaggRate: 0.0043,
       vacationBasis: 30000,
     })
-    // dailyRate 1731.1 vs 1428.57; tillägg = dailyRate x 0.43% x 25 days.
-    expect(fourDay.accrual).toBe(186.09)
-    expect(fiveDay.accrual).toBe(153.57)
+    // Semestertillägg is a share of the MONTHLY salary per vacation day, so a
+    // 4-day week earns the same tillägg as a 5-day week on the same monthly
+    // salary: 30000 x 0.43% x 25/12. The function deliberately exposes no
+    // divisor parameter; part-time is carried by vacationBasis instead.
+    // Previously this valued a day at monthly/divisor, which made the accrual
+    // vary with workdays per week and under-provisioned 2920 in every case.
+    expect(accrual.accrual).toBeCloseTo(268.75, 2)
   })
 })
