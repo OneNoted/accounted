@@ -17,7 +17,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
@@ -32,6 +32,7 @@ import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -85,6 +86,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [isReversing, setIsReversing] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
+  // Confirm-before-posting (convention 10). The list already gates this exact
+  // action; the detail page used to fire the commit straight from the button.
+  const [showCommitConfirm, setShowCommitConfirm] = useState(false)
+  const [commitVoucherPreview, setCommitVoucherPreview] = useState<string | null>(null)
   const [isLastInSeries, setIsLastInSeries] = useState(false)
   const [attachmentCount, setAttachmentCount] = useState(0)
   const [references, setReferences] = useState<UnderlagReference[]>([])
@@ -182,6 +187,20 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setSavingNotes(false)
     }
   }, [id, toast, t])
+
+  // Open the confirm dialog and fetch the predicted voucher number. The
+  // prediction is indicative (numbers are assigned atomically at commit); the
+  // success toast always shows the real one. Mirrors JournalEntryList.
+  const openCommitConfirm = useCallback(() => {
+    setShowCommitConfirm(true)
+    setCommitVoucherPreview(null)
+    fetch('/api/bookkeeping/voucher-sequences/next')
+      .then((r) => r.json())
+      .then(({ data }) => {
+        if (data?.next != null) setCommitVoucherPreview(`${data.series}${data.next}`)
+      })
+      .catch(() => {})
+  }, [])
 
   const handleCommit = useCallback(async () => {
     setIsCommitting(true)
@@ -443,7 +462,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               <Button
                 size="sm"
                 className="w-full sm:w-auto"
-                onClick={handleCommit}
+                onClick={openCommitConfirm}
                 disabled={!canWrite || isCommitting}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
               >
@@ -1132,6 +1151,26 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           }}
         />
       )}
+
+      {/* Confirm-before-posting for drafts (convention 10): describes the
+          outcome ("Bokförs som A-218 ...") before the commit runs, matching
+          the same action on the list. */}
+      <ConfirmDialog
+        open={showCommitConfirm}
+        onOpenChange={setShowCommitConfirm}
+        title={t('confirm_post_title')}
+        description={
+          commitVoucherPreview
+            ? t('confirm_post_description', {
+                voucher: commitVoucherPreview,
+                description: entry?.description || '',
+                amount: formatCurrency(totalDebit),
+              })
+            : t('confirm_post_description_generic', { description: entry?.description || '' })
+        }
+        confirmLabel={t('post')}
+        onConfirm={handleCommit}
+      />
 
       {/* Delete confirmation dialog */}
       <ConfirmationDialog

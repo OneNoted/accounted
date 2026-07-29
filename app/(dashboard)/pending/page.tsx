@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
+import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import {
   SlideOver,
   SlideOverContent,
@@ -1364,10 +1364,8 @@ export default function PendingOperationsPage() {
                         onCheckedChange={() => toggleSelected(op.id)}
                         aria-label={t('select_operation_aria')}
                         className={cn(
-                          'transition-opacity duration-150',
-                          isSelected
-                            ? 'opacity-100'
-                            : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                          'duration-150',
+                          isSelected ? 'opacity-100' : HOVER_REVEAL_CLASS,
                         )}
                       />
                     )}

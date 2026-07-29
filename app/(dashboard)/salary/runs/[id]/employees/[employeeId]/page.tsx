@@ -5,10 +5,11 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ArrowLeft, Calculator, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, EmployeeMasked } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -319,10 +320,13 @@ export default function SalaryRunEmployeeDetailPage({
 function SummaryCard({ label, value, accent, overridden }: { label: string; value: number; accent?: boolean; overridden?: boolean }) {
   const t = useTranslations('salary_run_employee')
   return (
-    <div className={`rounded-md border bg-card p-3 ${accent ? 'ring-1 ring-primary/40' : ''} ${overridden ? 'ring-1 ring-warning/40' : ''}`}>
+    <div className={cn('rounded-md border bg-card p-3', accent && 'ring-1 ring-primary/40')}>
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {label}
-        {overridden && <span className="text-[10px] uppercase tracking-wider text-warning">{t('adjusted_badge')}</span>}
+        {/* The override is an exception, so it is a chip, not a second ring:
+            two ring-1 rules on one element set the same custom property and
+            one of them silently loses (design.md conventions 5 and 12). */}
+        {overridden && <Badge variant="warning">{t('adjusted_badge')}</Badge>}
       </div>
       <div className="mt-0.5 text-lg font-medium tabular-nums">{formatCurrency(value)}</div>
     </div>
