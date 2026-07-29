@@ -111,7 +111,7 @@ describe('generateNEDeclaration: closed fiscal year', () => {
       expect.anything(),
       COMPANY_ID,
       PERIOD_ID,
-      { excludeFinalClosingEntry: true },
+      { closingEntry: 'exclude-final' },
     )
   })
 

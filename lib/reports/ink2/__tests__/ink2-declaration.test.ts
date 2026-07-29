@@ -167,7 +167,7 @@ const anySupabase = (stub: SupabaseStub) => stub as any
 function stubTrialBalances(closed: TrialBalanceRow[], preClosing: TrialBalanceRow[]) {
   vi.mocked(generateTrialBalance).mockImplementation(
     async (_supabase, _companyId, _periodId, opts) => ({
-      rows: opts?.excludeFinalClosingEntry ? preClosing : closed,
+      rows: opts.closingEntry === 'exclude-final' ? preClosing : closed,
       totalDebit: 0,
       totalCredit: 0,
       isBalanced: true,

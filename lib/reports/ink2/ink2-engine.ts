@@ -861,9 +861,9 @@ export async function generateINK2Declaration(
   const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, resultClosedIntoEquity] =
     await Promise.all([
       loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
-      generateTrialBalance(supabase, companyId, fiscalPeriodId),
+      generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-        excludeFinalClosingEntry: true,
+        closingEntry: 'exclude-final',
       }),
       isResultClosedIntoEquity(supabase, companyId, period.closing_entry_id as string | null),
     ])

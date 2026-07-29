@@ -4875,7 +4875,10 @@ export const tools: McpTool[] = [
         supabase,
         companyId,
         periodId!,
-        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+        // Saldobalans is the ledger as posted, resultatavslut included.
+        dimFilter.filter
+          ? { closingEntry: 'include' as const, dimensions: dimFilter.filter }
+          : { closingEntry: 'include' as const },
       )
 
       const rows = trialBalance.rows
@@ -5081,7 +5084,7 @@ export const tools: McpTool[] = [
       const [incomeStatement, trialBalance, arLedger, monthlyBreakdown, paidInvoices] =
         await Promise.all([
           generateIncomeStatement(supabase, companyId, periodId!),
-          generateTrialBalance(supabase, companyId, periodId!),
+          generateTrialBalance(supabase, companyId, periodId!, { closingEntry: 'include' }),
           generateARLedger(supabase, companyId),
           generateMonthlyBreakdown(supabase, companyId, periodId!),
           supabase
