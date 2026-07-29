@@ -58,6 +58,20 @@ describe('transactions page booking feedback', () => {
     expect(PAGE_SRC).toMatch(/next\.delete\(id\)/)
   })
 
+  it('lets a completed undo win over the delayed booked-state patch', () => {
+    // The 350ms animation timer must not re-apply journal_entry_id after an
+    // Ångra has already storno-reversed the verifikat server-side.
+    expect(PAGE_SRC).toMatch(/let undone = false/)
+    expect(PAGE_SRC).toMatch(/undone = true/)
+    expect(PAGE_SRC).toMatch(/if \(!undone\) \{/)
+  })
+
+  it('clears only the finished row\'s spinner', () => {
+    // The shared tail runs for rows that never set processingId; an
+    // unconditional clear would wipe an unrelated in-flight row.
+    expect(PAGE_SRC).toMatch(/setProcessingId\(\(prev\) => \(prev === id \? null : prev\)\)/)
+  })
+
   it('decrements the unbooked count on every path that removes a row', () => {
     // finishBooking, handleTransactionBooked (manual booking dialog / voucher
     // match), and the three other single-row exits already on the page.

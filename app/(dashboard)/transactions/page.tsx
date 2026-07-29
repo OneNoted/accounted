@@ -938,6 +938,11 @@ export default function TransactionsPage() {
     journalEntryError?: string | null
   }) {
     const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError } = args
+    // A completed Ångra must win over the delayed patch below. The undo has
+    // already storno-reversed the verifikat server-side, so re-applying the
+    // booked shape afterwards would show a journal_entry_id that no longer
+    // represents a live entry.
+    let undone = false
 
     setExitingIds((prev) => new Set(prev).add(id))
     setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
@@ -950,6 +955,7 @@ export default function TransactionsPage() {
             try {
               const undoRes = await fetch(`/api/transactions/${id}/uncategorize`, { method: 'POST' })
               if (undoRes.ok) {
+                undone = true
                 setTransactions((prev) =>
                   prev.map((t) =>
                     t.id === id
@@ -985,24 +991,28 @@ export default function TransactionsPage() {
     // the id from exitingIds is what makes an Ångra later put the row back in
     // the inbox instead of leaving it invisible.
     setTimeout(() => {
-      setTransactions((prev) =>
-        prev.map((tx) =>
-          tx.id === id
-            ? {
-                ...tx,
-                is_business: isBusiness,
-                ...(category ? { category } : {}),
-                ...(journalEntryId ? { journal_entry_id: journalEntryId } : {}),
-              }
-            : tx
+      if (!undone) {
+        setTransactions((prev) =>
+          prev.map((tx) =>
+            tx.id === id
+              ? {
+                  ...tx,
+                  is_business: isBusiness,
+                  ...(category ? { category } : {}),
+                  ...(journalEntryId ? { journal_entry_id: journalEntryId } : {}),
+                }
+              : tx
+          )
         )
-      )
+      }
       setExitingIds((prev) => {
         const next = new Set(prev)
         next.delete(id)
         return next
       })
-      setProcessingId(null)
+      // Only this row's spinner: the shared helper must not clear another
+      // transaction's in-flight state.
+      setProcessingId((prev) => (prev === id ? null : prev))
     }, 350)
   }
 
