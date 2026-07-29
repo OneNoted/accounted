@@ -50,6 +50,15 @@ export async function createMcpTask(
   supabase: SupabaseClient,
   params: { companyId: string; userId: string; apiKeyId?: string | null; toolName: string }
 ): Promise<McpTaskRow> {
+  // Storage limitation (GDPR Art. 5(1)(e)): opportunistically purge expired
+  // rows on every creation so the 1-hour retention is enforced without
+  // dedicated cron infrastructure (cheap via idx_mcp_tasks_expires).
+  // Best-effort: a failed sweep must never block the new task.
+  try {
+    await supabase.from('mcp_tasks').delete().lt('expires_at', new Date().toISOString())
+  } catch {
+    // Ignore: the next creation retries the sweep.
+  }
   const { data, error } = await supabase
     .from('mcp_tasks')
     .insert({

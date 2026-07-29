@@ -52,6 +52,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     )
 
   const tasksBuilder = {
+    delete: () => makeChain({ data: null, error: null }),
     insert: (row: Record<string, unknown>) => {
       mocks.taskInserts.push(row)
       return {

@@ -2,7 +2,10 @@
 -- Durable handles for long-running MCP tool calls: the tool call returns a
 -- task handle immediately and the work completes after the response; clients
 -- poll tasks/get until a terminal status. Writes go through the service-role
--- MCP handler only (mirrors pending_operations); company members may read.
+-- MCP handler only (mirrors pending_operations); only the creating user may
+-- read. Retention (1 hour via expires_at) is enforced by an opportunistic
+-- sweep in the MCP handler: createMcpTask deletes expired rows on every
+-- task creation (GDPR Art. 5(1)(e)).
 
 CREATE TABLE public.mcp_tasks (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -35,9 +38,12 @@ CREATE INDEX idx_mcp_tasks_expires ON public.mcp_tasks (expires_at);
 
 ALTER TABLE public.mcp_tasks ENABLE ROW LEVEL SECURITY;
 
--- Reads: company members can see their companies' tasks.
-CREATE POLICY "mcp_tasks_select_company" ON public.mcp_tasks
-  FOR SELECT USING (company_id IN (SELECT user_company_ids()));
+-- Reads: the creating user only. tasks/get in the MCP handler scopes to the
+-- creator, and task results carry whatever the underlying tool returned;
+-- the DB grant must not be broader than that application contract
+-- (data minimisation, GDPR Art. 5(1)(c)). Mirrors pending_operations.
+CREATE POLICY "mcp_tasks_select_own" ON public.mcp_tasks
+  FOR SELECT USING (auth.uid() = user_id);
 
 -- No INSERT/UPDATE/DELETE policies: all writes go through the service-role
 -- MCP handler (mirrors pending_operations). Rows age out via expires_at.

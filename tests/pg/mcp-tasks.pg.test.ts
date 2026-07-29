@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from './setup'
-import { seedCompany } from './fixtures'
+import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
 
 // pg-real coverage for 20260729094000_create_mcp_tasks.sql: the status CHECK,
-// company-scoped SELECT RLS, the deliberate absence of authenticated write
+// creator-only SELECT RLS, the deliberate absence of authenticated write
 // policies (writes are service-role only), and the updated_at trigger.
 
 async function insertTask(params: {
@@ -30,7 +30,7 @@ describe('mcp_tasks', () => {
     ).rejects.toThrow(/mcp_tasks_status_check/)
   })
 
-  it('company members can read their tasks; other companies cannot', async () => {
+  it('only the creating user can read a task (not other members, not other companies)', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
     const taskId = await insertTask({ companyId: a.companyId, userId: a.userId })
@@ -40,6 +40,15 @@ describe('mcp_tasks', () => {
     )
     expect(mine.rows).toHaveLength(1)
     expect(mine.rows[0].status).toBe('working')
+
+    // A second member of the SAME company must not see the row: task results
+    // carry raw tool output, so the grant is creator-only (Art. 5(1)(c)).
+    const colleagueId = await insertAuthUser()
+    await insertCompanyMember({ companyId: a.companyId, userId: colleagueId, role: 'member' })
+    const colleague = await withUserContext(colleagueId, (client) =>
+      client.query('SELECT id FROM public.mcp_tasks WHERE id = $1', [taskId]),
+    )
+    expect(colleague.rows).toHaveLength(0)
 
     const theirs = await withUserContext(b.userId, (client) =>
       client.query('SELECT id FROM public.mcp_tasks WHERE id = $1', [taskId]),
