@@ -27,7 +27,11 @@ import { getErrorMessage } from "@/lib/errors/get-error-message"
 export function coerceToastNode(value: ReactNode): ReactNode {
   if (value == null || typeof value === "string" || typeof value === "number") return value
   if (typeof value === "boolean") return null
-  if (isValidElement(value) || Array.isArray(value)) return value
+  if (isValidElement(value)) return value
+  // Arrays are legitimate React children, but an unchecked JSON array can hold
+  // objects, and one of those still throws. Coerce members too; elements pass
+  // through by identity so their keys survive.
+  if (Array.isArray(value)) return value.map(coerceToastNode)
   return getErrorMessage(value)
 }
 

@@ -44,6 +44,19 @@ describe('coerceToastNode', () => {
     expect((result as string).length).toBeGreaterThan(0)
   })
 
+  it('coerces objects nested inside an array child', () => {
+    const el = createElement('span', { key: 'a' }, 'hej')
+    const result = coerceToastNode([
+      'text',
+      { code: 'NOT_FOUND', message: 'Hittades inte' },
+      el,
+    ] as unknown as React.ReactNode) as unknown[]
+    expect(result[0]).toBe('text')
+    expect(result[1]).toBe('Hittades inte')
+    // Elements pass through by identity so their keys survive.
+    expect(result[2]).toBe(el)
+  })
+
   it('drops booleans, which React would render as nothing anyway', () => {
     expect(coerceToastNode(true)).toBeNull()
     expect(coerceToastNode(false)).toBeNull()
