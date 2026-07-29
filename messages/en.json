@@ -1681,8 +1681,9 @@
   "settings_account_danger": {
     "heading": "Delete account",
     "blockers_title": "Companies you own",
-    "blockers_description": "Delete or hand over all companies before you delete your account.",
+    "blockers_description": "The account can only be deleted once you have deleted or handed over every company you own.",
     "blockers_manage": "Manage",
+    "blocked_reason": "You can delete the account once you have deleted or handed over {count, plural, =1 {your company} other {your # companies}}.",
     "support_question": "Questions?",
     "support_subject": "Question about account deletion",
     "export_sie": "Export accounting data (SIE)",

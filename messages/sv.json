@@ -1681,8 +1681,9 @@
   "settings_account_danger": {
     "heading": "Radera konto",
     "blockers_title": "Företag du äger",
-    "blockers_description": "Radera eller överlåt alla företag innan du raderar kontot.",
+    "blockers_description": "Kontot kan raderas först när du har raderat eller överlåtit alla företag du äger.",
     "blockers_manage": "Hantera",
+    "blocked_reason": "Du kan radera kontot först när du har raderat eller överlåtit {count, plural, =1 {företaget} other {dina # företag}}.",
     "support_question": "Har du frågor?",
     "support_subject": "Fråga om kontoradering",
     "export_sie": "Exportera bokföringsdata (SIE)",
