@@ -3,6 +3,12 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import {
+  fetchPaymentsAsOf,
+  outstandingAsOf,
+  todayIsoDate,
+  type PaymentsAsOf,
+} from '@/lib/reports/reskontra-payments'
+import {
   BookkeepingDatabaseError,
   CurrencyRevaluationAlreadyExistsError,
 } from '@/lib/bookkeeping/errors'
@@ -81,6 +87,59 @@ function hasUsableRate(rate: number | null | undefined): boolean {
 }
 
 /**
+ * Which invoice rows can carry balance-sheet FX exposure for this company.
+ *
+ * ÅRL 4 kap. 13 § revalues MONETARY ITEMS ON THE BALANCE SHEET, and an invoice
+ * row only puts anything on 1510/2440 once its registration is booked. Under
+ * #967 "Registrera men bokför inte" (and under kontantmetoden) a registered
+ * invoice can sit in the reskontra with nothing on the balance sheet at all;
+ * revaluing those fabricated a write-down of an account standing at zero.
+ *
+ * NOT keyed on accounting_method: kontantmetoden companies must still book
+ * their outstanding fordringar/skulder at balansdagen (BFL 5 kap 2 § 3 st), and
+ * those year-end-converted rows are genuine FX exposure that has to be valued.
+ * The predicate is therefore per row ("is this one booked?"), never per company
+ * ("does this company use the cash method?"):
+ * - 'booked_only': only rows carrying a registration entry are on the balance
+ *   sheet (kontantmetoden, or faktureringsmetoden with defer_invoice_booking)
+ * - 'all': inline booking at issue, the historical default. Every open row is
+ *   booked, including legacy/SIE-imported rows that predate the entry links,
+ *   so requiring a link there would silently drop real exposure.
+ */
+export type FxExposureScope = 'all' | 'booked_only'
+
+export function fxExposureScope(
+  settings:
+    | { accounting_method?: string | null; defer_invoice_booking?: boolean | null }
+    | null
+    | undefined
+): FxExposureScope {
+  // No settings row: historical default (accrual, book at issue).
+  if (!settings) return 'all'
+  if ((settings.accounting_method || 'accrual') !== 'accrual') return 'booked_only'
+  return settings.defer_invoice_booking ? 'booked_only' : 'all'
+}
+
+/**
+ * Never throws: `previewCurrencyRevaluation` is the read-only surface and the
+ * year-end preview must still render (same contract as the missing-rate path).
+ * A settings row that cannot be read falls back to the historical default,
+ * which is also what a missing row means.
+ */
+export async function fetchFxExposureScope(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<FxExposureScope> {
+  const { data, error } = await supabase
+    .from('company_settings')
+    .select('accounting_method, defer_invoice_booking')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return 'all'
+  return fxExposureScope(data)
+}
+
+/**
  * Fetch open foreign-currency receivables (invoices).
  * Returns invoices with status 'sent', 'overdue' or 'partially_paid' and
  * non-SEK currency, INCLUDING ones with no `exchange_rate`: filtering those
@@ -92,24 +151,44 @@ function hasUsableRate(rate: number | null | undefined): boolean {
  * monetary item that ÅRL 4 kap. 13 § values at balansdagen. Omitting it made
  * partially paid foreign receivables entirely invisible to the revaluation
  * (the payables side has always included it).
+ *
+ * When `asOfDate` is given the population is measured AS OF that date, not as
+ * of now. Two independent adjustments:
+ * - the date ceiling (`invoice_date <= asOfDate`) is UNCONDITIONAL: an invoice
+ *   issued after the balансdagen was not on the balance sheet being valued,
+ *   whether or not that date happens to be in the past. Post-dated invoices
+ *   make this reachable for a current period too.
+ * - the status widening to 'paid' applies only to a historical date, where an
+ *   invoice settled since (in March, say) was still open on 31 December. For
+ *   today or the future the stored open state IS the as-of state.
+ * The caller recomputes each row's outstanding from the payment history (see
+ * previewCurrencyRevaluation). Same reconstruction contract as
+ * countOpenFxItemsAtBalansdagen in year-end-service and the reskontra reports.
  */
 export async function getOpenForeignCurrencyReceivables(
   supabase: SupabaseClient,
-  companyId: string
+  companyId: string,
+  asOfDate?: string
 ): Promise<Invoice[]> {
+  const historical = asOfDate != null && asOfDate < todayIsoDate()
   try {
     // Paginated with a stable id order so a company with >1000 open FX invoices
     // is fully revalued rather than silently truncated at 1000 rows.
-    return await fetchAllRows<Invoice>(({ from, to }) =>
-      supabase
+    return await fetchAllRows<Invoice>(({ from, to }) => {
+      const base = supabase
         .from('invoices')
         .select('*')
         .eq('company_id', companyId)
-        .in('status', ['sent', 'overdue', 'partially_paid'])
         .neq('currency', 'SEK')
-        .order('id', { ascending: true })
-        .range(from, to)
-    , { dedupeBy: (i) => i.id })
+        .in(
+          'status',
+          historical
+            ? ['sent', 'overdue', 'partially_paid', 'paid']
+            : ['sent', 'overdue', 'partially_paid']
+        )
+      const scoped = asOfDate != null ? base.lte('invoice_date', asOfDate) : base
+      return scoped.order('id', { ascending: true }).range(from, to)
+    }, { dedupeBy: (i) => i.id })
   } catch (err) {
     throw new BookkeepingDatabaseError(
       'fetch_currency_receivables',
@@ -123,24 +202,34 @@ export async function getOpenForeignCurrencyReceivables(
  * Returns supplier invoices with open statuses and non-SEK currency,
  * INCLUDING ones with no `exchange_rate` (see the receivables note above).
  * Uses remaining_amount for partial payments.
+ *
+ * `asOfDate` behaves as on the receivables side: the date ceiling is
+ * unconditional, the widening to 'paid' applies only to a historical date.
  */
 export async function getOpenForeignCurrencyPayables(
   supabase: SupabaseClient,
-  companyId: string
+  companyId: string,
+  asOfDate?: string
 ): Promise<SupplierInvoice[]> {
+  const historical = asOfDate != null && asOfDate < todayIsoDate()
   try {
     // Paginated with a stable id order so a company with >1000 open FX payables
     // is fully revalued rather than silently truncated at 1000 rows.
-    return await fetchAllRows<SupplierInvoice>(({ from, to }) =>
-      supabase
+    return await fetchAllRows<SupplierInvoice>(({ from, to }) => {
+      const base = supabase
         .from('supplier_invoices')
         .select('*')
         .eq('company_id', companyId)
-        .in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
         .neq('currency', 'SEK')
-        .order('id', { ascending: true })
-        .range(from, to)
-    , { dedupeBy: (i) => i.id })
+        .in(
+          'status',
+          historical
+            ? ['registered', 'approved', 'overdue', 'partially_paid', 'paid']
+            : ['registered', 'approved', 'overdue', 'partially_paid']
+        )
+      const scoped = asOfDate != null ? base.lte('invoice_date', asOfDate) : base
+      return scoped.order('id', { ascending: true }).range(from, to)
+    }, { dedupeBy: (i) => i.id })
   } catch (err) {
     throw new BookkeepingDatabaseError(
       'fetch_currency_payables',
@@ -171,26 +260,67 @@ export async function previewCurrencyRevaluation(
   companyId: string,
   closingDate: string
 ): Promise<CurrencyRevaluationPreviewWithExclusions> {
+  const emptyPreview: CurrencyRevaluationPreviewWithExclusions = {
+    items: [],
+    lines: [],
+    closingRates: {},
+    totalGain: 0,
+    totalLoss: 0,
+    netEffect: 0,
+    unconvertedFx: [],
+    unconvertedFxCount: 0,
+    missingClosingRates: [],
+  }
+
+  const scope = await fetchFxExposureScope(supabase, companyId)
+
   const [receivables, payables] = await Promise.all([
-    getOpenForeignCurrencyReceivables(supabase, companyId),
-    getOpenForeignCurrencyPayables(supabase, companyId),
+    getOpenForeignCurrencyReceivables(supabase, companyId, closingDate),
+    getOpenForeignCurrencyPayables(supabase, companyId, closingDate),
   ])
+
+  // For a historical balansdagen the live status/paid_amount columns describe
+  // today, not the balance sheet being valued: reconstruct each row's
+  // outstanding from the payment history, the same walk-back the reskontra
+  // reports and countOpenFxItemsAtBalansdagen use.
+  const isHistorical = closingDate < todayIsoDate()
+  const [receivablePayments, payablePayments]: [PaymentsAsOf | null, PaymentsAsOf | null] =
+    await Promise.all([
+      isHistorical && receivables.length > 0
+        ? fetchPaymentsAsOf(supabase, 'invoice_payments', 'invoice_id', companyId, closingDate)
+        : null,
+      isHistorical && payables.length > 0
+        ? fetchPaymentsAsOf(
+            supabase,
+            'supplier_invoice_payments',
+            'supplier_invoice_id',
+            companyId,
+            closingDate
+          )
+        : null,
+    ])
 
   // Partition into rows we can revalue and rows with no original rate, and
   // collect the distinct currencies of the revaluable rows.
   const currencies = new Set<Currency>()
   const unconvertedFx: UnconvertedFxItem[] = []
   const revaluableReceivables: Array<{ inv: Invoice; outstanding: number }> = []
-  const revaluablePayables: SupplierInvoice[] = []
+  const revaluablePayables: Array<{ si: SupplierInvoice; outstanding: number }> = []
 
   for (const inv of receivables) {
+    // Deferred booking: an unbooked registration is not on 1510, so it is not
+    // a monetary item to revalue (nor unmeasured exposure to report).
+    if (scope === 'booked_only' && !inv.journal_entry_id) continue
     // Only the OUTSTANDING amount is a monetary item at balansdagen: the paid
     // part has already been settled at its own realized rate. Kundreskontran
     // derives outstanding from total - paid_amount (see year-end-service),
     // so the same definition is used here, öre-rounded.
-    const outstanding =
-      Math.round(((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)) * 100) / 100
-    // Nothing outstanding: nothing to revalue, and no exposure to report.
+    const total = Number(inv.total) || 0
+    const live = Math.round((total - (Number(inv.paid_amount) || 0)) * 100) / 100
+    const outstanding = receivablePayments
+      ? outstandingAsOf(inv, total, live, receivablePayments, closingDate)
+      : live
+    // Nothing outstanding on balansdagen: nothing to revalue, no exposure.
     if (outstanding <= 0) continue
     if (!hasUsableRate(inv.exchange_rate)) {
       unconvertedFx.push({
@@ -207,34 +337,31 @@ export async function previewCurrencyRevaluation(
   }
 
   for (const si of payables) {
-    // Nothing outstanding: nothing to revalue, and no exposure to report.
-    if (Number(si.remaining_amount) <= 0) continue
+    // See the receivables note: unbooked registrations carry no 2440 balance.
+    if (scope === 'booked_only' && !si.registration_journal_entry_id) continue
+    const total = Number(si.total) || 0
+    const live = Number(si.remaining_amount) || 0
+    const outstanding = payablePayments
+      ? outstandingAsOf(si, total, live, payablePayments, closingDate)
+      : live
+    // Nothing outstanding on balansdagen: nothing to revalue, no exposure.
+    if (outstanding <= 0) continue
     if (!hasUsableRate(si.exchange_rate)) {
       unconvertedFx.push({
         type: 'payable',
         source_id: si.id,
         reference: si.supplier_invoice_number,
         currency: si.currency as Currency,
-        amount_in_currency: si.remaining_amount,
+        amount_in_currency: outstanding,
       })
       continue
     }
     currencies.add(si.currency as Currency)
-    revaluablePayables.push(si)
+    revaluablePayables.push({ si, outstanding })
   }
 
   if (currencies.size === 0) {
-    return {
-      items: [],
-      lines: [],
-      closingRates: {},
-      totalGain: 0,
-      totalLoss: 0,
-      netEffect: 0,
-      unconvertedFx,
-      unconvertedFxCount: unconvertedFx.length,
-      missingClosingRates: [],
-    }
+    return { ...emptyPreview, unconvertedFx, unconvertedFxCount: unconvertedFx.length }
   }
 
   // Fetch closing rates one currency at a time through fetchExchangeRate: it
@@ -294,12 +421,12 @@ export async function previewCurrencyRevaluation(
     })
   }
 
-  // Process payables (use remaining_amount for partial payments)
-  for (const si of revaluablePayables) {
+  // Process payables (outstanding as of balansdagen, mirroring receivables)
+  for (const { si, outstanding } of revaluablePayables) {
     const closingRate = rateMap.get(si.currency as Currency)
     if (!closingRate || !si.exchange_rate) continue
 
-    const amountInCurrency = si.remaining_amount
+    const amountInCurrency = outstanding
 
     const originalSek = Math.round(amountInCurrency * si.exchange_rate * 100) / 100
     const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100

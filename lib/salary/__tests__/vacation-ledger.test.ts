@@ -65,6 +65,7 @@ describe('syncVacationLedgerForEmployees', () => {
     openRows?: Array<Record<string, unknown>>
     opening?: Array<Record<string, unknown>>
     savedLegacy?: number
+    employmentStart?: string
   }) => {
     mock.enqueue({ data: { salary_vacation_year_basis: over.basis ?? 'calendar' } }) // company_settings
     mock.enqueue({
@@ -74,6 +75,8 @@ describe('syncVacationLedgerForEmployees', () => {
           vacation_days_per_year: 25,
           vacation_days_saved: over.savedLegacy ?? 0,
           vacation_rule: 'procentregeln',
+          // Long-tenured by default so the pro-rating cases stay opt-in.
+          employment_start: over.employmentStart ?? '2015-01-01',
         },
       ],
     }) // employees
@@ -102,6 +105,49 @@ describe('syncVacationLedgerForEmployees', () => {
     expect(row.taken_days).toBe(5)
     // Calendar basis: sammanfallande year, accrued stays 0.
     expect(row.accrued_days).toBe(0)
+  })
+
+  it('pro-rates entitled days for a mid-intjänandeår hire (Semesterlagen 7 §)', async () => {
+    // Hired 2025-05-19. For semesteråret starting 2026-04-01 the intjänandeår
+    // is 2025-04-01 to 2026-04-01 (365 days), of which 317 were employed:
+    // 317/365 x 25 = 21.71, rounded UP to 22. Reporting a flat 25 told the
+    // employee they had three paid days they had not earned.
+    queueBase({ basis: 'statutory_apr_mar', employmentStart: '2025-05-19' })
+
+    const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-07-13')
+    expect(result.ok).toBe(true)
+    const row = upserted![0]
+    expect(row.vacation_year_start).toBe('2026-04-01')
+    expect(row.entitled_days).toBe(22)
+  })
+
+  it('gives a full entitlement to someone employed the whole intjänandeår', async () => {
+    queueBase({ basis: 'statutory_apr_mar', employmentStart: '2015-01-01' })
+
+    const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-07-13')
+    expect(result.ok).toBe(true)
+    expect(upserted![0].entitled_days).toBe(25)
+  })
+
+  it('accrues from the employment date, not the vacation-year boundary', async () => {
+    // Hired 2026-07-01, three whole months into the year starting 2026-04-01
+    // as of 2026-10-15: 3/12 x 25 = 6.25, held to half days = 6.5. Counting
+    // from the year boundary instead would credit 12.5.
+    queueBase({ basis: 'statutory_apr_mar', employmentStart: '2026-07-01' })
+
+    const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-10-15')
+    expect(result.ok).toBe(true)
+    expect(upserted![0].accrued_days).toBe(6.5)
+  })
+
+  it('keeps the flat entitlement on a sammanfallande calendar year', async () => {
+    // Earning and taking share the year there, commonly with förskottssemester,
+    // so mid-year hires are a CBA question rather than a statutory one.
+    queueBase({ basis: 'calendar', employmentStart: '2026-05-19' })
+
+    const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-07-13')
+    expect(result.ok).toBe(true)
+    expect(upserted![0].entitled_days).toBe(25)
   })
 
   it('seeds entitled + saved days from the cutover opening row', async () => {

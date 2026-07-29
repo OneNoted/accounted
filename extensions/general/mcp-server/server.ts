@@ -14434,7 +14434,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_pending_operations',
     title: 'List Pending Operations',
-    description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Use to review the queue before calling gnubok_approve_pending_operation or gnubok_reject_pending_operation.',
+    description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Approve via gnubok_approve_pending_operation, discard via gnubok_reject_pending_operation. render_ui=true opens the approval widget.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -14444,11 +14444,19 @@ export const tools: McpTool[] = [
         operation_type: { type: 'string', description: 'Filter to a single operation_type (e.g. "create_invoice")' },
         limit: { type: 'number', minimum: 1, maximum: 200, description: 'Default 50' },
         offset: { type: 'number', minimum: 0, description: 'Default 0' },
+        render_ui: {
+          type: 'boolean',
+          description: 'Render the interactive approval widget (claude.ai / Desktop): approve/reject by click; the click supplies the high-risk BFL acknowledgment. Data returned either way. Default false.',
+        },
       },
       required: [],
     },
     outputSchema: paginatedSchema('operations'),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    // Renders the approval-queue widget only when the caller passes
+    // render_ui=true (the dispatcher emits result-level _meta in that case),
+    // keeping the tool data-only by default.
+    uiResourceUri: 'ui://pending-operations/app.html',
     async execute(args, companyId, _userId, supabase) {
       const status = (args.status as string) ?? 'pending'
       const limit = Math.min(200, Math.max(1, (args.limit as number) ?? 50))
@@ -15481,6 +15489,23 @@ const SERVER_CAPABILITIES = {
   },
 }
 
+/**
+ * Decode a standard-header value per the 2026-07-28 Value Encoding rules:
+ * values outside plain ASCII arrive as =?base64?<data>?= and MUST be decoded
+ * before comparing against the request body. Returns null for an absent
+ * header so callers can distinguish "not sent" from "sent empty".
+ */
+function decodeMcpHeaderValue(value: string | null): string | null {
+  if (value === null) return null
+  const match = /^=\?base64\?(.*)\?=$/.exec(value)
+  if (!match) return value
+  try {
+    return Buffer.from(match[1], 'base64').toString('utf8')
+  } catch {
+    return value
+  }
+}
+
 function jsonRpc(id: string | number | null, result: unknown): JsonRpcResponse {
   return { jsonrpc: '2.0', id, result }
 }
@@ -15859,8 +15884,24 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   const taskCapable = statelessClient && isTaskCapableClient(requestMeta)
 
   // Standard request headers (2026-07-28): when present they must agree with
-  // the JSON-RPC body. Absence stays accepted: handshake-era clients and the
-  // stdio bridges do not send them.
+  // the JSON-RPC body. Absence stays accepted: this server supports
+  // handshake-era clients (the spec sanctions that leniency), and the stdio
+  // bridges do not send the headers.
+  const headerProtocolVersion = request.headers.get('mcp-protocol-version')
+  if (
+    headerProtocolVersion &&
+    typeof metaVersion === 'string' &&
+    headerProtocolVersion !== metaVersion
+  ) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_HEADER_MISMATCH,
+        `Header mismatch: MCP-Protocol-Version "${headerProtocolVersion}" does not match _meta protocol version "${metaVersion}"`
+      ),
+      { status: 400 }
+    )
+  }
   const headerMethod = request.headers.get('mcp-method')
   if (headerMethod && headerMethod !== body.method) {
     return NextResponse.json(
@@ -15872,14 +15913,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       { status: 400 }
     )
   }
-  const headerName = request.headers.get('mcp-name')
-  const bodyParamName = body.params?.name
-  if (headerName && typeof bodyParamName === 'string' && headerName !== bodyParamName) {
+  // Mcp-Name mirrors params.name (tools/call, prompts/get) or params.uri
+  // (resources/read); non-ASCII values arrive base64-wrapped and are decoded
+  // before comparison.
+  const headerName = decodeMcpHeaderValue(request.headers.get('mcp-name'))
+  const bodyParamName = body.params?.name ?? body.params?.uri
+  if (headerName !== null && typeof bodyParamName === 'string' && headerName !== bodyParamName) {
     return NextResponse.json(
       jsonRpcError(
         body.id ?? null,
         JSONRPC_HEADER_MISMATCH,
-        `Header mismatch: Mcp-Name "${headerName}" does not match params.name "${bodyParamName}"`
+        `Header mismatch: Mcp-Name "${headerName}" does not match the request body name/uri "${bodyParamName}"`
       ),
       { status: 400 }
     )
@@ -15937,7 +15981,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
-            '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget and gnubok_receipt_matcher opens the receipt↔transaction matcher. Both also return structured data; other clients ignore the UI and use the data.',
+            '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
             '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
             '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',

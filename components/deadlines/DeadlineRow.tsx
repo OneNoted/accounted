@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl'
 import { Deadline } from '@/types'
 import { cn } from '@/lib/utils'
 import { isDeadlineOverdue, parseDate, startOfDay } from '@/lib/calendar/utils'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   CalendarClock,
   Check,
@@ -165,7 +165,7 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
               e.stopPropagation()
               onRequestToggle(deadline)
             }}
-            className={cn(QUIET_LINK_CLASS, 'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100')}
+            className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
           >
             {t('mark_not_done')}
           </button>
@@ -176,7 +176,7 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
               e.stopPropagation()
               onRequestToggle(deadline)
             }}
-            className={cn(QUIET_LINK_CLASS, 'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100')}
+            className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
           >
             {t('group_mark_done')}
           </button>

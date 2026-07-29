@@ -63,16 +63,33 @@ function mockRates(rates: Partial<Record<Currency, number>>) {
   })
 }
 
-// Helper to build mock supabase
-function createMockSupabase(config: {
+/**
+ * Extra tables the preview reads besides the two invoice ledgers:
+ * company_settings decides the FX exposure scope (cash/deferred/accrual) and
+ * the payment tables feed the as-of-balansdagen outstanding reconstruction.
+ */
+interface MockTablesConfig {
   invoices?: ReturnType<typeof makeInvoice>[]
   supplierInvoices?: ReturnType<typeof makeSupplierInvoice>[]
+  settings?: Record<string, unknown>
+  invoicePayments?: Record<string, unknown>[]
+  supplierInvoicePayments?: Record<string, unknown>[]
   existingRevaluation?: boolean
-}) {
-  const fromMap: Record<string, unknown[]> = {
+}
+
+function buildFromMap(config: MockTablesConfig): Record<string, unknown[]> {
+  return {
     invoices: config.invoices || [],
     supplier_invoices: config.supplierInvoices || [],
+    company_settings: config.settings ? [config.settings] : [],
+    invoice_payments: config.invoicePayments || [],
+    supplier_invoice_payments: config.supplierInvoicePayments || [],
   }
+}
+
+// Helper to build mock supabase
+function createMockSupabase(config: MockTablesConfig) {
+  const fromMap = buildFromMap(config)
 
   const supabase = {
     from: vi.fn().mockImplementation((table: string) => {
@@ -143,6 +160,20 @@ function buildFilterChain(data: unknown[]) {
     return chain
   })
 
+  // ISO date strings compare correctly as strings, matching PostgREST lte.
+  chain.lte = vi.fn().mockImplementation((col: string, val: string) => {
+    filtered = filtered.filter((row) => {
+      const v = (row as Record<string, unknown>)[col]
+      return v != null && String(v) <= val
+    })
+    return chain
+  })
+
+  // Terminal used by fetchFxExposureScope's company_settings read.
+  chain.maybeSingle = vi.fn().mockImplementation(() =>
+    Promise.resolve({ data: filtered[0] ?? null, error: null })
+  )
+
   // Paging stability order: no-op in the mock (data is already deterministic).
   chain.order = vi.fn().mockImplementation(() => chain)
 
@@ -162,11 +193,7 @@ function buildFilterChain(data: unknown[]) {
 }
 
 // Better mock for supabase that supports journal_entries idempotency check
-function createFullMockSupabase(config: {
-  invoices?: ReturnType<typeof makeInvoice>[]
-  supplierInvoices?: ReturnType<typeof makeSupplierInvoice>[]
-  existingRevaluation?: boolean
-}) {
+function createFullMockSupabase(config: MockTablesConfig) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabase: any = {
     from: vi.fn().mockImplementation((table: string) => {
@@ -184,10 +211,7 @@ function createFullMockSupabase(config: {
         return journalChain
       }
 
-      const fromMap: Record<string, unknown[]> = {
-        invoices: config.invoices || [],
-        supplier_invoices: config.supplierInvoices || [],
-      }
+      const fromMap = buildFromMap(config)
       return buildFilterChain(fromMap[table] || [])
     }),
   }
@@ -1072,6 +1096,383 @@ describe('currency-revaluation', () => {
       expect(result!.preview).toBeDefined()
       expect(result!.preview.items).toHaveLength(1)
       expect(result!.preview.totalGain).toBe(1000) // 1000 * (12 - 11)
+    })
+  })
+
+  // Regression: a year-end close revalued FX invoices that were NOT on the
+  // balance sheet on balansdagen (issued later, settled earlier, or never
+  // booked at all), writing down a 1510 that stood at zero. The population
+  // must be measured AS OF the closing date, gated by the company's booking
+  // mode, exactly like countOpenFxItemsAtBalansdagen in year-end-service.
+  describe('as-of balansdagen population', () => {
+    it('excludes an invoice issued after balansdagen', async () => {
+      const laterInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: '2025-03-10',
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({ invoices: [laterInvoice] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(0)
+      expect(preview.lines).toHaveLength(0)
+      expect(preview.unconvertedFxCount).toBe(0)
+    })
+
+    it('includes an invoice settled after balansdagen at its as-of outstanding', async () => {
+      // Paid in full in February 2025: on 2024-12-31 the whole amount was
+      // still an open monetary item and must be valued (ÅRL 4 kap. 13 §).
+      const settledLater = makeInvoice({
+        id: 'inv-settled-later',
+        status: 'paid',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        paid_amount: 1000,
+        remaining_amount: 0,
+        paid_at: '2025-02-01',
+        invoice_date: '2024-11-15',
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({
+        invoices: [settledLater],
+        invoicePayments: [
+          {
+            company_id: 'company-1',
+            invoice_id: 'inv-settled-later',
+            amount: 1000,
+            payment_date: '2025-02-01',
+          },
+        ],
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].amount_in_currency).toBe(1000)
+      expect(preview.totalGain).toBe(1000) // 1000 * (12 - 11)
+    })
+
+    it('excludes the part of an invoice that was already paid on balansdagen', async () => {
+      const partiallySettled = makeInvoice({
+        id: 'inv-partial-asof',
+        status: 'paid',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        paid_amount: 1000,
+        remaining_amount: 0,
+        paid_at: '2025-01-20',
+        invoice_date: '2024-11-15',
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({
+        invoices: [partiallySettled],
+        invoicePayments: [
+          // 600 paid before balansdagen, 400 after: only 400 was open.
+          {
+            company_id: 'company-1',
+            invoice_id: 'inv-partial-asof',
+            amount: 600,
+            payment_date: '2024-12-10',
+          },
+          {
+            company_id: 'company-1',
+            invoice_id: 'inv-partial-asof',
+            amount: 400,
+            payment_date: '2025-01-20',
+          },
+        ],
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].amount_in_currency).toBe(400)
+      expect(preview.totalGain).toBe(400) // 400 * (12 - 11)
+    })
+
+    it('excludes an unbooked row for a kontantmetoden company', async () => {
+      // A registered-but-unbooked invoice is not on 1510, so revaluing it
+      // fabricated a write-down of an account that stood at zero.
+      const eurInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: '2024-11-15',
+        journal_entry_id: null,
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({
+        invoices: [eurInvoice],
+        settings: { company_id: 'company-1', accounting_method: 'cash' },
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(0)
+      expect(preview.lines).toHaveLength(0)
+    })
+
+    it('still revalues a kontantmetoden company row booked at balansdagen', async () => {
+      // BFL 5 kap 2 § 3 st: kontantmetoden companies must book their
+      // outstanding fordringar/skulder at year-end. Those converted rows ARE
+      // on 1510 and must be valued at balansdagskurs (ÅRL 4 kap. 13 §), so
+      // gating on accounting_method rather than on the row would drop them.
+      const bookedEur = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: '2024-11-15',
+        journal_entry_id: 'je-yearend-conversion',
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({
+        invoices: [bookedEur],
+        settings: { company_id: 'company-1', accounting_method: 'cash' },
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(1)
+      expect(preview.totalGain).toBe(1000) // 1000 * (12 - 11)
+    })
+
+    it('excludes a post-dated invoice even when balansdagen is not historical', async () => {
+      // The date ceiling is unconditional: an invoice issued after the
+      // balансdagen is not on the balance sheet being valued, whether or not
+      // that date happens to be in the past.
+      const future = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10)
+      const postDated = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
+      const beforeToday = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+
+      const openNow = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: beforeToday,
+      })
+      const laterInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 500,
+        invoice_date: future,
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({ invoices: [openNow, laterInvoice] })
+      // Balansdagen between the two invoice dates, still in the future.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', postDated)
+
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].amount_in_currency).toBe(1000)
+    })
+
+    it('values a still-open invoice at what it owed on balansdagen', async () => {
+      // The common straddling case: the row is 'partially_paid' today, so the
+      // OLD status list already fetched it, but its live paid_amount reflects
+      // payments made after balansdagen.
+      const straddling = makeInvoice({
+        id: 'inv-straddle',
+        status: 'partially_paid',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        paid_amount: 900,
+        remaining_amount: 100,
+        invoice_date: '2024-10-01',
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({
+        invoices: [straddling],
+        invoicePayments: [
+          { company_id: 'company-1', invoice_id: 'inv-straddle', amount: 300, payment_date: '2024-11-05' },
+          { company_id: 'company-1', invoice_id: 'inv-straddle', amount: 600, payment_date: '2025-02-11' },
+        ],
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      // 700 was open on balansdagen, not the live 100.
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].amount_in_currency).toBe(700)
+      expect(preview.totalGain).toBe(700)
+    })
+
+    it('applies the same as-of reconstruction to payables', async () => {
+      const straddlingPayable = makeSupplierInvoice({
+        id: 'si-straddle',
+        status: 'partially_paid',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 2000,
+        remaining_amount: 200,
+        invoice_date: '2024-10-01',
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({
+        supplierInvoices: [straddlingPayable],
+        supplierInvoicePayments: [
+          { company_id: 'company-1', supplier_invoice_id: 'si-straddle', amount: 500, payment_date: '2024-12-01' },
+          { company_id: 'company-1', supplier_invoice_id: 'si-straddle', amount: 1300, payment_date: '2025-03-04' },
+        ],
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      // 1500 was owed on balansdagen; a rising rate is a LOSS on a payable.
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].amount_in_currency).toBe(1500)
+      expect(preview.totalLoss).toBe(1500)
+      expect(preview.totalGain).toBe(0)
+    })
+
+    it('excludes an unbooked payable under deferred booking', async () => {
+      const bookedSi = makeSupplierInvoice({
+        status: 'registered',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        remaining_amount: 1000,
+        invoice_date: '2024-11-01',
+        registration_journal_entry_id: 'je-si-1',
+      })
+      const unbookedSi = makeSupplierInvoice({
+        status: 'registered',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 400,
+        remaining_amount: 400,
+        invoice_date: '2024-11-02',
+        registration_journal_entry_id: null,
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({
+        supplierInvoices: [bookedSi, unbookedSi],
+        settings: {
+          company_id: 'company-1',
+          accounting_method: 'accrual',
+          defer_invoice_booking: true,
+        },
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].amount_in_currency).toBe(1000)
+      expect(preview.totalLoss).toBe(1000)
+    })
+
+    it('renders a preview instead of throwing when settings cannot be read', async () => {
+      // previewCurrencyRevaluation is the read-only surface: the year-end
+      // preview must still render (same contract as the missing-rate path).
+      const eurInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: '2024-11-15',
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({ invoices: [eurInvoice] })
+      const original = supabase.from
+      supabase.from = vi.fn().mockImplementation((table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: null,
+                  error: { message: 'connection reset' },
+                }),
+              }),
+            }),
+          }
+        }
+        return original(table)
+      })
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(1)
+      expect(preview.totalGain).toBe(1000)
+    })
+
+    it('under deferred booking only revalues rows whose registration is booked', async () => {
+      const bookedInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: '2024-11-15',
+        journal_entry_id: 'je-1',
+      })
+      const unbookedInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 500,
+        invoice_date: '2024-11-20',
+        journal_entry_id: null,
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createMockSupabase({
+        invoices: [bookedInvoice, unbookedInvoice],
+        settings: {
+          company_id: 'company-1',
+          accounting_method: 'accrual',
+          defer_invoice_booking: true,
+        },
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].amount_in_currency).toBe(1000)
+      expect(preview.totalGain).toBe(1000) // only the booked 1000 EUR row
+    })
+
+    it('executeCurrencyRevaluation posts nothing when nothing was open on balansdagen', async () => {
+      // The Oppy case end to end: only a post-balansdagen invoice exists, so
+      // the year-end run must not create any verifikat at all.
+      const laterInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: '2025-03-10',
+      })
+
+      mockRates({ EUR: 12.0 })
+      const supabase = createFullMockSupabase({
+        invoices: [laterInvoice],
+        existingRevaluation: false,
+      })
+
+      const result = await executeCurrencyRevaluation(supabase, 'company-1', '2024-12-31', 'period-1')
+
+      expect(result).toBeNull()
+      expect(mockedCreateEntry).not.toHaveBeenCalled()
     })
   })
 })

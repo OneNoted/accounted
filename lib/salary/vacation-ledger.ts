@@ -73,7 +73,7 @@ export async function syncVacationLedgerForEmployees(
 
     const { data: employees, error: empErr } = await supabase
       .from('employees')
-      .select('id, vacation_days_per_year, vacation_days_saved, vacation_rule')
+      .select('id, vacation_days_per_year, vacation_days_saved, vacation_rule, employment_start')
       .eq('company_id', companyId)
       .in('id', employeeIds)
     if (empErr) return { ok: false, message: empErr.message }
@@ -83,6 +83,7 @@ export async function syncVacationLedgerForEmployees(
         vacation_days_per_year: number
         vacation_days_saved: number
         vacation_rule: string
+        employment_start: string
       }>).map((e) => [e.id, e]),
     )
 
@@ -156,7 +157,7 @@ export async function syncVacationLedgerForEmployees(
           employee_id: employeeId,
           vacation_year_start: row.vacation_year_start,
           entitled_days: row.entitled_days,
-          accrued_days: computeAccruedDays(basis, row.vacation_year_start, asOfDate, employee.vacation_days_per_year),
+          accrued_days: computeAccruedDays(basis, row.vacation_year_start, asOfDate, employee.vacation_days_per_year, employee.employment_start),
           taken_days: takenInYear(employeeId, row.vacation_year_start),
           saved_days: row.saved_days ?? {},
           forced_payout_days: row.forced_payout_days ?? 0,
@@ -189,11 +190,18 @@ export async function syncVacationLedgerForEmployees(
           company_id: companyId,
           employee_id: employeeId,
           vacation_year_start: currentYearStart,
+          // A cutover opening balance is the migrated truth from the previous
+          // system and outranks any recomputation.
           entitled_days:
             cutoverInThisYear && opening
               ? opening.vacation_paid_days_remaining
-              : employee.vacation_days_per_year,
-          accrued_days: computeAccruedDays(basis, currentYearStart, asOfDate, employee.vacation_days_per_year),
+              : computeEntitledDays(
+                  basis,
+                  currentYearStart,
+                  employee.vacation_days_per_year,
+                  employee.employment_start,
+                ),
+          accrued_days: computeAccruedDays(basis, currentYearStart, asOfDate, employee.vacation_days_per_year, employee.employment_start),
           taken_days: takenInYear(employeeId, currentYearStart),
           saved_days: savedDays,
           forced_payout_days: 0,
@@ -220,24 +228,93 @@ export async function syncVacationLedgerForEmployees(
  * Apr-Mar basis, where intjänandeår (this year) and semesterår (next year)
  * are split. Sammanfallande calendar years earn and take in the same year,
  * so the live number is entitled - taken and accrued stays 0.
+ *
+ * Earning starts on the employment date, not on the year boundary: a mid-year
+ * hire has not earned the months before their first day, and showing them the
+ * full year's accrual overstates what they may take.
  */
 function computeAccruedDays(
   basis: VacationYearBasis,
   yearStart: string,
   asOfDate: string,
   vacationDaysPerYear: number,
+  employmentStart: string,
 ): number {
   if (basis !== 'statutory_apr_mar') return 0
   const bounds = getVacationYearBounds(yearStart)
   if (asOfDate < bounds.start) return 0
-  if (asOfDate >= bounds.end) return vacationDaysPerYear
-  const startYear = Number(yearStart.slice(0, 4))
-  const startMonth = Number(yearStart.slice(5, 7))
-  const asOfYear = Number(asOfDate.slice(0, 4))
-  const asOfMonth = Number(asOfDate.slice(5, 7))
-  const elapsedMonths = (asOfYear - startYear) * 12 + (asOfMonth - startMonth)
+  // Employed only after this earning year closed: nothing earned in it.
+  if (employmentStart >= bounds.end) return 0
+  const earningStart = employmentStart > bounds.start ? employmentStart : bounds.start
+  const effectiveAsOf = asOfDate >= bounds.end ? bounds.end : asOfDate
+  const elapsedMonths = wholeMonthsBetween(earningStart, effectiveAsOf)
   // Whole elapsed months / 12, rounded to half days (Semesterlagen 3a §
   // rounds UP to whole days at payout; the running accrual view keeps halves
   // for transparency).
   return Math.round(((elapsedMonths / 12) * vacationDaysPerYear) * 2) / 2
+}
+
+/** Whole calendar months from `from` to `to`, day-of-month ignored (the
+ *  pre-existing convention of this view). */
+function wholeMonthsBetween(from: string, to: string): number {
+  const months =
+    (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 +
+    (Number(to.slice(5, 7)) - Number(from.slice(5, 7)))
+  return months > 0 ? months : 0
+}
+
+/**
+ * Betalda semesterdagar for a semesterår, per Semesterlagen 7 §:
+ *
+ *   anställningsdagar under intjänandeåret / dagar under intjänandeåret
+ *   x semesterdagar, and "om ett brutet tal då uppstår, avrundas detta till
+ *   närmast högre hela tal" (round UP, always).
+ *
+ * The intjänandeår is the twelve months immediately preceding the semesterår
+ * (3 §), so someone hired part-way through it earns proportionally fewer PAID
+ * days while keeping the right to take unpaid ones.
+ *
+ * Two deliberate omissions, both of which can only overstate entitlement and
+ * never understate it, so neither can silently deny an employee a paid day:
+ *
+ *  - 7 § also subtracts days of unpaid full-day absence. The ledger has no
+ *    unpaid-absence day source, so that term is not modelled.
+ *  - 4 § second sentence caps semesterLEDIGHET at five days when employment
+ *    starts after 31 August of the semesterår. That is a cap on days off,
+ *    paid or unpaid, which is a different quantity from the paid days 7 §
+ *    computes, so it does not belong in this number.
+ *
+ * Only applied on the statutory basis. Under sammanfallande semesterår the
+ * employee earns and takes in the same year, commonly with förskottssemester,
+ * and how a mid-year hire is treated is a collective-agreement question rather
+ * than a statutory one. Those companies keep the flat entitlement until that
+ * is decided.
+ */
+export function computeEntitledDays(
+  basis: VacationYearBasis,
+  yearStart: string,
+  vacationDaysPerYear: number,
+  employmentStart: string,
+): number {
+  if (basis !== 'statutory_apr_mar') return vacationDaysPerYear
+  // The intjänandeår is the year immediately BEFORE this semesterår.
+  const semesterBounds = getVacationYearBounds(yearStart)
+  const earningStart = shiftYear(semesterBounds.start, -1)
+  const earningEnd = semesterBounds.start
+  if (employmentStart >= earningEnd) return 0
+  const totalDays = daysBetween(earningStart, earningEnd)
+  if (totalDays <= 0) return vacationDaysPerYear
+  const employedFrom = employmentStart > earningStart ? employmentStart : earningStart
+  const employedDays = daysBetween(employedFrom, earningEnd)
+  const quota = (employedDays / totalDays) * vacationDaysPerYear
+  return Math.min(vacationDaysPerYear, Math.ceil(quota))
+}
+
+function shiftYear(iso: string, delta: number): string {
+  return `${Number(iso.slice(0, 4)) + delta}${iso.slice(4)}`
+}
+
+function daysBetween(from: string, to: string): number {
+  const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)
+  return Math.round(ms / 86_400_000)
 }
