@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
 import {
   autoCorrectionDescription,
@@ -29,6 +30,7 @@ import {
   changeCorrectionLineAccount,
   getSelectableCorrectionCatalog,
 } from '@/lib/bookkeeping/correction-line-account'
+import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import type { JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
@@ -56,6 +58,10 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   const [lines, setLines] = useState<CorrectionLine[]>([])
   const [description, setDescription] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Index of the line whose combobox opened the create dialog, and the search
+  // string it was showing. Null index = the dialog is closed.
+  const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
+  const [createAccountPrefill, setCreateAccountPrefill] = useState('')
 
   const activeAccounts = useMemo(
     () => accounts.filter((account) => account.is_active),
@@ -147,6 +153,34 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
   const removeLine = (index: number) => {
     setLines((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const closeCreateAccount = () => {
+    setCreatingAccountForLine(null)
+    setCreateAccountPrefill('')
+  }
+
+  // A number that is neither in the company chart nor in BAS 2026 (a retired
+  // account such as 8022, or a company-specific underkonto) would otherwise be
+  // a dead end here: the rättelse can only post to accounts that exist in the
+  // chart. Creating it inline keeps the half-finished rättelse intact.
+  const handleAccountCreated = async (account: { account_number: string; account_name?: string }) => {
+    await fetchAccounts()
+    if (creatingAccountForLine != null) {
+      // fetchAccounts' state update is not visible in this closure, so the
+      // fresh account's own name is passed alongside the stale sources. The
+      // reactivate path reports no name, but that account is already in
+      // `accounts` (the fetch includes deactivated rows).
+      const created = account.account_name
+        ? [{ account_number: account.account_number, account_name: account.account_name }]
+        : []
+      setLines((prev) => prev.map((line, index) => (
+        index === creatingAccountForLine
+          ? changeCorrectionLineAccount(line, account.account_number, [...accountNameSources, ...created])
+          : line
+      )))
+    }
+    closeCreateAccount()
   }
 
   const totalDebit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
@@ -298,6 +332,10 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
                     accounts={activeAccounts}
                     catalog={selectableCatalog}
                     onChange={(v) => updateLineAccount(index, v)}
+                    onCreateAccount={(prefill) => {
+                      setCreatingAccountForLine(index)
+                      setCreateAccountPrefill(prefill)
+                    }}
                     disabled={accountsStatus !== 'ready'}
                   />
                   <Button
@@ -380,6 +418,17 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* Nested on purpose: closing this one (Esc, click-outside, Avbryt) must
+          leave the half-filled ändringsverifikation behind it untouched. */}
+      <AddAccountDialog
+        open={creatingAccountForLine != null}
+        onOpenChange={(next) => {
+          if (!next) closeCreateAccount()
+        }}
+        onCreated={handleAccountCreated}
+        {...splitCreateAccountPrefill(createAccountPrefill)}
+      />
     </Dialog>
   )
 }
