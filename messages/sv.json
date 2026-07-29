@@ -4696,6 +4696,8 @@
     "no_results": "Inga företag matchar"
   },
   "transactions": {
+    "counterparty_suggestion_gone_title": "Motparten är inte längre tillgänglig",
+    "counterparty_suggestion_gone_description": "Förslaget hann uppdateras. Stäng rutan, öppna den igen och välj motparten på nytt.",
     "page_title": "Transaktioner",
     "subtitle_to_post": "att bokföra",
     "subtitle_matches": "{count} fakturamatchningar",

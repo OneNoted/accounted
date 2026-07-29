@@ -29,8 +29,8 @@ import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
+import { resolveQuickReviewDefaults, type ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
 import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
 import type {
@@ -202,7 +202,9 @@ interface QuickReviewState {
   transaction: TransactionWithInvoice
   category: TransactionCategory
   label: string
-  template: BookingTemplate | null
+  // ReviewTemplate, not BookingTemplate: a learned counterparty template has
+  // no catalog entry, so most BookingTemplate fields are genuinely absent.
+  template: ReviewTemplate | null
   templateId: string | undefined
   linePattern: LinePatternEntry[] | null
   // Learned counterparty bag; prefills the review dialog's dimension picker.
@@ -2158,12 +2160,32 @@ export default function TransactionsPage() {
   function handleOpenTemplateReview(transaction: TransactionWithInvoice, templateId: string) {
     if (isCounterpartyTemplateId(templateId)) {
       const cpSuggestion = templateSuggestions[transaction.id]?.find(ts => ts.template_id === templateId)
-      if (!cpSuggestion) return
+      if (!cpSuggestion) {
+        // The suggestion list went stale under the open modal (refetch, or the
+        // template was deleted in another tab). Say so instead of swallowing
+        // the click.
+        toast({
+          title: t('counterparty_suggestion_gone_title'),
+          description: t('counterparty_suggestion_gone_description'),
+          variant: 'destructive',
+        })
+        return
+      }
       setQuickReview({
         transaction,
         category: transaction.amount < 0 ? 'expense_other' : 'income_services',
         label: cpSuggestion.name_sv,
-        template: { id: templateId, name_sv: cpSuggestion.name_sv } as BookingTemplate,
+        // Carry the learned accounts and VAT: they are what the server books
+        // (buildMappingResultFromCounterpartyTemplate) and what the dialog
+        // previews. A counterparty template has no catalog entry, so the rest
+        // of BookingTemplate genuinely does not exist here.
+        template: {
+          id: templateId,
+          name_sv: cpSuggestion.name_sv,
+          debit_account: cpSuggestion.debit_account,
+          credit_account: cpSuggestion.credit_account,
+          vat_treatment: cpSuggestion.vat_treatment ?? null,
+        },
         templateId: undefined,
         linePattern: cpSuggestion.line_pattern ?? null,
         defaultDimensions: cpSuggestion.default_dimensions ?? null,
@@ -2323,6 +2345,15 @@ export default function TransactionsPage() {
     setQuickReview(null)
     return journalEntryId
   }
+
+  // Library and counterparty templates (no templateId) seed the review form
+  // from their own accounts; everything else falls back to the category
+  // defaults. Never undefined: see resolveQuickReviewDefaults.
+  const quickReviewDefaults = resolveQuickReviewDefaults(
+    quickReview?.template,
+    quickReview?.templateId,
+    quickReview?.category,
+  )
 
   return (
     <div className="space-y-8">
@@ -2786,19 +2817,8 @@ export default function TransactionsPage() {
           transaction={quickReview?.transaction ?? null}
           category={quickReview?.category ?? null}
           categoryLabel={quickReview?.label ?? ''}
-          defaultAccount={
-            // For library templates (no templateId but a template object), use the
-            // template's debit account as the default; otherwise fall back to the
-            // category's default account.
-            !quickReview?.templateId && quickReview?.template
-              ? quickReview.template.debit_account
-              : quickReview?.category ? getDefaultAccountForCategory(quickReview.category) : ''
-          }
-          defaultVat={
-            !quickReview?.templateId && quickReview?.template
-              ? (quickReview.template.vat_treatment ?? 'none')
-              : quickReview?.category ? (getDefaultVatTreatmentForCategory(quickReview.category) ?? 'none') : 'none'
-          }
+          defaultAccount={quickReviewDefaults.account}
+          defaultVat={quickReviewDefaults.vat}
           entityType={entityType as EntityType}
           template={quickReview?.template ?? null}
           templateId={quickReview?.templateId}
