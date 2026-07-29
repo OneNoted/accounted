@@ -93,13 +93,16 @@ export async function resolveMcpTask(
     statusMessage?: string
   }
 ): Promise<void> {
+  // Literal payload (no conditional spreads) so the phantom-column guard can
+  // resolve every column. Writing null for absent terminal fields is correct:
+  // the transition sets the complete terminal state.
   await supabase
     .from('mcp_tasks')
     .update({
       status: terminal.status,
-      ...(terminal.result !== undefined ? { result: terminal.result } : {}),
-      ...(terminal.error !== undefined ? { error: terminal.error } : {}),
-      ...(terminal.statusMessage !== undefined ? { status_message: terminal.statusMessage } : {}),
+      result: terminal.result ?? null,
+      error: terminal.error ?? null,
+      status_message: terminal.statusMessage ?? null,
     })
     .eq('id', taskId)
     .eq('status', 'working')
