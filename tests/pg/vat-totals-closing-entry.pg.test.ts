@@ -32,8 +32,16 @@ import {
 } from './fixtures'
 
 // Mirrors the arrays lib/reports/vat-declaration.ts passes in.
-const RUTA_ACCOUNTS = ['3001', '3308']
-const NET_ACCOUNTS = ['2611', '2641']
+//
+// p_ruta_accounts is the fixed ACCOUNT_RUTA key set, which holds revenue AND
+// VAT accounts. p_net_accounts is VAT_SETTLEMENT_NET_ACCOUNTS, the
+// momsredovisning settlement pair 2650/1650, and it is NOT the output-VAT
+// accounts: an entry carrying a line in p_ruta_accounts AND one in
+// p_net_accounts is classified a momsredovisning by SHAPE and dropped from the
+// totals entirely. An earlier draft put 2611 in p_net_accounts, which made an
+// ordinary sale-with-VAT look like a settlement and silently vanish.
+const RUTA_ACCOUNTS = ['3001', '3308', '2611', '2641']
+const NET_ACCOUNTS = ['2650', '1650']
 const ALL_ACCOUNTS = [...RUTA_ACCOUNTS, ...NET_ACCOUNTS]
 
 interface Totals {

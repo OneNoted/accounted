@@ -176,3 +176,61 @@ describe('reconcileStatements: a failing generator must not read as reconciled',
     expect(result.isReconciled).toBe(true)
   })
 })
+
+describe('reconcileStatements: entity-type resolution must not fail silently', () => {
+  it('throws when the companies lookup genuinely fails', async () => {
+    // Regression: resolveEntityType ignored both queries' error, so a DB
+    // failure returned null, landed in the unsupported-form branch and
+    // reported isReconciled: true. That is the same silent-false-reconciled
+    // bug the surrounding refactor exists to close, one level down.
+    const chain = (result: unknown): Record<string, unknown> => {
+      const c: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'or', 'order', 'limit', 'contains']) {
+        c[m] = () => c
+      }
+      c.single = async () => result
+      c.maybeSingle = async () => result
+      c.range = async () => result
+      return c
+    }
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'company_settings') return chain({ data: null, error: { message: 'no rows' } })
+        if (table === 'companies') return chain({ data: null, error: { message: 'permission denied' } })
+        return makeSupabase().from(table)
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(reconcileStatements(supabase, COMPANY_ID, PERIOD_ID)).rejects.toThrow(
+      /Failed to resolve entity type: permission denied/,
+    )
+  })
+
+  it('still tolerates a missing company_settings row', async () => {
+    // .single() errors on zero rows and many companies have no settings row,
+    // so that specific failure must fall through to companies, not throw.
+    const chain = (result: unknown): Record<string, unknown> => {
+      const c: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'or', 'order', 'limit', 'contains']) {
+        c[m] = () => c
+      }
+      c.single = async () => result
+      c.maybeSingle = async () => result
+      c.range = async () => result
+      return c
+    }
+    const base = makeSupabase()
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'company_settings') return chain({ data: null, error: { message: 'no rows' } })
+        return base.from(table)
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    const result = await reconcileStatements(supabase, COMPANY_ID, PERIOD_ID)
+    const statutory = result.figures.find((f) => f.family === 'statutory')
+    expect(statutory?.surface).toBe('INK2R (3.26/3.27)')
+  })
+})

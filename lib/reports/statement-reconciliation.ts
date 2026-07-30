@@ -196,6 +196,13 @@ function statutySafe(value: number | null): number {
 /**
  * Resolve the entity type the same way the declaration engines do: prefer
  * company_settings, fall back to companies.entity_type (NOT NULL, always set).
+ *
+ * The companies error is THROWN, not swallowed. Returning null on a genuine DB
+ * failure (RLS, permissions, connectivity) would be indistinguishable from "no
+ * entity type set", which lands in the unsupported-form branch and reports
+ * isReconciled: true: the same silent-false-reconciled bug this module exists to
+ * close, one level down. A missing company_settings ROW is different and stays
+ * tolerated, because .single() errors on zero rows and many companies have none.
  */
 async function resolveEntityType(
   supabase: SupabaseClient,
@@ -208,10 +215,13 @@ async function resolveEntityType(
     .single()
   if (settings?.entity_type) return settings.entity_type as string
 
-  const { data: company } = await supabase
+  const { data: company, error: companyError } = await supabase
     .from('companies')
     .select('entity_type')
     .eq('id', companyId)
     .single()
+  if (companyError) {
+    throw new Error(`Failed to resolve entity type: ${companyError.message}`)
+  }
   return (company?.entity_type as string | undefined) ?? null
 }
