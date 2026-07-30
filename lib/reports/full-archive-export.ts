@@ -357,7 +357,7 @@ async function generatePeriodReports(
 ): Promise<PeriodReports> {
   const [trialBalance, incomeStatement, balanceSheet, generalLedger, journalRegister] =
     await Promise.all([
-      generateTrialBalance(supabase, companyId, period.id),
+      generateTrialBalance(supabase, companyId, period.id, { closingEntry: 'include' }),
       generateIncomeStatement(supabase, companyId, period.id),
       generateBalanceSheet(supabase, companyId, period.id),
       generateGeneralLedger(supabase, companyId, period.id),
