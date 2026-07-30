@@ -1,6 +1,7 @@
 {
   "common": {
     "active_company": "Active company",
+    "open_in_new_tab": "Open in new tab",
     "update_available": "A new version is available.",
     "reload": "Reload",
     "save": "Save",
@@ -5435,6 +5436,9 @@
     "col_report": "Report",
     "col_description": "Description",
     "col_last_opened": "Last opened",
+    "search_placeholder": "Search reports",
+    "search_clear": "Clear search",
+    "search_no_results": "No report matches \"{query}\".",
     "opened_today": "today",
     "opened_yesterday": "yesterday",
     "help_text": "Every report opens for the selected fiscal year and can be narrowed to any period inside the report. Last opened remembers what you use the most.",
@@ -6225,6 +6229,7 @@
     "band_booked": "Completed",
     "no_transactions": "No transactions yet. Sync to fetch the tax account.",
     "chip_not_booked": "Not booked",
+    "interest_from": "interest from {date}",
     "chip_possible_duplicate": "Possible duplicate of {voucher}",
     "chip_draft": "draft",
     "action_show_voucher": "Show voucher",

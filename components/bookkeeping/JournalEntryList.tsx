@@ -30,6 +30,7 @@ import {
 } from '@/components/common/FiscalYearSelector'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import {
   TH_CLASS,
   TD_CLASS,
@@ -99,10 +100,20 @@ export default function JournalEntryList() {
   const [commitTarget, setCommitTarget] = useState<JournalEntry | null>(null)
   const [commitVoucherPreview, setCommitVoucherPreview] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  // Only the very first load may replace the table with a skeleton. Every
+  // later refetch (filter, sort, page, search) keeps the rows on screen and
+  // dims them, so the list never collapses to a spinner and springs back to
+  // full height under the pointer. Growing lists were causing real mis-clicks.
+  const [hasLoaded, setHasLoaded] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(0)
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
+  // Counts arrive in a second request, after the rows are already painted.
+  // Until they land, every row looks like it has no underlag, so rendering the
+  // chip eagerly flashes a false "Saknar underlag" compliance warning on every
+  // load, sort, filter and page change. Render nothing until we actually know.
+  const [attachmentCountsLoaded, setAttachmentCountsLoaded] = useState(false)
   // Entries with inline rättelser (journal_entry_rattelse_log rows): drives
   // the "Rättad" marker so a rättelse is discoverable from the list
   // (BFL 5 kap 5 §), not only on the detail page.
@@ -188,8 +199,13 @@ export default function JournalEntryList() {
   const fetchAttachmentCounts = useCallback(async (entryIds: string[]) => {
     if (entryIds.length === 0) {
       setAttachmentCounts({})
+      setAttachmentCountsLoaded(true)
       return
     }
+    // Deliberately keeps the previous counts in place while refetching: they
+    // are keyed by entry id, so a row that survives the refetch keeps its true
+    // count and a new row is covered by the loaded flag below.
+    setAttachmentCountsLoaded(false)
     // The counts route caps each request at 50 IDs, so a large page ("Alla", or
     // 100/page) must be split into chunks and merged. Without this the whole
     // request 400s and every document-requiring row falsely shows the
@@ -213,6 +229,8 @@ export default function JournalEntryList() {
       setAttachmentCounts(Object.assign({}, ...results))
     } catch {
       // Non-critical: silently ignore
+    } finally {
+      setAttachmentCountsLoaded(true)
     }
   }, [])
 
@@ -373,6 +391,7 @@ export default function JournalEntryList() {
 
     const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
     if (!res.ok) {
+      setHasLoaded(true)
       setLoading(false)
       return
     }
@@ -390,6 +409,7 @@ export default function JournalEntryList() {
     } else {
       fetchDraftCount()
     }
+    setHasLoaded(true)
     setLoading(false)
 
     // Fetch attachment counts + rättelse markers for the loaded entries
@@ -965,7 +985,7 @@ export default function JournalEntryList() {
         )}
       </div>
 
-      {loading ? (
+      {loading && !hasLoaded ? (
         <DataList className="stagger-enter">
           <DataListLoading />
         </DataList>
@@ -973,8 +993,13 @@ export default function JournalEntryList() {
         // Empty placeholder, scoped to the situation: an empty drafts view, a
         // filtered committed view with no matches, or a committed view with no
         // posted entries yet (but drafts exist, hence we got here, not the
-        // pristine early return above).
-        <DataList className="stagger-enter">
+        // pristine early return above). Carries the same busy treatment as the
+        // table branch: widening a filter from an empty result would otherwise
+        // look identical to "still nothing" for the whole request.
+        <DataList
+          className={cn('stagger-enter', loading && 'opacity-60')}
+          aria-busy={loading || undefined}
+        >
           <DataListEmpty
             icon={
               listMode === 'drafts' || !hasActiveFilters ? (
@@ -1000,7 +1025,13 @@ export default function JournalEntryList() {
           />
         </DataList>
       ) : (
-      <div>
+      <div
+        aria-busy={loading || undefined}
+        className={cn(
+          'transition-opacity duration-150',
+          loading && 'pointer-events-none opacity-60',
+        )}
+      >
         {/* Bulkbar (concept): hidden until at least one verifikat is
             selected via the hover checkboxes, then it pops in with the
             count and the batch actions. Select-all and the filter-scoped
@@ -1071,6 +1102,16 @@ export default function JournalEntryList() {
                 // Voucher total = sum of the debit side (= credit side when balanced).
                 const voucherTotal = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
                 const selectable = canWrite && isEligibleForExempt(entry)
+                // A makulerad verifikat should read as struck out, the way
+                // Grundbok already renders it. Applied per data cell rather
+                // than on the row: text-decoration propagates to descendants
+                // and a child cannot opt out, so striking the <tr> would draw
+                // a line through the row's action controls too.
+                //
+                // No opacity on the row: the strike plus the Makulerad chip
+                // already carry the state, and dimming muted-foreground text
+                // pushes the date column under the AA contrast floor.
+                const struckCell = entry.status === 'reversed' ? 'line-through' : undefined
 
                 return (
                   <Fragment key={entry.id}>
@@ -1111,20 +1152,30 @@ export default function JournalEntryList() {
                         )}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
-                        <Link
-                          href={`/bookkeeping/${entry.id}`}
-                          className="font-mono text-[13px] tabular-nums hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {formatVoucher(entry)}
-                        </Link>
+                        <span className="inline-flex items-center gap-1">
+                          <Link
+                            href={`/bookkeeping/${entry.id}`}
+                            className={cn(
+                              'font-mono text-[13px] tabular-nums hover:underline',
+                              struckCell,
+                            )}
+                            onClick={(e) => e.stopPropagation()}
+                            // The row's Enter/Space handler calls
+                            // preventDefault(), so without this the voucher
+                            // link expands the row instead of opening it.
+                            onKeyDown={(e) => e.stopPropagation()}
+                          >
+                            {formatVoucher(entry)}
+                          </Link>
+                          <OpenInNewTab href={`/bookkeeping/${entry.id}`} />
+                        </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground')}>
+                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground', struckCell)}>
                         {formatDate(entry.entry_date)}
                       </td>
                       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
                         <span className="flex min-w-0 items-center gap-2">
-                          <span className="truncate">{entry.description}</span>
+                          <span className={cn('truncate', struckCell)}>{entry.description}</span>
                           {entry.out_of_period && (
                             <Badge
                               variant="outline"
@@ -1148,7 +1199,7 @@ export default function JournalEntryList() {
                           )}
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask', struckCell)}>
                         {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
@@ -1168,7 +1219,7 @@ export default function JournalEntryList() {
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
                             </button>
                           ) : (
-                            NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
+                            attachmentCountsLoaded && NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
                               noDocRequired.has(entry.id) ? (
                                 <span title={t('no_doc_required_indicator_tooltip')}>
                                   <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
