@@ -15759,7 +15759,7 @@ function checkAndEmitNextHintFollowed(
  */
 function emitSkillLoaded(payload: {
   slug: string
-  tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+  tier: SkillTier
   actor: ActorContext
   userId: string
   companyId: string
