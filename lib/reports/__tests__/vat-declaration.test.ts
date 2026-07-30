@@ -1132,6 +1132,124 @@ describe('calculateVatDeclaration: company-specific ruta 05 accounts', () => {
     expect(result.rutor.ruta05).toBe(0)
   })
 
+  it('requires the word "moms" after the percent and refuses an ambiguous label', async () => {
+    // Two deliberate rules, pinned here so neither is loosened by accident:
+    //   - a bare percent is not a moms-sats. "provision 25 %" and "konsult 25 %"
+    //     are a margin and a rate of pay; reading either as a sats would file
+    //     revenue into ruta 05 off a word the user never wrote.
+    //   - a label naming two different sats resolves to nothing rather than to
+    //     whichever it spells out first: neither figure is trustworthy, and
+    //     picking one silently splits breakdown.invoices.base25/12/6 wrong.
+    chartAccounts = [
+      { account_number: '3011', account_name: 'Försäljning konsult 25 %', default_vat_rate: null },
+      {
+        account_number: '3021',
+        account_name: 'Försäljning varugrupp 1, provision 25 %',
+        default_vat_rate: null,
+      },
+      {
+        account_number: '3031',
+        account_name: 'Försäljning 25 % moms och 6 % moms',
+        default_vat_rate: null,
+      },
+    ]
+    seedLedger([
+      { account_number: '3011', debit_amount: 0, credit_amount: 4000 },
+      { account_number: '3021', debit_amount: 0, credit_amount: 3000 },
+      { account_number: '3031', debit_amount: 0, credit_amount: 2000 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+  })
+
+  it('lets a contradicting label veto the fallback even when number and sats agree', async () => {
+    // The 30x1 suffix and the "25 % moms" label both point at domestic taxable
+    // sales, but the rest of the name says the konto is something else: omvänd
+    // betalningsskyldighet belongs in ruta 41, VMB in ruta 07, export in
+    // ruta 36 and momsfritt in ruta 42. Ruta 05 is the wrong box for all four,
+    // so the fallback stands down and the konto keeps its unresolved
+    // behaviour (omission) rather than being filed somewhere it does not go.
+    chartAccounts = [
+      {
+        account_number: '3011',
+        account_name: 'Försäljning byggtjänster 25 % moms, omvänd betalningsskyldighet',
+        default_vat_rate: null,
+      },
+      {
+        account_number: '3021',
+        account_name: 'Försäljning begagnat 25 % moms (VMB)',
+        default_vat_rate: null,
+      },
+      {
+        account_number: '3031',
+        account_name: 'Export utanför EU, tidigare 25 % moms',
+        default_vat_rate: null,
+      },
+      {
+        account_number: '3041',
+        account_name: 'Momsfri försäljning, tidigare 25 % moms',
+        default_vat_rate: null,
+      },
+    ]
+    seedLedger([
+      { account_number: '3011', debit_amount: 0, credit_amount: 5000 },
+      { account_number: '3021', debit_amount: 0, credit_amount: 4000 },
+      { account_number: '3031', debit_amount: 0, credit_amount: 3000 },
+      { account_number: '3041', debit_amount: 0, credit_amount: 2000 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+  })
+
+  it('does not let a percentage ending in zero trip the 0 % veto', async () => {
+    // The veto's "0 %" alternative needs a leading word boundary: without one it
+    // also matches the trailing zero of "10/20/30/100 %", so an ordinary
+    // domestic sales konto whose name happens to mention a discount or a share
+    // would be dropped from ruta 05 and then raise a blocking
+    // OUTPUT_VAT_WITHOUT_SALES_BASE. Both names below are momspliktig
+    // försäljning inom Sverige: agreeing 30x1 suffix, agreeing "25 % moms".
+    chartAccounts = [
+      {
+        account_number: '3011',
+        account_name: 'Försäljning varor 25 % moms, rabatt 30 %',
+        default_vat_rate: null,
+      },
+      {
+        account_number: '3021',
+        account_name: 'Försäljning varor 25 % moms, 100 % ägt dotterbolag',
+        default_vat_rate: null,
+      },
+    ]
+    seedLedger([
+      { account_number: '3011', debit_amount: 0, credit_amount: 5000 },
+      { account_number: '3021', debit_amount: 0, credit_amount: 3000 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(8000)
+  })
+
+  it('still vetoes a konto whose label states a genuine 0 % sats', async () => {
+    // The other side of the boundary fix: a real "0 %" label must keep vetoing.
+    chartAccounts = [
+      {
+        account_number: '3011',
+        account_name: 'Försäljning 0 % moms',
+        default_vat_rate: null,
+      },
+    ]
+    seedLedger([{ account_number: '3011', debit_amount: 0, credit_amount: 5000 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+  })
+
   it('adds the accounts to p_accounts but never to p_ruta_accounts', async () => {
     // p_ruta_accounts is the settlement SHAPE detector inside the RPC: an entry
     // touching it plus 2650/1650 is classified a momsredovisning and dropped
