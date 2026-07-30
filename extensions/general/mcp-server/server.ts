@@ -1780,7 +1780,13 @@ async function getScopedReconciliationStatus(
     .maybeSingle()
 
   if (cashAccountError) {
-    throw new Error(`Kunde inte hämta kassakonto ${accountNumber}: ${cashAccountError.message}`)
+    log.error('Cash account lookup failed during reconciliation', {
+      companyId,
+      accountNumber,
+      errorCode: cashAccountError.code,
+      errorMessage: cashAccountError.message,
+    })
+    throw new Error(`Kunde inte hämta kassakonto ${accountNumber}`)
   }
 
   if (!cashAccount && accountNumber !== '1930') {

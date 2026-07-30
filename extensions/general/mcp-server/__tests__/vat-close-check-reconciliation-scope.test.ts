@@ -162,7 +162,7 @@ describe('gnubok_vat_close_check: reconciliation scope', () => {
     const { supabase } = mockSupabase(null, { message: 'connection failed' })
 
     await expect(computeVatCloseCheck(PERIOD, COMPANY_ID, supabase)).rejects.toThrow(
-      'Kunde inte hämta kassakonto 1930: connection failed',
+      'Kunde inte hämta kassakonto 1930',
     )
     expect(getReconciliationStatusMock).not.toHaveBeenCalled()
   })
