@@ -30,19 +30,23 @@ interface CashAccountFixture {
   is_primary: boolean
 }
 
-function mockSupabase(cashAccount: CashAccountFixture | null) {
+function mockSupabase(
+  cashAccount: CashAccountFixture | null,
+  cashAccountError: { message: string } | null = null,
+) {
   const cashAccountFilters: Array<[string, unknown]> = []
 
   const makeChain = (
     rows: unknown[],
     maybeSingleData: unknown = null,
     eqCalls?: Array<[string, unknown]>,
+    maybeSingleError: { message: string } | null = null,
   ): Record<string, unknown> => {
     const chain: Record<string, unknown> = {}
     const settled = { data: rows, error: null, count: rows.length }
     chain.range = () => settled
     chain.single = async () => ({ data: null, error: null })
-    chain.maybeSingle = async () => ({ data: maybeSingleData, error: null })
+    chain.maybeSingle = async () => ({ data: maybeSingleData, error: maybeSingleError })
     chain.then = (resolve: (value: unknown) => void) => resolve(settled)
     for (const method of [
       'order', 'lte', 'gte', 'neq', 'in', 'is', 'select',
@@ -59,7 +63,12 @@ function mockSupabase(cashAccount: CashAccountFixture | null) {
 
   const from = vi.fn((table: string) => {
     if (table === 'cash_accounts') {
-      return makeChain(cashAccount ? [cashAccount] : [], cashAccount, cashAccountFilters)
+      return makeChain(
+        cashAccount ? [cashAccount] : [],
+        cashAccount,
+        cashAccountFilters,
+        cashAccountError,
+      )
     }
     return makeChain([])
   })
@@ -147,5 +156,14 @@ describe('gnubok_vat_close_check: reconciliation scope', () => {
       undefined,
       true,
     )
+  })
+
+  it('fails closed when the cash-account lookup errors instead of reconciling every SEK account', async () => {
+    const { supabase } = mockSupabase(null, { message: 'connection failed' })
+
+    await expect(computeVatCloseCheck(PERIOD, COMPANY_ID, supabase)).rejects.toThrow(
+      'Kunde inte hämta kassakonto 1930: connection failed',
+    )
+    expect(getReconciliationStatusMock).not.toHaveBeenCalled()
   })
 })

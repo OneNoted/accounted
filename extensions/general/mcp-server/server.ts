@@ -1772,12 +1772,16 @@ async function getScopedReconciliationStatus(
   dateTo: string | undefined,
   accountNumber: string,
 ) {
-  const { data: cashAccount } = await supabase
+  const { data: cashAccount, error: cashAccountError } = await supabase
     .from('cash_accounts')
     .select('id, currency, is_primary')
     .eq('company_id', companyId)
     .eq('ledger_account', accountNumber)
     .maybeSingle()
+
+  if (cashAccountError) {
+    throw new Error(`Kunde inte hämta kassakonto ${accountNumber}: ${cashAccountError.message}`)
+  }
 
   if (!cashAccount && accountNumber !== '1930') {
     throw new Error(`Okänt kassakonto ${accountNumber} för det här företaget`)
