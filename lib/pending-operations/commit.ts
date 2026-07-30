@@ -125,6 +125,7 @@ import {
 } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
+import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
@@ -159,10 +160,13 @@ export interface CommitResult {
   error?: string
   http_status?: number
   auto_rejected?: boolean
-  // Set when the commit failed because the booking posts to BAS accounts not
-  // active in the company chart. Recoverable: the op is left 'pending' so the
-  // caller can activate the accounts and retry. Lets the route rebuild the
-  // structured ACCOUNTS_NOT_IN_CHART envelope (code + account_numbers).
+  // Structured-error registry code for the failure, when one is known, so a
+  // caller can branch on the failure mode instead of parsing `error` text.
+  // ACCOUNTS_NOT_IN_CHART is the recoverable case: the booking posts to BAS
+  // accounts not active in the company chart, the op is left 'pending', and
+  // the route rebuilds the structured envelope (code + account_numbers).
+  // Other codes (e.g. INVOICE_RECURRING_UPDATE_PARTIAL) are informational:
+  // callers that do not recognize the code fall back to `error`.
   code?: string
   account_numbers?: string[]
 }
@@ -238,6 +242,10 @@ async function recordSkippedInvoiceJournalEntry(
 type ExecutorResult = {
   data?: Record<string, unknown>
   error?: string
+  // Structured-error registry code for `error`, when the executor has one.
+  // Surfaced as CommitResult.code and persisted in result_data.error_code so a
+  // caller can branch on the failure mode instead of parsing the message text.
+  errorCode?: string
   status?: number
   // Set when the executor already performed an irreversible side-effect
   // (posted voucher, persisted credit note) before the failure in `error`:
@@ -691,75 +699,40 @@ async function commitUpdateRecurringSchedule(
     }
   }
 
-  if (Object.keys(updateRow).length > 0) {
-    const { error: updateError } = await supabase
-      .from('recurring_invoice_schedules')
-      .update(updateRow)
-      .eq('id', scheduleId)
-      .eq('company_id', companyId)
-
-    if (updateError) return { error: updateError.message, status: 500 }
-  }
-
-  let itemsReplaced = false
-  if (items) {
-    // Provided = replace all; omitted = keep existing (the schema contract).
-    // Snapshot first so a failed insert can restore the previous lines: an
-    // item-less schedule makes every cron run throw "schedule has no items"
-    // and silently skip billing dates.
-    const { data: previousItems } = await supabase
-      .from('recurring_invoice_schedule_items')
-      .select('sort_order, description, quantity, unit, unit_price, vat_rate, dimensions')
-      .eq('schedule_id', scheduleId)
-
-    await supabase
-      .from('recurring_invoice_schedule_items')
-      .delete()
-      .eq('schedule_id', scheduleId)
-
-    const itemRows = items.map((item, idx) => ({
-      schedule_id: scheduleId,
-      sort_order: idx,
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      vat_rate: item.vat_rate ?? null,
-      dimensions: item.dimensions ?? {},
-    }))
-
-    const { error: itemsError } = await supabase
-      .from('recurring_invoice_schedule_items')
-      .insert(itemRows)
-
-    if (itemsError) {
-      // Restore the snapshot so the schedule stays valid for the cron.
-      if (previousItems && previousItems.length > 0) {
-        const restoreRows = previousItems.map((row) => ({
-          schedule_id: scheduleId,
-          sort_order: row.sort_order,
-          description: row.description,
-          quantity: row.quantity,
-          unit: row.unit,
-          unit_price: row.unit_price,
-          vat_rate: row.vat_rate,
-          dimensions: row.dimensions ?? {},
-        }))
-        const { error: restoreError } = await supabase
-          .from('recurring_invoice_schedule_items')
-          .insert(restoreRows)
-        if (restoreError) {
-          log.error(
-            'failed to restore schedule items after failed replace: schedule may be left empty',
-            restoreError,
-            { scheduleId },
-          )
-        }
+  // Items provided = replace all; omitted = keep existing (the schema
+  // contract). The shared helper compensates BOTH writes on failure, so an
+  // item failure cannot leave the header fields half-saved.
+  const result = await applyRecurringScheduleUpdate(supabase, {
+    scheduleId,
+    companyId,
+    fields: updateRow,
+    items,
+    log,
+  })
+  if (!result.ok) {
+    if (result.stage !== 'header' && (!result.itemsRestored || !result.headerRestored)) {
+      // Same registry sentence the PATCH route returns, so the two surfaces
+      // cannot drift on what the user is told.
+      const partial = getErrorEntry('INVOICE_RECURRING_UPDATE_PARTIAL')
+      log.error('recurring schedule update left a partial state', result.error, {
+        scheduleId,
+        companyId,
+        stage: result.stage,
+        itemsRestored: result.itemsRestored,
+        headerRestored: result.headerRestored,
+      })
+      return {
+        error: `${partial?.message_sv ?? 'Ändringen kunde inte slutföras.'} (${result.error.message})`,
+        // Machine-readable twin of the PATCH route's envelope code, so an
+        // MCP/staged-op caller can detect the partial state without
+        // substring-matching the Swedish sentence.
+        errorCode: 'INVOICE_RECURRING_UPDATE_PARTIAL',
+        status: 500,
       }
-      return { error: itemsError.message, status: 500 }
     }
-    itemsReplaced = true
+    return { error: result.error.message, status: 500 }
   }
+  const itemsReplaced = Boolean(items)
 
   return {
     data: {
@@ -5652,7 +5625,11 @@ async function commitPendingOperationInner(
         resolved_at: new Date().toISOString(),
         result_data: isAutoReject
           ? { auto_rejected: true, reason: result.error }
-          : { error: result.error, http_status: result.status },
+          : {
+              error: result.error,
+              http_status: result.status,
+              ...(result.errorCode ? { error_code: result.errorCode } : {}),
+            },
       })
       .eq('id', pendingOp.id)
     if (isAutoReject) {
@@ -5667,6 +5644,7 @@ async function commitPendingOperationInner(
       status: 'failed',
       error: result.error,
       http_status: result.status ?? 500,
+      ...(result.errorCode ? { code: result.errorCode } : {}),
     }
   }
 
