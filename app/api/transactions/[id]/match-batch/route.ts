@@ -4,6 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { MatchBatchSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { eventBus } from '@/lib/events/bus'
+import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
 import { ensureInitialized } from '@/lib/init'
 import type { Invoice, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -148,6 +149,17 @@ export const POST = withRouteContext(
         txLog.warn('match_batch event emission failed', err as Error)
       }
     }
+
+    // Every allocation the RPC settled in full retires its suggestion pointer
+    // from the company's OTHER transactions (issue #1259). This request's own
+    // row is linked by the RPC, so it is excluded there. Shared with the MCP
+    // executor for the same RPC (commitMatchBatchAllocate).
+    await clearSettledBatchAllocationSuggestions(
+      supabase,
+      companyId!,
+      result.allocations,
+      transactionId,
+    )
 
     return NextResponse.json({
       data: {

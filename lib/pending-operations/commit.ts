@@ -57,6 +57,11 @@ import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import {
+  clearSettledBatchAllocationSuggestions,
+  type BatchAllocationResult,
+} from '@/lib/invoices/clear-settled-batch-allocations'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
@@ -2051,6 +2056,13 @@ async function commitMarkInvoicePaid(
     }
   }
 
+  // Fully settled: retire every transaction's suggestion pointer at this
+  // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
+  // a bank transaction, so any pointer at it is now dead.
+  if (newStatus === 'paid') {
+    await clearSettledInvoiceSuggestions(supabase, companyId, 'invoice', invoiceId)
+  }
+
   // Notify subscribers: invoice.paid fans out to registered webhooks
   // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
   // so an emit failure must not fail the operation. Parity with the v1 and
@@ -2599,6 +2611,15 @@ async function commitMatchTransactionInvoice(
     transaction_id: transactionId,
     notes: paymentNotes,
   })
+
+  // The invoice is now settled, so every OTHER transaction still carrying a
+  // suggestion pointer at it is dead: retire them (issue #1259). This
+  // operation's own row is cleared by the update just below.
+  if (isFullyPaid) {
+    await clearSettledInvoiceSuggestions(supabase, companyId, 'invoice', invoiceId, {
+      exceptTransactionId: transactionId,
+    })
+  }
 
   await supabase
     .from('transactions')
@@ -5052,7 +5073,13 @@ async function commitMatchBatchAllocate(
     })
     return { error: error.message || 'Database error', status: 500 }
   }
-  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string }
+  const result = data as {
+    ok: boolean
+    code?: string
+    details?: unknown
+    journal_entry_id?: string
+    allocations?: BatchAllocationResult[]
+  }
   if (!result || !result.ok) {
     return {
       error: result?.code || 'match_batch_allocate failed',
@@ -5060,6 +5087,12 @@ async function commitMatchBatchAllocate(
       data: result?.details as Record<string, unknown> | undefined,
     }
   }
+  // Every allocation the RPC settled in full retires its suggestion pointer
+  // from the company's OTHER transactions (issue #1259): the RPC only nulls
+  // them on the source tx. Same helper as the HTTP twin
+  // (app/api/transactions/[id]/match-batch/route.ts) so the two cannot drift.
+  await clearSettledBatchAllocationSuggestions(supabase, companyId, result.allocations ?? [], txId)
+
   // Structured audit-trail entry on success (compliance-swarm V16). Tx
   // count + JE id + the source tx id only: no amounts, no
   // counterparty identifiers, no descriptions. txId is included
