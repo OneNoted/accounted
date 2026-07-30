@@ -1760,6 +1760,45 @@ async function countMissingUnderlagInPeriod(
   return Math.max(0, fromStart - afterEnd)
 }
 
+/**
+ * Resolve the cash-account identity before comparing its bank feed with the
+ * ledger. The cashAccountId is what prevents another same-currency account
+ * from being included in the transaction total.
+ */
+async function getScopedReconciliationStatus(
+  supabase: SupabaseClient,
+  companyId: string,
+  dateFrom: string | undefined,
+  dateTo: string | undefined,
+  accountNumber: string,
+) {
+  const { data: cashAccount } = await supabase
+    .from('cash_accounts')
+    .select('id, currency, is_primary')
+    .eq('company_id', companyId)
+    .eq('ledger_account', accountNumber)
+    .maybeSingle()
+
+  if (!cashAccount && accountNumber !== '1930') {
+    throw new Error(`Okänt kassakonto ${accountNumber} för det här företaget`)
+  }
+
+  const currency = (cashAccount?.currency as string | undefined) ?? 'SEK'
+  const cashAccountId = cashAccount?.id as string | undefined
+  const includeUnassigned = cashAccount ? Boolean(cashAccount.is_primary) : true
+
+  return getReconciliationStatus(
+    supabase,
+    companyId,
+    dateFrom,
+    dateTo,
+    accountNumber,
+    currency,
+    cashAccountId,
+    includeUnassigned,
+  )
+}
+
 export async function computeVatCloseCheck(
   args: Record<string, unknown>,
   companyId: string,
@@ -1804,7 +1843,7 @@ export async function computeVatCloseCheck(
       .eq('company_id', companyId)
       .eq('status', 'registered')
       .gte('invoice_date', start).lte('invoice_date', end),
-    getReconciliationStatus(supabase, companyId, start, end),
+    getScopedReconciliationStatus(supabase, companyId, start, end, '1930'),
     // Verifikat in the period that genuinely lack an underlag (BFL 5 kap
     // 6-7 §), counted over the SHARED SQL predicate. Never re-derive this
     // locally: countMissingUnderlagInPeriod documents what the hand-rolled
@@ -8975,34 +9014,12 @@ export const tools: McpTool[] = [
       const dateTo = args.date_to as string | undefined
       const accountNumber = (args.account_number as string | undefined) || '1930'
 
-      // Pair the bank account with its currency + cash_account_id so EUR GL
-      // movements aren't compared against SEK transactions, and so a secondary
-      // same-currency account doesn't pool the primary's unassigned rows. Mirrors
-      // app/api/reconciliation/bank/status/route.ts.
-      const { data: cashAccount } = await supabase
-        .from('cash_accounts')
-        .select('id, currency, is_primary')
-        .eq('company_id', companyId)
-        .eq('ledger_account', accountNumber)
-        .maybeSingle()
-
-      if (!cashAccount && accountNumber !== '1930') {
-        throw new Error(`Okänt kassakonto ${accountNumber} för det här företaget`)
-      }
-
-      const currency = (cashAccount?.currency as string | undefined) ?? 'SEK'
-      const cashAccountId = cashAccount?.id as string | undefined
-      const includeUnassigned = cashAccount ? Boolean(cashAccount.is_primary) : true
-
-      return await getReconciliationStatus(
+      return await getScopedReconciliationStatus(
         supabase,
         companyId,
         dateFrom,
         dateTo,
         accountNumber,
-        currency,
-        cashAccountId,
-        includeUnassigned,
       )
     },
   },
