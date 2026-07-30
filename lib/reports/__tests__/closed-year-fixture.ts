@@ -16,6 +16,7 @@
  * A new statement generator must be added to the table in
  * closed-year-statements.test.ts. That is the point: the list is the checklist.
  */
+import { roundOre } from '@/lib/money'
 import type { TrialBalanceRow } from '@/types'
 
 /** Build a trial balance row from a debit-positive balance. */
@@ -75,10 +76,31 @@ export const PRE_CLOSING_ROWS: TrialBalanceRow[] = [
 /**
  * The operational view, i.e. closingEntry: 'exclude-all-year-end'. Every
  * source_type 'year_end' entry is gone, so the dispositions and the tax go too.
+ *
+ * BOTH legs of each dropped entry go, not just the P&L one: 2125 is the
+ * periodiseringsfond credit leg of 8811, and 2512 the skatteskuld credit leg of
+ * 8910. Zeroing only 8811/8910 would leave this view 160 000 kr out of balance
+ * and misrepresent what generateTrialBalance actually returns in this mode.
+ * Today's consumers read only class 3-8, so that was latent, but a shared
+ * fixture that does not balance is a trap for the next balance-sheet consumer.
+ * balancesToZero() below is asserted in closed-year-statements.test.ts.
  */
-export const EX_YEAR_END_ROWS: TrialBalanceRow[] = PRE_CLOSING_ROWS.filter(
-  (r) => r.account_number !== '8811' && r.account_number !== '8910',
-)
+export const EX_YEAR_END_ROWS: TrialBalanceRow[] = PRE_CLOSING_ROWS
+  .filter((r) => r.account_number !== '8811' && r.account_number !== '8910')
+  .map((r) =>
+    r.account_number === '2125' || r.account_number === '2512'
+      ? tbRow(r.account_number, r.account_name, 0)
+      : r,
+  )
+
+/** Debit-positive sum of a view. Every trial balance must come to zero. */
+export function balancesToZero(rows: TrialBalanceRow[]): number {
+  const total = rows.reduce(
+    (sum, r) => sum + (Number(r.closing_debit) || 0) - (Number(r.closing_credit) || 0),
+    0,
+  )
+  return roundOre(total)
+}
 
 /**
  * The closed books, i.e. closingEntry: 'include'. Every P&L account is zero and

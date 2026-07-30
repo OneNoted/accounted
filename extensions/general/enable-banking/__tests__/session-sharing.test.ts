@@ -250,10 +250,12 @@ describe('findReusableSessions', () => {
       companies: [{ data: [], error: null }],
     })
 
+    // Nothing is offered: an unreadable claimed set cannot prove an account
+    // free, and offering one another company books to is the outcome this
+    // feature must never produce. The failure must also not throw and take the
+    // settings panel down with it, hence awaiting a value rather than a reject.
     const sessions = await findReusableSessions(supabase, 'user-1', 'company-b')
-    // The account is still offered (nothing proves it claimed) but the lookup
-    // failure must not throw and take the settings panel down with it.
-    expect(sessions).toHaveLength(1)
+    expect(sessions).toEqual([])
   })
 
   it('returns an empty list when the session lookup fails', async () => {

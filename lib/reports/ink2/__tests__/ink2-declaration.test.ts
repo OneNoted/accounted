@@ -205,7 +205,7 @@ describe('generateINK2Declaration: closed fiscal year', () => {
     const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
 
     expect(result.totals.operatingResult).toBe(600_000)
-    expect(result.totals.resultAfterFinancial).toBe(442_000)
+    expect(result.totals.aretsResultat).toBe(442_000)
   })
 
   it('reads the balance sheet from the closed books so 7302 carries the result', async () => {

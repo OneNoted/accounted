@@ -123,3 +123,56 @@ describe('reconcileStatements', () => {
     expect(ledger?.note).toContain('inte stängt')
   })
 })
+
+describe('reconcileStatements: a failing generator must not read as reconciled', () => {
+  it('surfaces a declaration that could not be generated', async () => {
+    // Regression: the old implementation called the generator and caught ANY
+    // throw as "wrong entity type", mapping it to a null figure that the
+    // comparison then skipped. A real generator bug therefore reported
+    // isReconciled: true, the exact opposite of this function's purpose.
+    vi.mocked(generateTrialBalance).mockImplementation(async (_s, _c, _p, opts) => {
+      if (opts.closingEntry === 'exclude-final') {
+        throw new Error(
+          'Closed fiscal period is missing closing_entry_id; statutory pre-closing balances cannot be generated safely',
+        )
+      }
+      return { rows: rowsForMode(opts.closingEntry), totalDebit: 0, totalCredit: 0, isBalanced: true }
+    })
+
+    const result = await reconcileStatements(makeSupabase(), COMPANY_ID, PERIOD_ID)
+
+    expect(result.isReconciled).toBe(false)
+    expect(result.disagreements.some((d) => d.includes('kunde inte genereras'))).toBe(true)
+    const statutory = result.figures.find((f) => f.family === 'statutory')
+    expect(statutory?.aretsResultat).toBeNull()
+    expect(statutory?.note).toContain('closing_entry_id')
+  })
+
+  it('reports no statutory figure for an unsupported entity form, without inventing a disagreement', async () => {
+    const supabase = {
+      from: (table: string) => {
+        const chain = (result: unknown): Record<string, unknown> => {
+          const c: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'or', 'order', 'limit', 'contains']) {
+            c[m] = () => c
+          }
+          c.single = async () => result
+          c.maybeSingle = async () => result
+          c.range = async () => result
+          return c
+        }
+        if (table === 'company_settings') return chain({ data: { entity_type: 'handelsbolag' }, error: null })
+        if (table === 'companies') return chain({ data: { entity_type: 'handelsbolag' }, error: null })
+        return makeSupabase().from(table)
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    const result = await reconcileStatements(supabase, COMPANY_ID, PERIOD_ID)
+
+    const statutory = result.figures.find((f) => f.family === 'statutory')
+    expect(statutory?.aretsResultat).toBeNull()
+    expect(statutory?.note).toContain('stöds')
+    expect(result.isReconciled).toBe(true)
+  })
+})

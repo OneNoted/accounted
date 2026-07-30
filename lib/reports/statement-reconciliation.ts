@@ -103,32 +103,53 @@ export async function reconcileStatements(
   })
 
   // ── Statutory: whichever declaration applies to this entity ───
-  // Each generator throws on the wrong entity type, which is the cheapest way
-  // to ask "which one applies" without duplicating the entity_type lookup.
-  try {
-    const ink2 = await generateINK2Declaration(supabase, companyId, fiscalPeriodId)
-    figures.push({
-      surface: 'INK2R (3.26/3.27)',
-      family: 'statutory',
-      aretsResultat: ink2.ink2r['7450'] - ink2.ink2r['7550'],
-    })
-  } catch {
+  // Dispatched on entity_type, NOT by calling a generator and catching its
+  // throw. Catch-as-control-flow swallowed genuine failures too (an internal
+  // computation error, or generateTrialBalance's closing_entry_id guard on a
+  // closed period) and mapped them to a null figure, which the comparison below
+  // skips, so a real bug in the declaration generator made this function report
+  // isReconciled: true. That is the exact opposite of what it exists to do.
+  const entityType = await resolveEntityType(supabase, companyId)
+
+  if (entityType === 'aktiebolag' || entityType === 'enskild_firma') {
     try {
-      const ne = await generateNEDeclaration(supabase, companyId, fiscalPeriodId)
+      if (entityType === 'aktiebolag') {
+        const ink2 = await generateINK2Declaration(supabase, companyId, fiscalPeriodId)
+        figures.push({
+          surface: 'INK2R (3.26/3.27)',
+          family: 'statutory',
+          aretsResultat: ink2.ink2r['7450'] - ink2.ink2r['7550'],
+        })
+      } else {
+        const ne = await generateNEDeclaration(supabase, companyId, fiscalPeriodId)
+        figures.push({
+          surface: 'NE-bilaga (R11)',
+          family: 'statutory',
+          aretsResultat: ne.rutor.R11,
+          note: 'NE-bilagan redovisar resultatet före skatt; skatten beskattas hos ägaren.',
+        })
+      }
+    } catch (err) {
+      // The applicable declaration exists but could not be produced. That is a
+      // finding, not an absence: surface it instead of returning "reconciled".
+      const reason = err instanceof Error ? err.message : String(err)
       figures.push({
-        surface: 'NE-bilaga (R11)',
-        family: 'statutory',
-        aretsResultat: ne.rutor.R11,
-        note: 'NE-bilagan redovisar resultatet före skatt; skatten beskattas hos ägaren.',
-      })
-    } catch {
-      figures.push({
-        surface: 'Deklaration',
+        surface: entityType === 'aktiebolag' ? 'INK2R (3.26/3.27)' : 'NE-bilaga (R11)',
         family: 'statutory',
         aretsResultat: null,
-        note: 'Ingen deklarationsblankett kunde genereras för den här företagsformen.',
+        note: `Deklarationen kunde inte genereras: ${reason}`,
       })
+      disagreements.push(
+        `Deklarationen kunde inte genereras och kan därför inte stämmas av mot bokföringen: ${reason}`,
+      )
     }
+  } else {
+    figures.push({
+      surface: 'Deklaration',
+      family: 'statutory',
+      aretsResultat: null,
+      note: 'Ingen deklarationsblankett stöds för den här företagsformen.',
+    })
   }
 
   // ── Operational ───────────────────────────────────────────────
@@ -170,4 +191,27 @@ export async function reconcileStatements(
 /** Narrow a possibly-null figure for message interpolation. */
 function statutySafe(value: number | null): number {
   return value ?? 0
+}
+
+/**
+ * Resolve the entity type the same way the declaration engines do: prefer
+ * company_settings, fall back to companies.entity_type (NOT NULL, always set).
+ */
+async function resolveEntityType(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<string | null> {
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('entity_type')
+    .eq('company_id', companyId)
+    .single()
+  if (settings?.entity_type) return settings.entity_type as string
+
+  const { data: company } = await supabase
+    .from('companies')
+    .select('entity_type')
+    .eq('id', companyId)
+    .single()
+  return (company?.entity_type as string | undefined) ?? null
 }

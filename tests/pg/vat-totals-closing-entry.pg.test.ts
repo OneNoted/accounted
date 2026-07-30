@@ -106,12 +106,18 @@ async function seedClosedYear(closingStatus: 'posted' | 'reversed') {
   const userId = await insertAuthUser()
   const companyId = await insertCompany({ createdBy: userId })
   await insertCompanyMember({ companyId, userId, role: 'owner' })
+  // Left OPEN deliberately. enforce_period_lock (migration 017, legally
+  // required) refuses any write into a closed period, so seeding entries into
+  // one is impossible by design and must not be worked around. The RPC's
+  // predicate keys on fiscal_periods.closing_entry_id and never reads
+  // is_closed, so linking the closing entry below exercises the exact path
+  // that matters without fighting a compliance trigger.
   const fiscalPeriodId = await insertFiscalPeriod({
     userId,
     companyId,
     periodStart: '2026-01-01',
     periodEnd: '2026-12-31',
-    isClosed: true,
+    isClosed: false,
   })
   const ctx = { userId, companyId, fiscalPeriodId }
 

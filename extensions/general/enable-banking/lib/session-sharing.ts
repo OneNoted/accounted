@@ -11,7 +11,7 @@ const log = createLogger('enable-banking/session-sharing')
  * Several ASPSPs (SEB most visibly) allow only one active AIS session per PSU.
  * A user who signs for company A, then company B, then company C at the same
  * bank ends up with only the newest session alive: each authorization revokes
- * the previous one bank-side, without telling us. Prod bears this out — every
+ * the previous one bank-side, without telling us. Prod bears this out: every
  * SEB customer holding connections for more than one company has had an
  * earlier company stop syncing at the moment the next one was authorized,
  * usually while its consent was still formally valid for weeks.
@@ -95,7 +95,13 @@ export function unclaimedAccountsFor(
  * companies' accounts in the picker precisely because those do not belong in
  * this company's books. Those are the accounts the next company should get.
  */
-async function fetchClaimedIbans(supabase: SupabaseClient): Promise<Set<string>> {
+/**
+ * Returns null when the claimed set could not be read. An empty Set would be
+ * indistinguishable from "nothing is claimed", which makes every IBAN in the
+ * session offerable: the one outcome this feature must never produce. The
+ * caller turns null into an empty offer list.
+ */
+async function fetchClaimedIbans(supabase: SupabaseClient): Promise<Set<string> | null> {
   const { data, error } = await supabase
     .from('cash_accounts')
     .select('iban')
@@ -107,7 +113,7 @@ async function fetchClaimedIbans(supabase: SupabaseClient): Promise<Set<string>>
     // one another company already books to, and offering a claimed account is
     // the one outcome this feature must never produce.
     log.warn('claimed iban lookup failed, offering nothing', { error: error.message })
-    return new Set()
+    return null
   }
 
   const claimed = new Set<string>()
@@ -151,6 +157,10 @@ export async function findReusableSessions(
   if (!rows || rows.length === 0) return []
 
   const claimedIbans = await fetchClaimedIbans(supabase)
+  if (claimedIbans === null) {
+    // Offer nothing rather than everything: see fetchClaimedIbans.
+    return []
+  }
   const ibanCarriers = await fetchIbanCarriers(supabase, userId)
 
   const typed = rows as Array<{

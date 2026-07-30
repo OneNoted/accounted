@@ -985,15 +985,15 @@ export async function generateINK2Declaration(
   const resultBeforeTax = operatingResult + financialItems + bokslutsdispositioner
 
   // Result after tax (7528 is positive, subtract it)
-  const resultAfterFinancial = resultBeforeTax - ink2r['7528']
+  const aretsResultat = resultBeforeTax - ink2r['7528']
 
   // Set årets resultat: vinst (7450) or förlust (7550)
-  if (resultAfterFinancial >= 0) {
-    ink2r['7450'] = resultAfterFinancial
+  if (aretsResultat >= 0) {
+    ink2r['7450'] = aretsResultat
     ink2r['7550'] = 0
   } else {
     ink2r['7450'] = 0
-    ink2r['7550'] = Math.abs(resultAfterFinancial)
+    ink2r['7550'] = Math.abs(aretsResultat)
   }
 
   // During an open fiscal year 2099 has no balance yet: the result exists only
@@ -1002,7 +1002,7 @@ export async function generateINK2Declaration(
   // via 2099 and adding it again would double-count årets resultat.
   const adjustedEquityLiabilities = resultClosedIntoEquity
     ? totalEquityLiabilities
-    : totalEquityLiabilities + resultAfterFinancial
+    : totalEquityLiabilities + aretsResultat
 
   // Fiscal year dates as YYYYMMDD
   const fyStart = (period.period_start as string).replace(/-/g, '')
@@ -1018,7 +1018,7 @@ export async function generateINK2Declaration(
   const nonDeductibleExpenses = Math.trunc(taxAdjustments.nonDeductibleExpenses)
   const nonTaxableIncome = Math.trunc(taxAdjustments.nonTaxableIncome)
   const taxableResult =
-    resultAfterFinancial + taxAmount
+    aretsResultat + taxAmount
     + nonDeductibleExpenses - nonTaxableIncome
 
   const ink2: INK2Rutor = {
@@ -1032,8 +1032,8 @@ export async function generateINK2Declaration(
   const ink2s: INK2SRutor = {
     '7011': fyStart,
     '7012': fyEnd,
-    '7650': resultAfterFinancial >= 0 ? resultAfterFinancial : 0,
-    '7750': resultAfterFinancial < 0 ? Math.abs(resultAfterFinancial) : 0,
+    '7650': aretsResultat >= 0 ? aretsResultat : 0,
+    '7750': aretsResultat < 0 ? Math.abs(aretsResultat) : 0,
     '7651': taxAmount, // Skatt (ej avdragsgill)
     '7653': nonDeductibleExpenses,
     '7754': nonTaxableIncome,
@@ -1066,7 +1066,7 @@ export async function generateINK2Declaration(
   // still tied out on its own. A customer found it instead.
   if (resultClosedIntoEquity) {
     const bookedResult = truncateToKrona(-(balanceSheetBalances.get('2099') ?? 0))
-    const declaredResult = resultAfterFinancial
+    const declaredResult = aretsResultat
     if (Math.abs(bookedResult - declaredResult) > ROUNDING_TOLERANCE_KR) {
       warnings.push(
         `Årets resultat enligt resultaträkningen (${declaredResult} kr) stämmer inte med det bokförda resultatet på konto 2099 (${bookedResult} kr). Deklarationen stämmer då inte med det fastställda bokslutet.`,
@@ -1090,7 +1090,7 @@ export async function generateINK2Declaration(
       totalAssets,
       totalEquityLiabilities: adjustedEquityLiabilities,
       operatingResult,
-      resultAfterFinancial,
+      aretsResultat,
     },
     companyInfo: {
       companyName: settings?.company_name || 'Okänt företag',

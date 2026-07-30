@@ -26,7 +26,14 @@ import { generateIncomeStatement } from '../income-statement'
 import { generateResultatrapport } from '../resultatrapport'
 import { generateINK2Declaration } from '../ink2/ink2-engine'
 import { generateNEDeclaration } from '../ne-bilaga/ne-engine'
-import { EXPECTED, rowsForMode } from './closed-year-fixture'
+import {
+  CLOSED_ROWS,
+  EXPECTED,
+  EX_YEAR_END_ROWS,
+  PRE_CLOSING_ROWS,
+  balancesToZero,
+  rowsForMode,
+} from './closed-year-fixture'
 
 const COMPANY_ID = 'company-1'
 const PERIOD_ID = 'period-1'
@@ -175,6 +182,16 @@ describe('statement generators against a closed fiscal year', () => {
       })
     }
   }
+
+  it('has three self-consistent views: every one must balance', () => {
+    // A trial balance that does not sum to zero is not a trial balance. The
+    // 'exclude-all-year-end' view originally dropped only the P&L legs of the
+    // year_end entries and sat 160 000 kr out of balance, which was latent
+    // because today's consumers read class 3-8 only.
+    expect(balancesToZero(PRE_CLOSING_ROWS)).toBe(0)
+    expect(balancesToZero(EX_YEAR_END_ROWS)).toBe(0)
+    expect(balancesToZero(CLOSED_ROWS)).toBe(0)
+  })
 
   it('covers every generator that reports a resultaträkning', () => {
     // A tripwire for the next person: this count is the checklist length.
