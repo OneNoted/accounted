@@ -104,7 +104,7 @@ function buildLoginRedirect(request: Request): Response {
   const url = new URL(request.url)
   const next = `${url.pathname}${url.search}`
   return NextResponse.redirect(
-    new URL(`/login?next=${encodeURIComponent(next)}`, url.origin)
+    new URL(`/login?next=${encodeURIComponent(next)}`, resolveDiscoveryBaseUrl(request))
   )
 }
 
@@ -127,7 +127,10 @@ async function requireAal2(
     const url = new URL(request.url)
     const returnTo = `${url.pathname}${url.search}`
     return NextResponse.redirect(
-      new URL(`/mfa/verify?returnTo=${encodeURIComponent(returnTo)}`, url.origin),
+      new URL(
+        `/mfa/verify?returnTo=${encodeURIComponent(returnTo)}`,
+        resolveDiscoveryBaseUrl(request),
+      ),
     )
   }
   return null

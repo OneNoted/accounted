@@ -44,6 +44,15 @@ function buildAuthorizeUrl(params: Record<string, string>): string {
   return url.toString()
 }
 
+const publicOriginAuthorizeParams = {
+  response_type: 'code',
+  redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+  code_challenge: 'abc',
+  code_challenge_method: 'S256',
+  scope: 'mcp',
+  state: 'xyz',
+}
+
 function buildSupabase(
   user: { id: string } | null,
   companyName = 'Test AB',
@@ -333,6 +342,54 @@ describe('MFA step-up on /api/mcp-oauth/authorize', () => {
     const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
     expect(response.status).toBe(307)
     expect(response.headers.get('location')).toContain('/mfa/verify')
+  })
+})
+
+describe('public-origin redirects on /api/mcp-oauth/authorize', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://accounted.example')
+    mocks.createClient.mockResolvedValue(buildSupabase(null))
+  })
+
+  it('redirects an unauthenticated internal request to login on the discovery origin', async () => {
+    const internalUrl = buildAuthorizeUrl(publicOriginAuthorizeParams).replace(
+      'http://localhost',
+      'http://0.0.0.0:3000',
+    )
+
+    const response = await GET(new Request(internalUrl))
+
+    expect(response.status).toBe(307)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.origin).toBe('https://accounted.example')
+    expect(location.pathname).toBe('/login')
+    expect(location.searchParams.get('next')).toBe(
+      `/api/mcp-oauth/authorize?${new URL(internalUrl).searchParams.toString()}`,
+    )
+  })
+
+  it('redirects an AAL1 internal request to MFA verify on the discovery origin', async () => {
+    vi.stubEnv('REQUIRE_MFA', 'true')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal2' }),
+    )
+    const internalUrl = buildAuthorizeUrl(publicOriginAuthorizeParams).replace(
+      'http://localhost',
+      'http://0.0.0.0:3000',
+    )
+
+    const response = await GET(new Request(internalUrl))
+
+    expect(response.status).toBe(307)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.origin).toBe('https://accounted.example')
+    expect(location.pathname).toBe('/mfa/verify')
+    expect(location.searchParams.get('returnTo')).toBe(
+      `/api/mcp-oauth/authorize?${new URL(internalUrl).searchParams.toString()}`,
+    )
   })
 })
 
