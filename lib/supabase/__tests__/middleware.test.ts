@@ -58,6 +58,7 @@ vi.mock('@supabase/ssr', () => ({
 }))
 
 import { updateSession } from '../middleware'
+import { completeMfaEnrollment } from '@/app/(auth)/mfa/enroll/complete-enrollment'
 
 const ORIGIN = 'http://localhost:3000'
 const SIGNED_IN = { id: 'user-1', app_metadata: {} }
@@ -262,11 +263,33 @@ describe('updateSession redirect destinations', () => {
 
       expect(response.status).toBe(200)
     })
+
+    it('consumes an existing-company invite after first-factor enrollment', async () => {
+      const response = await run('/')
+      const enrollmentUrl = new URL(locationOf(response)!)
+      expect(enrollmentUrl.pathname).toBe('/mfa/enroll')
+
+      const hardNavigate = vi.fn()
+      await completeMfaEnrollment(enrollmentUrl.searchParams.get('returnTo') ?? '/', {
+        consumeInvite: vi.fn(async () => ({
+          attempted: true,
+          disposition: 'accepted' as const,
+          accepted: true,
+          cleared: true,
+          problem: null,
+        })),
+        hardNavigate,
+        push: vi.fn(),
+        refresh: vi.fn(),
+      })
+
+      expect(hardNavigate).toHaveBeenCalledWith('/')
+    })
   })
 
-  // ── MFA semantics that must not change ────────────────────────────────
+  // ── MFA opt-in and BankID semantics ───────────────────────────────────
 
-  describe('MFA-disabled and self-hosted paths are unchanged', () => {
+  describe('MFA opt-in and BankID paths', () => {
     it('does not redirect when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
       state.user = SIGNED_IN
       state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
@@ -276,7 +299,26 @@ describe('updateSession redirect destinations', () => {
       expect(response.status).toBe(200)
     })
 
-    it('does not redirect on self-hosted even with MFA required', async () => {
+    it('does not redirect in hosted mode when MFA is explicitly disabled', async () => {
+      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'false'
+      process.env.NEXT_PUBLIC_SELF_HOSTED = 'false'
+      state.user = SIGNED_IN
+      state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
+
+      expect((await run('/settings/tax')).status).toBe(200)
+    })
+
+    it.each([undefined, 'false'])('does not redirect in self-hosted mode when MFA is %s', async (value) => {
+      process.env.NEXT_PUBLIC_SELF_HOSTED = 'true'
+      if (value === undefined) delete process.env.NEXT_PUBLIC_REQUIRE_MFA
+      else process.env.NEXT_PUBLIC_REQUIRE_MFA = value
+      state.user = SIGNED_IN
+      state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
+
+      expect((await run('/settings/tax')).status).toBe(200)
+    })
+
+    it('enforces MFA on self-hosted when explicitly required', async () => {
       process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
       process.env.NEXT_PUBLIC_SELF_HOSTED = 'true'
       state.user = SIGNED_IN
@@ -285,7 +327,10 @@ describe('updateSession redirect destinations', () => {
 
       const response = await run('/settings/tax')
 
-      expect(response.status).toBe(200)
+      expect(response.status).toBe(307)
+      expect(response.headers.get('location')).toBe(
+        'http://localhost:3000/mfa/verify?returnTo=%2Fsettings%2Ftax',
+      )
     })
 
     it('does not redirect BankID-linked users, who are already 2FA', async () => {

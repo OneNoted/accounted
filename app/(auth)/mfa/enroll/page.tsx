@@ -12,6 +12,12 @@ import { getBranding } from '@/lib/branding/service'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { INVITE_PROBLEM_MESSAGE_KEYS } from '@/lib/auth/consume-invite-cookie'
+import { useTranslations } from 'next-intl'
+import {
+  browserEnrollmentCompletionDependencies,
+  completeMfaEnrollment,
+} from './complete-enrollment'
 
 export default function MfaEnrollPage() {
   return (
@@ -31,6 +37,7 @@ function MfaEnrollContent() {
   const [copied, setCopied] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
+  const tInvite = useTranslations('invite')
   const router = useRouter()
   const searchParams = useSearchParams()
   const supabase = createClient()
@@ -152,8 +159,18 @@ function MfaEnrollContent() {
         description: 'Ditt konto är nu skyddat med 2FA.',
       })
 
-      router.push(returnTo)
-      router.refresh()
+      const invite = await completeMfaEnrollment(
+        returnTo,
+        browserEnrollmentCompletionDependencies(router.push, router.refresh),
+      )
+      if (invite.problem) {
+        const keys = INVITE_PROBLEM_MESSAGE_KEYS[invite.problem]
+        toast({
+          title: tInvite(keys.title),
+          description: tInvite(keys.body),
+          variant: 'destructive',
+        })
+      }
     } catch {
       toast({
         title: 'Verifiering misslyckades',

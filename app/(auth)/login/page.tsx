@@ -22,6 +22,7 @@ import {
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
+import { completePasswordLogin } from './post-password-login'
 
 const branding = getBranding()
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
@@ -189,34 +190,11 @@ function LoginPageContent() {
         return
       }
 
-      // Check MFA status
-      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-
-      if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        router.push(
-          nextPath === '/'
-            ? '/mfa/verify'
-            : `/mfa/verify?returnTo=${encodeURIComponent(nextPath)}`
-        )
-        return
-      }
-
-      // Check for pending invite token
-      if (await acceptPendingInvite()) {
-        window.location.href = '/'
-        return
-      }
-
-      if (nextPath !== '/') {
-        // Full navigation: the destination can be a route handler that
-        // returns raw HTML (the MCP OAuth consent page), which the client
-        // router cannot render.
-        window.location.assign(nextPath)
-        return
-      }
-
-      router.push('/')
-      router.refresh()
+      // Do not perform more client-side auth calls here. In particular,
+      // Firefox mobile can stall between a successful password grant and the
+      // follow-up MFA query. A document navigation lets middleware enforce
+      // MFA and preserves invite/onboarding handling at the destination.
+      completePasswordLogin(nextPath)
     } catch (error) {
       toast({
         title: tAuth('login_failed_title'),

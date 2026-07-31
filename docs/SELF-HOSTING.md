@@ -24,7 +24,11 @@ In the Supabase dashboard under **Authentication > URL Configuration**:
 
 Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits.
 
-MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted deployments: the Docker image sets `NEXT_PUBLIC_SELF_HOSTED=true` by default, which disables MFA enforcement. Users can still optionally enable 2FA in Settings > Säkerhet if they wish.
+MFA (two-factor authentication via TOTP) is opt-in. Set
+`NEXT_PUBLIC_REQUIRE_MFA=true` to enforce enrollment and per-session AAL2
+verification in self-hosted deployments. `NEXT_PUBLIC_SELF_HOSTED=true` still
+disables hosted-only services, but no longer overrides an explicit MFA policy.
+Leave `NEXT_PUBLIC_REQUIRE_MFA` unset or `false` to allow optional enrollment.
 
 ## 3. Apply Database Migrations
 
@@ -124,6 +128,23 @@ To build the Docker image locally instead of pulling from GHCR:
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
+
+### Publishing a maintained image
+
+The repository's `.github/workflows/docker-publish.yml` is the reference
+pipeline. It builds `Dockerfile` natively on `linux/amd64` and `linux/arm64`,
+pushes both images by digest, creates a multi-platform manifest, verifies both
+platforms, signs the manifest with keyless cosign, and scans it with Trivy. A
+manual branch dispatch publishes only the immutable commit SHA tag. Main also
+publishes `latest`, and version tags publish semver tags.
+
+For an independently maintained fork, change the workflow's `IMAGE_NAME` to a
+GHCR namespace the fork owner controls, enable Actions package write access,
+dispatch the workflow on the reviewed source commit, and pin deployment
+manifests to the resulting manifest digest. Do not reuse an upstream digest or
+mutate a tag in place. The deployment must pass
+`NEXT_PUBLIC_REQUIRE_MFA=true`; the Docker entrypoint replaces that public
+build sentinel at startup.
 
 The locally-built image runs **unprivileged** (`USER nextjs`): the entrypoint
 populates the `.next`/`public` tmpfs mounts and substitutes the `NEXT_PUBLIC_*`

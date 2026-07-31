@@ -254,15 +254,16 @@ describe('a session that still owes an MFA step-up', () => {
     expect(jar.has(INVITE_COOKIE_NAME)).toBe(false)
   })
 
-  it('does not defer on self-hosted, where MFA is never enforced', async () => {
+  it('defers on self-hosted when MFA is explicitly required', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
-    installCookieJar({ [INVITE_COOKIE_NAME]: TOKEN })
+    const jar = installCookieJar({ [INVITE_COOKIE_NAME]: TOKEN })
     respondWith(200)
 
     const destination = await handoffPendingInvite(deps())
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(destination).toBe(INVITE_ACCEPTED_DESTINATION)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(jar.get(INVITE_COOKIE_NAME)).toBe(TOKEN)
+    expect(destination).toBeNull()
   })
 
   it('still attempts when the assurance level cannot be read', async () => {
