@@ -73,7 +73,7 @@ function run(path: string) {
 
 describe('updateSession redirect destinations', () => {
   const envBackup = {
-    require: process.env.NEXT_PUBLIC_REQUIRE_MFA,
+    require: process.env.REQUIRE_MFA,
     selfHosted: process.env.NEXT_PUBLIC_SELF_HOSTED,
   }
 
@@ -87,13 +87,13 @@ describe('updateSession redirect destinations', () => {
       data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }],
       error: null,
     }
-    delete process.env.NEXT_PUBLIC_REQUIRE_MFA
+    delete process.env.REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
   })
 
   afterEach(() => {
-    if (envBackup.require === undefined) delete process.env.NEXT_PUBLIC_REQUIRE_MFA
-    else process.env.NEXT_PUBLIC_REQUIRE_MFA = envBackup.require
+    if (envBackup.require === undefined) delete process.env.REQUIRE_MFA
+    else process.env.REQUIRE_MFA = envBackup.require
     if (envBackup.selfHosted === undefined) delete process.env.NEXT_PUBLIC_SELF_HOSTED
     else process.env.NEXT_PUBLIC_SELF_HOSTED = envBackup.selfHosted
   })
@@ -202,7 +202,7 @@ describe('updateSession redirect destinations', () => {
 
   describe('MFA step-up bounce to /mfa/verify', () => {
     beforeEach(() => {
-      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
+      process.env.REQUIRE_MFA = 'true'
       state.user = SIGNED_IN
       state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
     })
@@ -234,7 +234,7 @@ describe('updateSession redirect destinations', () => {
 
   describe('forced enrollment bounce to /mfa/enroll', () => {
     beforeEach(() => {
-      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
+      process.env.REQUIRE_MFA = 'true'
       state.user = SIGNED_IN
       state.aal = { currentLevel: 'aal1', nextLevel: 'aal1' }
       state.factors = { totp: [] }
@@ -290,17 +290,15 @@ describe('updateSession redirect destinations', () => {
   // ── MFA opt-in and BankID semantics ───────────────────────────────────
 
   describe('MFA opt-in and BankID paths', () => {
-    it('does not redirect when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
+    it('rejects requests when REQUIRE_MFA is unset', async () => {
       state.user = SIGNED_IN
       state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
 
-      const response = await run('/settings/tax')
-
-      expect(response.status).toBe(200)
+      await expect(run('/settings/tax')).rejects.toThrow(/REQUIRE_MFA/)
     })
 
     it('does not redirect in hosted mode when MFA is explicitly disabled', async () => {
-      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'false'
+      process.env.REQUIRE_MFA = 'false'
       process.env.NEXT_PUBLIC_SELF_HOSTED = 'false'
       state.user = SIGNED_IN
       state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
@@ -308,10 +306,9 @@ describe('updateSession redirect destinations', () => {
       expect((await run('/settings/tax')).status).toBe(200)
     })
 
-    it.each([undefined, 'false'])('does not redirect in self-hosted mode when MFA is %s', async (value) => {
+    it('does not redirect in self-hosted mode when MFA is explicitly false', async () => {
       process.env.NEXT_PUBLIC_SELF_HOSTED = 'true'
-      if (value === undefined) delete process.env.NEXT_PUBLIC_REQUIRE_MFA
-      else process.env.NEXT_PUBLIC_REQUIRE_MFA = value
+      process.env.REQUIRE_MFA = 'false'
       state.user = SIGNED_IN
       state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
 
@@ -319,7 +316,7 @@ describe('updateSession redirect destinations', () => {
     })
 
     it('enforces MFA on self-hosted when explicitly required', async () => {
-      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
+      process.env.REQUIRE_MFA = 'true'
       process.env.NEXT_PUBLIC_SELF_HOSTED = 'true'
       state.user = SIGNED_IN
       state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
@@ -333,14 +330,15 @@ describe('updateSession redirect destinations', () => {
       )
     })
 
-    it('does not redirect BankID-linked users, who are already 2FA', async () => {
-      process.env.NEXT_PUBLIC_REQUIRE_MFA = 'true'
+    it('redirects an AAL1 session even when BankID is linked to the account', async () => {
+      process.env.REQUIRE_MFA = 'true'
       state.user = { id: 'user-1', app_metadata: { bankid_linked: true } }
       state.aal = { currentLevel: 'aal1', nextLevel: 'aal2' }
 
       const response = await run('/settings/tax')
 
-      expect(response.status).toBe(200)
+      expect(response.status).toBe(307)
+      expect(response.headers.get('location')).toContain('/mfa/verify')
     })
   })
 })

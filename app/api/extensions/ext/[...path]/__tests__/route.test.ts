@@ -31,6 +31,7 @@ vi.mock('@/lib/extensions/context-factory', () => ({
 // the AAL2-gate regression test below flips this on.
 vi.mock('@/lib/auth/mfa', () => ({
   shouldEnforceMfa: vi.fn(() => false),
+  hasValidAssuranceLevel: vi.fn(() => true),
 }))
 
 // Drive the paywall gate directly. Keep the module's real exports (the resolver

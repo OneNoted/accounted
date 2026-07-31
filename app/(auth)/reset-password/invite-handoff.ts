@@ -3,7 +3,7 @@ import {
   readInviteCookie,
   type InviteAcceptProblem,
 } from '@/lib/auth/consume-invite-cookie'
-import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { hasValidAssuranceLevel, shouldEnforceMfa } from '@/lib/auth/mfa'
 
 /**
  * Invite handoff for the password-recovery flow.
@@ -127,9 +127,9 @@ async function mfaStepUpOwed(deps: InviteHandoffDeps): Promise<boolean> {
     if (!user || !shouldEnforceMfa(user)) return false
 
     const aal = await deps.getAssuranceLevel()
-    return aal?.nextLevel === 'aal2' && aal.currentLevel === 'aal1'
+    return !hasValidAssuranceLevel(aal) || aal.currentLevel !== 'aal2'
   } catch (err) {
     console.error('[reset-password] could not read the session MFA state', err)
-    return false
+    return true
   }
 }

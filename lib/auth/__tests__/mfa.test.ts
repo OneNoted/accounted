@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { isMfaRequired, shouldEnforceMfa } from '../mfa'
+import {
+  hasValidAssuranceLevel,
+  isMfaEnforcementRequired,
+  isMfaRequired,
+  shouldEnforceMfa,
+} from '../mfa'
 
 describe('mfa helpers', () => {
   afterEach(() => {
@@ -7,6 +12,12 @@ describe('mfa helpers', () => {
   })
 
   describe('isMfaRequired', () => {
+    it('uses only the public setting for client display', () => {
+      vi.stubEnv('REQUIRE_MFA', 'true')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'false')
+      expect(isMfaRequired()).toBe(false)
+    })
+
     it('returns true when explicitly required in self-hosted mode', () => {
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
       vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
@@ -32,28 +43,72 @@ describe('mfa helpers', () => {
     })
   })
 
+  describe('isMfaEnforcementRequired', () => {
+    it('returns true when both settings enable MFA', () => {
+      vi.stubEnv('REQUIRE_MFA', 'true')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(isMfaEnforcementRequired()).toBe(true)
+    })
+
+    it('rejects a missing server setting even when the public setting enables MFA', () => {
+      vi.stubEnv('REQUIRE_MFA', undefined)
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(() => isMfaEnforcementRequired()).toThrow(/REQUIRE_MFA/)
+    })
+
+    it.each(['TRUE', ' true ', 'yes', '1'])('rejects malformed server setting %s', value => {
+      vi.stubEnv('REQUIRE_MFA', value)
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(() => isMfaEnforcementRequired()).toThrow(/REQUIRE_MFA/)
+    })
+
+    it('uses only the server setting for enforcement', () => {
+      vi.stubEnv('REQUIRE_MFA', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(isMfaEnforcementRequired()).toBe(false)
+    })
+
+    it('rejects a missing server setting even when both settings are otherwise absent', () => {
+      vi.stubEnv('REQUIRE_MFA', undefined)
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', undefined)
+      expect(() => isMfaEnforcementRequired()).toThrow(/REQUIRE_MFA/)
+    })
+  })
+
   describe('shouldEnforceMfa', () => {
     it('returns false when MFA is not required', () => {
+      vi.stubEnv('REQUIRE_MFA', 'false')
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
       expect(shouldEnforceMfa({ app_metadata: {} })).toBe(false)
     })
 
-    it('returns false when user has bankid_linked', () => {
+    it('does not exempt an account merely because BankID is linked', () => {
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
-      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
-      expect(shouldEnforceMfa({ app_metadata: { bankid_linked: true } })).toBe(false)
+      vi.stubEnv('REQUIRE_MFA', 'true')
+      expect(shouldEnforceMfa({ app_metadata: { bankid_linked: true } })).toBe(true)
     })
 
     it('returns true when MFA required and no bankid', () => {
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
-      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      vi.stubEnv('REQUIRE_MFA', 'true')
       expect(shouldEnforceMfa({ app_metadata: {} })).toBe(true)
     })
 
     it('returns true when app_metadata is undefined', () => {
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
-      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      vi.stubEnv('REQUIRE_MFA', 'true')
       expect(shouldEnforceMfa({})).toBe(true)
+    })
+  })
+
+  describe('hasValidAssuranceLevel', () => {
+    it.each([null, undefined, {}, { currentLevel: 'aal2' }, { currentLevel: 'aal3', nextLevel: 'aal2' }])(
+      'rejects absent or malformed assurance data: %j',
+      value => expect(hasValidAssuranceLevel(value)).toBe(false),
+    )
+
+    it('accepts a complete recognized assurance response', () => {
+      expect(hasValidAssuranceLevel({ currentLevel: 'aal2', nextLevel: 'aal2' })).toBe(true)
     })
   })
 })

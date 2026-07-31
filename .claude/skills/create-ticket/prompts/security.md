@@ -8,7 +8,7 @@ You are scanning for security vulnerabilities and hardening opportunities in a N
 
 ### Authentication & Authorization
 - [ ] All API routes check `supabase.auth.getUser()` and return 401 if missing
-- [ ] MFA enforcement where required (`NEXT_PUBLIC_REQUIRE_MFA`)
+- [ ] MFA enforcement where required: runtime `REQUIRE_MFA` matches client UI `NEXT_PUBLIC_REQUIRE_MFA`, malformed/missing assurance data denies access, and no account-linkage claim bypasses current-session AAL2
 - [ ] API key routes validate via `validate_and_increment_api_key` RPC
 - [ ] No auth bypass in middleware exclusion patterns
 

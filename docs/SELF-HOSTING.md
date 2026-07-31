@@ -24,11 +24,13 @@ In the Supabase dashboard under **Authentication > URL Configuration**:
 
 Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits.
 
-MFA (two-factor authentication via TOTP) is opt-in. Set
-`NEXT_PUBLIC_REQUIRE_MFA=true` to enforce enrollment and per-session AAL2
-verification in self-hosted deployments. `NEXT_PUBLIC_SELF_HOSTED=true` still
-disables hosted-only services, but no longer overrides an explicit MFA policy.
-Leave `NEXT_PUBLIC_REQUIRE_MFA` unset or `false` to allow optional enrollment.
+MFA (two-factor authentication via TOTP) is opt-in. Set both
+`REQUIRE_MFA=true` and `NEXT_PUBLIC_REQUIRE_MFA=true`. The server-only setting
+enforces enrollment and per-session AAL2 authorization; the public setting
+keeps client security UI consistent with that policy. `NEXT_PUBLIC_SELF_HOSTED=true`
+still disables hosted-only services, but no longer overrides an explicit MFA
+policy. Set both MFA settings explicitly and identically. Use `false` for both
+to allow optional enrollment; missing, malformed, or mismatched values are rejected.
 
 ## 3. Apply Database Migrations
 
@@ -143,7 +145,8 @@ GHCR namespace the fork owner controls, enable Actions package write access,
 dispatch the workflow on the reviewed source commit, and pin deployment
 manifests to the resulting manifest digest. Do not reuse an upstream digest or
 mutate a tag in place. The deployment must pass
-`NEXT_PUBLIC_REQUIRE_MFA=true`; the Docker entrypoint replaces that public
+`REQUIRE_MFA=true` and `NEXT_PUBLIC_REQUIRE_MFA=true`; the server reads the
+first setting at request time, while the Docker entrypoint replaces the public
 build sentinel at startup.
 
 The locally-built image runs **unprivileged** (`USER nextjs`): the entrypoint
@@ -358,6 +361,8 @@ flowchart LR
    NEXT_PUBLIC_APP_URL=https://app.example.com
    CRON_SECRET=<openssl rand -hex 32>
    NEXT_PUBLIC_SELF_HOSTED=true
+   REQUIRE_MFA=false
+   NEXT_PUBLIC_REQUIRE_MFA=false
    ```
 
 4. **Allowlist the callback URLs** in GoTrue's redirect list (the Supabase stack's `.env`), then recreate the auth container so it picks up the change:
@@ -387,7 +392,7 @@ flowchart LR
 ### Notes
 
 - **`pg_cron`** is included in the `supabase/postgres` image, so the `pg_cron` migration succeeds (unlike on the Supabase free tier, see the standard self-hosting flow above).
-- **MFA**: as on the standard path, `NEXT_PUBLIC_SELF_HOSTED=true` disables enforcement; users may still enable TOTP voluntarily.
+- **MFA**: `NEXT_PUBLIC_SELF_HOSTED=true` does not disable enforcement. Set both `REQUIRE_MFA=true` and `NEXT_PUBLIC_REQUIRE_MFA=true` to require TOTP. Set both explicitly to `false` for optional enrollment. Missing, malformed, or mismatched values are rejected.
 
 ## Troubleshooting
 
