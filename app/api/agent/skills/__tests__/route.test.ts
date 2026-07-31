@@ -112,7 +112,15 @@ describe('GET /api/agent/skills', () => {
     expect(mallar?.active).toBe(true)
   })
 
-  it('returns 404 for an unknown or unexposed slug', async () => {
+  it('returns 400 for an empty slug', async () => {
+    const supabase = createQueuedSupabase([])
+    auth(supabase)
+
+    const res = await GET(createMockRequest('/api/agent/skills?slug='), noParams)
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 404 for an unknown slug', async () => {
     const supabase = createQueuedSupabase([{ data: null }])
     auth(supabase)
 
@@ -121,6 +129,30 @@ describe('GET /api/agent/skills', () => {
       error?: { code: string }
     }>(
       await GET(createMockRequest('/api/agent/skills?slug=product/finns-inte'), noParams),
+    )
+    expect(status).toBe(404)
+    expect(body.error?.code).toBe('SKILL_NOT_FOUND')
+  })
+
+  it('returns 404 for a row the curation switch has turned off', async () => {
+    const supabase = createQueuedSupabase([
+      {
+        data: {
+          id: 'product/bokforingsmallar',
+          title: 'Bokföringsmallar',
+          body: '# Bokföringsmallar',
+          is_active: true,
+          mcp_exposed: false,
+        },
+      },
+    ])
+    auth(supabase)
+
+    const { status, body } = await parseJsonResponse<{
+      data?: { id: string; active: boolean }[] & { body?: string }
+      error?: { code: string }
+    }>(
+      await GET(createMockRequest('/api/agent/skills?slug=product/bokforingsmallar'), noParams),
     )
     expect(status).toBe(404)
     expect(body.error?.code).toBe('SKILL_NOT_FOUND')

@@ -189,7 +189,8 @@ export function AgentSkillsPanel() {
           </SettingsRowNote>
           <HelpPopover className="shrink-0">
             Utöver vad den minns om ditt företag bygger assistenten på en uppsättning
-            kunskapsområden om svensk bokföring och skatt. Kärnkompetensen gäller alla;
+            kunskapsområden: svensk bokföring och skatt, plus hur funktionerna i
+            Accounted fungerar. Kärnkompetensen och produktkunskapen gäller alla;
             bransch- och bolagsanpassningen väljs utifrån ditt företag. Klicka på ett
             område för att läsa hela kunskapen.
           </HelpPopover>
