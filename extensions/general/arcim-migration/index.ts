@@ -503,7 +503,7 @@ export const arcimMigrationExtension: Extension = {
 
           return new Response(html, {
             status: 200,
-            headers: { 'Content-Type': 'text/html' },
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
           })
         }
 
@@ -571,7 +571,7 @@ export const arcimMigrationExtension: Extension = {
 
           return new Response(html, {
             status: 200,
-            headers: { 'Content-Type': 'text/html' },
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
           })
         } catch (error) {
           log.error('OAuth callback exchange failed', error)
