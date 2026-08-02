@@ -109,6 +109,17 @@ describe('GET /callback: OAuth state binding', () => {
     vi.restoreAllMocks()
   })
 
+  it('declares UTF-8 for Swedish callback HTML', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue(null)
+
+    const res = await callbackHandler(
+      callbackRequest({ code: 'provider-auth-code', state: 'expired-token' }),
+    )
+
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    expect(await res.text()).toContain('Du kan stänga detta fönster.')
+  })
+
   it('rejects a forged state: an unknown token never reaches token exchange', async () => {
     ;(consumeOAuthState as Mock).mockResolvedValue(null)
 
