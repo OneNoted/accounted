@@ -1,12 +1,16 @@
 // AUTO-GENERATED: do not edit. Run `npm run setup:extensions` to regenerate.
-import dynamic from 'next/dynamic'
 import type { ComponentType } from 'react'
 import type { WorkspaceComponentProps } from '../workspace-registry'
+import EnableBankingWorkspace from '@/components/extensions/general/EnableBankingWorkspace'
+import ArcimMigrationWorkspace from '@/components/extensions/general/ArcimMigrationWorkspace'
+import TicWorkspace from '@/components/extensions/general/TicWorkspace'
+import CloudBackupWorkspace from '@/components/extensions/general/CloudBackupWorkspace'
+import InvoiceInboxWorkspace from '@/components/extensions/general/InvoiceInboxWorkspace'
 
 export const WORKSPACES: Record<string, ComponentType<WorkspaceComponentProps>> = {
-  'general/enable-banking': dynamic(() => import('@/components/extensions/general/EnableBankingWorkspace')),
-  'general/arcim-migration': dynamic(() => import('@/components/extensions/general/ArcimMigrationWorkspace')),
-  'general/tic': dynamic(() => import('@/components/extensions/general/TicWorkspace')),
-  'general/cloud-backup': dynamic(() => import('@/components/extensions/general/CloudBackupWorkspace')),
-  'general/invoice-inbox': dynamic(() => import('@/components/extensions/general/InvoiceInboxWorkspace')),
+  'general/enable-banking': EnableBankingWorkspace,
+  'general/arcim-migration': ArcimMigrationWorkspace,
+  'general/tic': TicWorkspace,
+  'general/cloud-backup': CloudBackupWorkspace,
+  'general/invoice-inbox': InvoiceInboxWorkspace,
 }
