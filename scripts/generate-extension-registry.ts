@@ -124,25 +124,19 @@ function generateExtensionList(manifests: Manifest[]): string {
 function generateWorkspaceMap(manifests: Manifest[]): string {
   const withWorkspace = manifests.filter(m => m.workspace)
 
-  const imports = withWorkspace.map(m => {
-    const componentName = path.basename(m.workspace!)
-    return `import ${componentName} from '${m.workspace}'`
-  })
-
-  const entries = withWorkspace.map(m => {
+  const dynamicImports = withWorkspace.map(m => {
     const key = `${m.sector}/${m.id}`
-    const componentName = path.basename(m.workspace!)
-    return `  '${key}': ${componentName},`
+    return `  '${key}': dynamic(() => import('${m.workspace}')),`
   })
 
   return [
     `// AUTO-GENERATED: do not edit. Run \`npm run setup:extensions\` to regenerate.`,
+    `import dynamic from 'next/dynamic'`,
     `import type { ComponentType } from 'react'`,
     `import type { WorkspaceComponentProps } from '../workspace-registry'`,
-    ...imports,
     ``,
     `export const WORKSPACES: Record<string, ComponentType<WorkspaceComponentProps>> = {`,
-    ...entries,
+    ...dynamicImports,
     `}`,
     ``,
   ].join('\n')
