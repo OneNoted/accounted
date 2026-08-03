@@ -4,16 +4,23 @@
   "exportName": "emailExtension",
   "entryPoint": "@/extensions/general/email",
   "workspace": null,
-  "requiredEnvVars": ["RESEND_API_KEY", "RESEND_FROM_EMAIL"],
-  "optionalEnvVars": ["RESEND_DELIVERY_WEBHOOK_SECRET"],
+  "requiredEnvVars": [],
+  "optionalEnvVars": [
+    "CLOUDFLARE_EMAIL_ACCOUNT_ID",
+    "CLOUDFLARE_EMAIL_API_TOKEN",
+    "CLOUDFLARE_EMAIL_FROM",
+    "RESEND_API_KEY",
+    "RESEND_FROM_EMAIL",
+    "RESEND_DELIVERY_WEBHOOK_SECRET"
+  ],
   "npmDependencies": ["resend"],
   "definition": {
-    "name": "E-post (Resend)",
+    "name": "E-post",
     "category": "operations",
     "icon": "Mail",
     "dataPattern": "core",
     "readsCoreTables": ["invoices", "customers", "company_settings"],
     "description": "Skicka fakturor och påminnelser via e-post",
-    "longDescription": "Aktiverar e-postfunktioner: skicka fakturor till kunder, automatiska betalningspåminnelser enligt valt schema, och e-postmeddelanden. Kräver ett Resend-konto med verifierad domän."
+    "longDescription": "Aktiverar e-postfunktioner: skicka fakturor till kunder, automatiska betalningspåminnelser enligt valt schema, och e-postmeddelanden. Konfigurera Cloudflare Email Service eller Resend med en verifierad avsändardomän."
   }
 }

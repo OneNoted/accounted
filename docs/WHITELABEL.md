@@ -56,15 +56,20 @@ Resolution order (last wins): **defaults → env vars → extension override**.
 
 `NEXT_PUBLIC_BRANDING_APP_NAME` also stamps the service worker push-notification fallback title in `public/sw.js`. This happens at build time for Vercel/local builds (via `scripts/inject-public-branding.mjs`, run from `prebuild`) and at container start for Docker (via `docker-entrypoint.sh`).
 
-### Email / Resend (when `email` or `invoice-inbox` extensions are enabled)
+### Email (when `email` or `invoice-inbox` extensions are enabled)
+
+Cloudflare Email Service is preferred for outbound mail when all three Cloudflare variables are present. Otherwise outbound mail falls back to Resend. Keep the Cloudflare account ID and token in the same secret-manager record so they can be rotated and deployed together.
 
 | Env var | Purpose |
 |---|---|
-| `RESEND_API_KEY` | Resend API key: required for both outbound mail and the inbox webhook |
-| `RESEND_FROM_EMAIL` | Default `From` address (e.g. `noreply@your-brand.se`); also used as the address you From-spoof through Resend |
+| `CLOUDFLARE_EMAIL_ACCOUNT_ID` | Cloudflare account that owns Email Service |
+| `CLOUDFLARE_EMAIL_API_TOKEN` | API token with Email Sending Edit permission |
+| `CLOUDFLARE_EMAIL_FROM` | Default `From` address on an onboarded sending domain (e.g. `noreply@your-brand.se`) |
+| `RESEND_API_KEY` | Resend API key: used for outbound fallback and required for the Resend inbox webhook |
+| `RESEND_FROM_EMAIL` | Default `From` address for the Resend outbound fallback |
 | `RESEND_INBOUND_DOMAIN` | Domain used to compose per-company invoice-inbox addresses: `{local-part}@{RESEND_INBOUND_DOMAIN}` |
 | `RESEND_INBOUND_WEBHOOK_SECRET` | Verifies the `/inbound` webhook signature from Resend |
-| `RESEND_DELIVERY_WEBHOOK_SECRET` | Verifies the `/delivery-status` webhook signature from Resend. Optional: without it, invoice delivery history shows "sent" but never the delivery outcome |
+| `RESEND_DELIVERY_WEBHOOK_SECRET` | Verifies the Resend `/delivery-status` webhook signature. Optional: without it, Resend invoice delivery history shows "sent" but never the delivery outcome |
 
 ## Things you MUST NOT change
 

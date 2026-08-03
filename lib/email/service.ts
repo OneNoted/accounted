@@ -2,8 +2,8 @@
  * Email Service Interface
  *
  * Core defines the contract. The email extension registers a real
- * implementation (Resend). Without the extension, a no-op service
- * is used: email-dependent features degrade gracefully.
+ * implementation for the configured provider. Without the extension, a
+ * no-op service is used: email-dependent features degrade gracefully.
  */
 
 export interface SendEmailOptions {

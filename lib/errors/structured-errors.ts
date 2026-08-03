@@ -940,10 +940,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
     message_sv:
-      'E-posttjänsten är inte konfigurerad. Kontrollera att RESEND_API_KEY och RESEND_FROM_EMAIL är satta.',
+      'E-posttjänsten är inte konfigurerad. Konfigurera Cloudflare Email Service eller Resend.',
     message_en: 'Email service is not configured.',
     remediation: {
-      description: 'Set RESEND_API_KEY and RESEND_FROM_EMAIL in the deployment environment.',
+      description:
+        'Configure CLOUDFLARE_EMAIL_ACCOUNT_ID, CLOUDFLARE_EMAIL_API_TOKEN, and CLOUDFLARE_EMAIL_FROM, or configure RESEND_API_KEY and RESEND_FROM_EMAIL.',
     },
   },
   INVOICE_SEND_NO_CUSTOMER_EMAIL: {

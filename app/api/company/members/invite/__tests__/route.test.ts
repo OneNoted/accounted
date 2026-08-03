@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase: serviceSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: serviceSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -123,20 +123,53 @@ describe('POST /api/company/members/invite', () => {
     )
   })
 
-  it('reports email_sent=false when the send fails (invite still created)', async () => {
+  it('returns 502 when the provider rejects the email (invite still created)', async () => {
     enqueue({ data: { role: 'owner' } })
     enqueue({ data: [] })
     enqueue({ data: null })
     enqueue({ data: { name: 'Acme AB' } })
     enqueue({ data: null })
-    sendEmailMock.mockResolvedValue({ success: false, error: 'smtp down' })
+    sendEmailMock.mockResolvedValue({ success: false, error: 'provider unavailable' })
 
     const { status, body } = await parseJsonResponse<{
+      error: string
       data: { email_sent: boolean; status: string }
     }>(await post({ email: 'client@example.com' }))
 
-    expect(status).toBe(200)
+    expect(status).toBe(502)
+    expect(body.error).toBe('Inbjudan skapades, men e-postmeddelandet kunde inte skickas.')
     expect(body.data.status).toBe('pending')
     expect(body.data.email_sent).toBe(false)
+    expect(findCall('company_invitations', 'insert')).toEqual([
+      expect.objectContaining({
+        company_id: 'company-1',
+        email: 'client@example.com',
+        role: 'viewer',
+        token_hash: 'tok-hash',
+        invited_by: 'user-1',
+        status: 'pending',
+        expires_at: '2026-08-01T00:00:00.000Z',
+      }),
+    ])
+  })
+
+  it('returns 502 when the email service is not configured (invite still created)', async () => {
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    enqueue({ data: { name: 'Acme AB' } })
+    enqueue({ data: null })
+    isConfiguredMock.mockReturnValue(false)
+
+    const { status, body } = await parseJsonResponse<{
+      error: string
+      data: { email_sent: boolean; status: string }
+    }>(await post({ email: 'client@example.com' }))
+
+    expect(status).toBe(502)
+    expect(body.error).toBe('Inbjudan skapades, men e-postmeddelandet kunde inte skickas.')
+    expect(body.data.status).toBe('pending')
+    expect(body.data.email_sent).toBe(false)
+    expect(sendEmailMock).not.toHaveBeenCalled()
   })
 })
