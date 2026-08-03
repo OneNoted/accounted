@@ -228,7 +228,7 @@ CLOUDFLARE_EMAIL_API_TOKEN=...
 CLOUDFLARE_EMAIL_FROM=noreply@your-domain.com
 ```
 
-The token requires Email Sending Edit permission and the sender address must be verified in Cloudflare Email Service. Store the account ID beside the token in your secret manager.
+The token requires Email Sending Edit permission and the sender domain must be onboarded for Cloudflare Email Sending. Store the account ID beside the token in your secret manager. Cloudflare limits the total message size to 5 MiB, including attachments.
 
 Resend remains supported as the fallback when the complete Cloudflare configuration is absent:
 

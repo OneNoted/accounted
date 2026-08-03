@@ -163,7 +163,8 @@ export const POST = withRouteContext(
       log.warn('email service not configured: invite email skipped', { to: email })
     }
 
-    // In development, return the invite URL directly (no email service)
+    // In development, also return the invite URL directly so the invitation
+    // remains usable when delivery is unavailable.
     const isDev = process.env.NODE_ENV === 'development'
     const devInviteUrl = isDev ? `${appUrl}/invite/${token}` : undefined
     const responseData = {

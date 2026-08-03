@@ -19,7 +19,7 @@ const log = createLogger('email-delivery-webhook')
 
 export const emailExtension: Extension = {
   id: 'email',
-  name: 'E-post (Resend)',
+  name: 'E-post',
   version: '1.0.0',
 
   apiRoutes: [

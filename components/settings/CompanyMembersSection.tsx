@@ -13,6 +13,7 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { parseCompanyMembersPayload } from '@/components/settings/members-payload'
+import { shouldRefreshAfterInviteFailure } from '@/components/settings/invite-response'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatDateLong } from '@/lib/utils'
 import { Loader2, Plus, Trash2, Mail } from 'lucide-react'
@@ -129,6 +130,9 @@ export function CompanyMembersSection() {
 
       if (!res.ok) {
         toast({ title: data.error, variant: 'destructive' })
+        if (shouldRefreshAfterInviteFailure(res.status, data)) {
+          await fetchMembers()
+        }
         return
       }
 

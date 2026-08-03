@@ -64,7 +64,7 @@ Cloudflare Email Service is preferred for outbound mail when all three Cloudflar
 |---|---|
 | `CLOUDFLARE_EMAIL_ACCOUNT_ID` | Cloudflare account that owns Email Service |
 | `CLOUDFLARE_EMAIL_API_TOKEN` | API token with Email Sending Edit permission |
-| `CLOUDFLARE_EMAIL_FROM` | Verified default `From` address (e.g. `noreply@your-brand.se`) |
+| `CLOUDFLARE_EMAIL_FROM` | Default `From` address on an onboarded sending domain (e.g. `noreply@your-brand.se`) |
 | `RESEND_API_KEY` | Resend API key: used for outbound fallback and required for the Resend inbox webhook |
 | `RESEND_FROM_EMAIL` | Default `From` address for the Resend outbound fallback |
 | `RESEND_INBOUND_DOMAIN` | Domain used to compose per-company invoice-inbox addresses: `{local-part}@{RESEND_INBOUND_DOMAIN}` |
