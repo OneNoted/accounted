@@ -12,9 +12,9 @@ import {
   generateInviteEmailText,
 } from '@/lib/email/invite-templates'
 
-// Loads the email extension so getEmailService() returns the Resend
-// implementation instead of the noop default. Without this, the invite email
-// is silently skipped in dev whenever this route is hit before any other
+// Loads the email extension so getEmailService() returns the configured
+// provider instead of the noop default. Without this, the invite email is
+// silently skipped in dev whenever this route is hit before any other
 // init'd route in the process.
 ensureInitialized()
 
@@ -131,9 +131,9 @@ export const POST = withRouteContext(
       }
     }
 
-    // Send email. email_sent is surfaced in the response so the UI can tell
-    // the user when the invitation exists but the mail never went out:
-    // previously a send failure was invisible (invite looked sent).
+    // Send email. The invitation remains pending if delivery fails, but
+    // production callers receive 502 with email_sent=false instead of a false
+    // success. Development can still use the returned invite URL directly.
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
     const emailService = getEmailService()
     let emailSent = false
@@ -166,15 +166,24 @@ export const POST = withRouteContext(
     // In development, return the invite URL directly (no email service)
     const isDev = process.env.NODE_ENV === 'development'
     const devInviteUrl = isDev ? `${appUrl}/invite/${token}` : undefined
+    const responseData = {
+      email,
+      status: 'pending',
+      email_sent: emailSent,
+      ...(isDev && { inviteUrl: devInviteUrl }),
+    }
 
-    return NextResponse.json({
-      data: {
-        email,
-        status: 'pending',
-        email_sent: emailSent,
-        ...(isDev && { inviteUrl: devInviteUrl }),
-      },
-    })
+    if (!emailSent && !isDev) {
+      return NextResponse.json(
+        {
+          error: 'Inbjudan skapades, men e-postmeddelandet kunde inte skickas.',
+          data: responseData,
+        },
+        { status: 502 },
+      )
+    }
+
+    return NextResponse.json({ data: responseData })
   },
   { requireWrite: true },
 )

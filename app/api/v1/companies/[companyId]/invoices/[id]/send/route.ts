@@ -26,7 +26,7 @@
  *      failure never blocks the send; it surfaces as a PAYMENT_LINK_FAILED
  *      warning on the response once the email is delivered.
  *   7. Final PDF render with the real number.
- *   8. Email send via Resend (the email extension). Fail → 502
+ *   8. Email send via the configured provider (the email extension). Fail → 502
  *      INVOICE_SEND_PROVIDER_FAILED. The number IS consumed at this point;
  *      same orphan-window as :mark-sent (architecturally tracked).
  *   9. POINT OF NO RETURN. Steps below are best-effort; failures surface
@@ -121,14 +121,14 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/send',
   summary: 'Send a draft invoice to the customer by email.',
   description:
-    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via Resend (PDF attachment, copy to company) → flip status to sent → post journal entry (accrual + real invoice) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.',
+    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via the configured provider (PDF attachment, copy to company) → flip status to sent → post journal entry (accrual + real invoice) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.',
   useWhen:
     'You want Accounted to deliver the invoice to the customer via email. For invoices delivered through another channel (Peppol, postal, own SMTP) use :mark-sent instead.',
   doNotUseFor:
     'Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
+    'Email service must be configured: set all CLOUDFLARE_EMAIL_* variables or RESEND_API_KEY + RESEND_FROM_EMAIL. Otherwise the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
     'Customer must have an email address. 400 INVOICE_SEND_NO_CUSTOMER_EMAIL otherwise.',
     'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.',
     'Email failure before the status flip leaves the F-series number consumed but the invoice in `draft` status. Same orphan window as :mark-sent (architecturally tracked, matches internal route).',
@@ -148,7 +148,7 @@ registerEndpoint({
         invoice_number: '2026-0042',
         status: 'sent',
         total: 12500,
-        message_id: 're_abc123',
+        message_id: 'provider-message-123',
         sent_to: 'finance@acme.test',
         cc: 'billing@gnubok-user.test',
         cc_addresses: ['billing@gnubok-user.test'],

@@ -3,7 +3,7 @@ import type { Extension } from '@/lib/extensions/types'
 import { registerEmailService } from '@/lib/email/service'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
-import { ResendEmailService } from './lib/resend-service'
+import { createEmailServiceFromEnv } from './lib/provider'
 import {
   ResendDeliverySignatureError,
   isDeliveryWebhookConfigured,
@@ -11,8 +11,9 @@ import {
   verifyDeliveryWebhook,
 } from './lib/delivery-webhook'
 
-// Register the Resend implementation immediately when this extension is loaded
-registerEmailService(new ResendEmailService())
+// Prefer Cloudflare Email Service when configured for self-hosted deployments.
+// Hosted deployments keep the existing Resend adapter and delivery webhook.
+registerEmailService(createEmailServiceFromEnv())
 
 const log = createLogger('email-delivery-webhook')
 

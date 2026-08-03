@@ -840,7 +840,7 @@ The email extension demonstrates how to make a core capability optional:
 
 2. **Extension registers the implementation** (`extensions/general/email/index.ts`):
    - Imports `registerEmailService` from core
-   - Creates `ResendEmailService` and registers it at load time
+   - Calls the provider factory, which prefers Cloudflare Email Service when fully configured and otherwise falls back to Resend
 
 3. **Core callers use the getter** -- never import from the extension:
    ```typescript

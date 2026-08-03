@@ -220,12 +220,24 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 
 ### Email (Invoice Sending and Reminders)
 
+Configure Cloudflare Email Service:
+
+```bash
+CLOUDFLARE_EMAIL_ACCOUNT_ID=...
+CLOUDFLARE_EMAIL_API_TOKEN=...
+CLOUDFLARE_EMAIL_FROM=noreply@your-domain.com
+```
+
+The token requires Email Sending Edit permission and the sender address must be verified in Cloudflare Email Service. Store the account ID beside the token in your secret manager.
+
+Resend remains supported as the fallback when the complete Cloudflare configuration is absent:
+
 ```bash
 RESEND_API_KEY=re_...
 RESEND_FROM_EMAIL=noreply@your-domain.com
 ```
 
-Requires a [Resend](https://resend.com) account with a verified sender domain. Without this, invoices can still be generated as PDFs but cannot be emailed.
+Without either provider, invoices can still be generated as PDFs but cannot be emailed.
 
 ### Push Notifications
 

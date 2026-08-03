@@ -5366,7 +5366,9 @@ export const tools: McpTool[] = [
 
       const emailService = getEmailService()
       if (!emailService.isConfigured()) {
-        throw new Error('Email service not configured. Ensure RESEND_API_KEY and RESEND_FROM_EMAIL are set.')
+        throw new Error(
+          'Email service not configured. Configure Cloudflare Email Service or Resend.',
+        )
       }
 
       const { data: invoice, error: invoiceError } = await supabase
