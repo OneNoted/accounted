@@ -29,7 +29,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: onenoted/accounted
+  IMAGE_NAME: notes-supply/accounted
   # Publish a full-SHA traceability tag rather than metadata-action's default
   # short SHA. The acceptance gate itself uses the create operation's digest.
   DOCKER_METADATA_SHORT_SHA_LENGTH: 40
