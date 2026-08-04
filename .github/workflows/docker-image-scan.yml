@@ -32,7 +32,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: onenoted/accounted
+  IMAGE_NAME: notes-supply/accounted
 
 jobs:
   scan:
