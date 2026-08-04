@@ -236,8 +236,9 @@ function buildContent(input: ExtractionInput) {
 
 /**
  * Extract invoice fields by sending the document directly to Claude
- * Sonnet 4.6 via AWS Bedrock. Never throws on extraction failure:
- * always returns an InvoiceExtractionResult. Empty fields are null.
+ * Sonnet via AWS Bedrock. Provider configuration errors reject so the inbox
+ * can persist a visible retryable failure; model or parsing failures still
+ * return an empty extraction for manual completion.
  */
 export async function extractInvoiceFields(
   input: ExtractionInput
@@ -246,18 +247,21 @@ export async function extractInvoiceFields(
     return { data: emptyResult(), rawText: null }
   }
 
-  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    log.warn('AWS Bedrock credentials missing: returning empty extraction', {
-      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
-    })
-    return { data: emptyResult(), rawText: null }
+  const bearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK
+  const accessKey = process.env.AWS_ACCESS_KEY_ID
+  const secretKey = process.env.AWS_SECRET_ACCESS_KEY
+  if (!bearerToken && (!accessKey || !secretKey)) {
+    throw new Error('AWS Bedrock authentication missing')
   }
 
-  const client = new AnthropicBedrock({
-    awsRegion: process.env.AWS_REGION || 'eu-north-1',
-    awsAccessKey: process.env.AWS_ACCESS_KEY_ID,
-    awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY,
-  })
+  const awsRegion = process.env.AWS_REGION || 'eu-north-1'
+  const client = bearerToken
+    ? new AnthropicBedrock({ apiKey: bearerToken, awsRegion })
+    : new AnthropicBedrock({
+        awsRegion,
+        awsAccessKey: accessKey!,
+        awsSecretKey: secretKey!,
+      })
 
   let rawText: string | null = null
   try {
