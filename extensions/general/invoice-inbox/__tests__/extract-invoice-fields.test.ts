@@ -4,9 +4,13 @@ import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/ext
 // Mock the Bedrock SDK so tests drive the JSON parser without
 // network/credential needs.
 const mockCreate = vi.fn()
+const mockConstructor = vi.fn()
 
 vi.mock('@anthropic-ai/bedrock-sdk', () => {
   class FakeBedrock {
+    constructor(options: unknown) {
+      mockConstructor(options)
+    }
     messages = { create: mockCreate }
   }
   return { default: FakeBedrock }
@@ -14,6 +18,7 @@ vi.mock('@anthropic-ai/bedrock-sdk', () => {
 
 const ORIG_AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID
 const ORIG_AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY
+const ORIG_AWS_BEARER_TOKEN_BEDROCK = process.env.AWS_BEARER_TOKEN_BEDROCK
 
 function aiResponse(json: string | object) {
   const text = typeof json === 'string' ? json : JSON.stringify(json)
@@ -55,8 +60,9 @@ const VALID_RESULT = {
 describe('extractInvoiceFields', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.AWS_ACCESS_KEY_ID = 'test-key'
-    process.env.AWS_SECRET_ACCESS_KEY = 'test-secret'
+    delete process.env.AWS_ACCESS_KEY_ID
+    delete process.env.AWS_SECRET_ACCESS_KEY
+    process.env.AWS_BEARER_TOKEN_BEDROCK = 'test-bearer-token'
   })
 
   it('returns empty result for unsupported mime type (HEIC)', async () => {
@@ -71,16 +77,33 @@ describe('extractInvoiceFields', () => {
     expect(mockCreate).not.toHaveBeenCalled()
   })
 
-  it('returns empty result and skips API when AWS creds are missing', async () => {
+  it('rejects when Bedrock authentication is missing', async () => {
     delete process.env.AWS_ACCESS_KEY_ID
     delete process.env.AWS_SECRET_ACCESS_KEY
-    const { data } = await extractInvoiceFields({
+    delete process.env.AWS_BEARER_TOKEN_BEDROCK
+    await expect(
+      extractInvoiceFields({
+        buffer: Buffer.from('%PDF'),
+        mimeType: 'application/pdf',
+        fileName: 'f.pdf',
+      })
+    ).rejects.toThrow(/authentication missing/i)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('passes the Bedrock API key as bearer authentication', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
-      fileName: 'f.pdf',
+      fileName: 'bearer.pdf',
     })
-    expect(data.totals.total).toBeNull()
-    expect(mockCreate).not.toHaveBeenCalled()
+    expect(mockConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'test-bearer-token',
+        awsRegion: 'eu-north-1',
+      })
+    )
   })
 
   it('parses a valid AI response into InvoiceExtractionResult', async () => {
@@ -188,5 +211,8 @@ describe('extractInvoiceFields', () => {
     else delete process.env.AWS_ACCESS_KEY_ID
     if (ORIG_AWS_SECRET_ACCESS_KEY) process.env.AWS_SECRET_ACCESS_KEY = ORIG_AWS_SECRET_ACCESS_KEY
     else delete process.env.AWS_SECRET_ACCESS_KEY
+    if (ORIG_AWS_BEARER_TOKEN_BEDROCK)
+      process.env.AWS_BEARER_TOKEN_BEDROCK = ORIG_AWS_BEARER_TOKEN_BEDROCK
+    else delete process.env.AWS_BEARER_TOKEN_BEDROCK
   })
 })
