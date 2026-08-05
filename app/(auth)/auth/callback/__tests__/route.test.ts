@@ -29,6 +29,7 @@ import { GET } from '../route'
 describe('GET /auth/callback: recovery flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.unstubAllEnvs()
   })
 
   it('redirects to /reset-password after a successful recovery OTP (token-hash flow)', async () => {
@@ -42,6 +43,50 @@ describe('GET /auth/callback: recovery flow', () => {
     expect(response.status).toBe(307)
     expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
     expect(verifyOtp).toHaveBeenCalledWith({ token_hash: 'abc', type: 'recovery' })
+  })
+
+  it('uses the configured public origin instead of the internal request origin', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://accounted.ts.notes.supply')
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      'http://0.0.0.0:3000/auth/callback?token_hash=abc&type=recovery&next=/reset-password'
+    )
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'https://accounted.ts.notes.supply/reset-password'
+    )
+  })
+
+  it('keeps legacy-host recovery callbacks on the legacy origin', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://accounted.ts.notes.supply')
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      'http://0.0.0.0:3000/auth/callback?token_hash=abc&type=recovery&next=/reset-password',
+      { headers: { host: 'app.gnubok.se' } }
+    )
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe('https://app.gnubok.se/reset-password')
+  })
+
+  it('does not trust legacy-host lookalikes', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://accounted.ts.notes.supply')
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      'http://0.0.0.0:3000/auth/callback?token_hash=abc&type=recovery&next=/reset-password',
+      { headers: { host: 'app.gnubok.se.evil.example' } }
+    )
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe(
+      'https://accounted.ts.notes.supply/reset-password'
+    )
   })
 
   it('redirects to /reset-password after a successful PKCE exchange when next=/reset-password (no type param)', async () => {
