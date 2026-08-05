@@ -5,9 +5,12 @@ import { hashInviteToken } from '@/lib/auth/invite-tokens'
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url)
   const { searchParams } = requestUrl
-  const origin = process.env.NEXT_PUBLIC_APP_URL
-    ? new URL(process.env.NEXT_PUBLIC_APP_URL).origin
-    : requestUrl.origin
+  const requestHost = request.headers.get('host')?.split(':', 1)[0].toLowerCase()
+  const origin = requestHost === 'app.gnubok.se'
+    ? 'https://app.gnubok.se'
+    : process.env.NEXT_PUBLIC_APP_URL
+      ? new URL(process.env.NEXT_PUBLIC_APP_URL).origin
+      : requestUrl.origin
   const code = searchParams.get('code')
   const token_hash = searchParams.get('token_hash')
   const type = searchParams.get('type')

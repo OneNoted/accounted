@@ -60,6 +60,35 @@ describe('GET /auth/callback: recovery flow', () => {
     )
   })
 
+  it('keeps legacy-host recovery callbacks on the legacy origin', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://accounted.ts.notes.supply')
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      'http://0.0.0.0:3000/auth/callback?token_hash=abc&type=recovery&next=/reset-password',
+      { headers: { host: 'app.gnubok.se' } }
+    )
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe('https://app.gnubok.se/reset-password')
+  })
+
+  it('does not trust legacy-host lookalikes', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://accounted.ts.notes.supply')
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      'http://0.0.0.0:3000/auth/callback?token_hash=abc&type=recovery&next=/reset-password',
+      { headers: { host: 'app.gnubok.se.evil.example' } }
+    )
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe(
+      'https://accounted.ts.notes.supply/reset-password'
+    )
+  })
+
   it('redirects to /reset-password after a successful PKCE exchange when next=/reset-password (no type param)', async () => {
     exchangeCodeForSession.mockResolvedValue({ error: null })
 
