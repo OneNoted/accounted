@@ -1692,6 +1692,7 @@ export const UpdateSettingsSchema = z.object({
     .pipe(z.string().regex(/^SE\d{12}$/, 'Momsregistreringsnummer måste vara SE följt av 12 siffror'))
     .nullable()
     .optional(),
+  vat_liability_start_date: saneIsoDate.nullable().optional(),
   moms_period: MomsPeriodSchema.nullable().optional(),
   vat_taxable_base_over_40m: z.boolean().optional(),
   vat_has_eu_trade: z.boolean().optional(),
