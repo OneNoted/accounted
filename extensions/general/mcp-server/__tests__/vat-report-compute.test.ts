@@ -17,7 +17,13 @@ interface MockLine {
   journal_entries?: { source_type: string | null }
 }
 
-function mockSupabaseWithLines(lines: MockLine[]) {
+function mockSupabaseWithLines(
+  lines: MockLine[],
+  options: {
+    fiscalPeriod?: { period_start: string; period_end: string } | null
+    vatLiabilityStartDate?: string | null
+  } = {},
+) {
   // computeVatReport uses the two-step entry-lines fetch
   // (lib/bookkeeping/entry-lines.ts): journal_entries is queried first, then
   // journal_entry_lines by parent id, and the parent is reattached under
@@ -52,6 +58,15 @@ function mockSupabaseWithLines(lines: MockLine[]) {
     return chain
   }
 
+  const makeSingleChain = (data: unknown) => {
+    const chain: Record<string, () => unknown> = {}
+    chain.maybeSingle = () => ({ data, error: null })
+    for (const m of ['order', 'lte', 'gte', 'eq', 'select', 'limit']) {
+      chain[m] = () => chain
+    }
+    return chain
+  }
+
   return {
     // chart_of_accounts feeds fetchDynamicRuta05Accounts (the company's own
     // ruta 05 konton). Empty here: these fixtures are plain BAS charts, and the
@@ -59,12 +74,40 @@ function mockSupabaseWithLines(lines: MockLine[]) {
     from: (table: string) => {
       if (table === 'journal_entries') return makeChain(entries)
       if (table === 'chart_of_accounts') return makeChain([])
+      if (table === 'fiscal_periods') return makeSingleChain(options.fiscalPeriod ?? null)
+      if (table === 'company_settings') {
+        return makeSingleChain({
+          vat_liability_start_date: options.vatLiabilityStartDate ?? null,
+        })
+      }
       return makeChain(bareLines)
     },
   } as never
 }
 
 describe('computeVatReport', () => {
+  it('rejects yearly period values other than 1', async () => {
+    await expect(computeVatReport(
+      { period_type: 'yearly', year: 2026, period: 2 },
+      'company-1',
+      mockSupabaseWithLines([]),
+    )).rejects.toThrow('period must be 1 for yearly')
+  })
+
+  it('uses the fiscal year and clamps the first annual period to VAT liability', async () => {
+    const result = await computeVatReport(
+      { period_type: 'yearly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabaseWithLines([], {
+        fiscalPeriod: { period_start: '2026-04-15', period_end: '2026-12-31' },
+        vatLiabilityStartDate: '2026-05-01',
+      }),
+    )
+
+    expect(result.period.start).toBe('2026-05-01')
+    expect(result.period.end).toBe('2026-12-31')
+  })
+
   it('aggregates 2611 → ruta10, 2641 → ruta48, includes 2647 → ruta48', async () => {
     const lines: MockLine[] = [
       // Domestic 25% sale: 1000 + 250 VAT
@@ -175,7 +218,9 @@ describe('computeVatReport', () => {
     const result = await computeVatReport(
       { period_type: 'yearly', year: 2026, period: 1 },
       'company-1',
-      mockSupabaseWithLines(lines)
+      mockSupabaseWithLines(lines, {
+        fiscalPeriod: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      })
     )
 
     expect(result.rutor.ruta05).toBe(2100)
@@ -190,7 +235,9 @@ describe('computeVatReport', () => {
     const result = await computeVatReport(
       { period_type: 'yearly', year: 2026, period: 1 },
       'company-1',
-      mockSupabaseWithLines(lines)
+      mockSupabaseWithLines(lines, {
+        fiscalPeriod: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      })
     )
 
     expect(result.rutor.ruta05).toBe(1000)

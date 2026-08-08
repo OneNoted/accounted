@@ -169,6 +169,7 @@ export const PUT = withRouteContext(
     // when registration is re-enabled later. Same coherence rule as the
     // 20260717070000 migration and the tax settings form.
     if (body.vat_registered === false) {
+      body.vat_liability_start_date = null
       body.vat_taxable_base_over_40m = false
       body.vat_has_eu_trade = false
       body.periodisk_sammanstallning_enabled = false

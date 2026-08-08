@@ -2,6 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import {
   ACCOUNT_RUTA,
+  applyVatLiabilityBoundary,
   resolvePeriodDates,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicRuta05Accounts } from '@/lib/reports/vat-revenue-accounts'
@@ -106,8 +107,12 @@ export const GET = withRouteContext<{ params: Promise<{ ruta: string }> }>(
     if (!period) {
       return NextResponse.json({ error: 'Period saknas' }, { status: 404 })
     }
-    start = period.period_start
-    end = period.period_end
+    const dates = await applyVatLiabilityBoundary(supabase, companyId, {
+      start: period.period_start,
+      end: period.period_end,
+    })
+    start = dates.start
+    end = dates.end
   } else {
     return NextResponse.json(
       { error: 'periodType/year/period or fiscal_period_id is required' },

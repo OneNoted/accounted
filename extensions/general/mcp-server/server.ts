@@ -41,6 +41,7 @@ import {
   rutorFromTotals,
   rcInputTotalsFromDeclaration,
   calculateVatDeclaration,
+  resolvePeriodDates,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicRuta05Accounts } from '@/lib/reports/vat-revenue-accounts'
 // The momsdeklaration completeness checks live in core (lib/reports) and are
@@ -1273,24 +1274,15 @@ export async function computeVatReportWithRutor(
   if (!year || year < 2000 || year > 2100) throw new Error('year must be between 2000 and 2100')
   if (periodType === 'monthly' && (period < 1 || period > 12)) throw new Error('period must be 1-12 for monthly')
   if (periodType === 'quarterly' && (period < 1 || period > 4)) throw new Error('period must be 1-4 for quarterly')
+  if (periodType === 'yearly' && period !== 1) throw new Error('period must be 1 for yearly')
 
-  let startDate: string
-  let endDate: string
-
-  if (periodType === 'monthly') {
-    startDate = `${year}-${String(period).padStart(2, '0')}-01`
-    const lastDay = new Date(year, period, 0).getDate()
-    endDate = `${year}-${String(period).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  } else if (periodType === 'quarterly') {
-    const startMonth = (period - 1) * 3 + 1
-    const endMonth = period * 3
-    startDate = `${year}-${String(startMonth).padStart(2, '0')}-01`
-    const lastDay = new Date(year, endMonth, 0).getDate()
-    endDate = `${year}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  } else {
-    startDate = `${year}-01-01`
-    endDate = `${year}-12-31`
-  }
+  const { start: startDate, end: endDate } = await resolvePeriodDates(
+    supabase,
+    companyId,
+    periodType as VatPeriodType,
+    year,
+    period,
+  )
 
   // Two-step fetch (lib/bookkeeping/entry-lines.ts) rather than a
   // `journal_entries!inner` embed: PostgREST compiles that embed into a
@@ -2402,7 +2394,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_company_settings',
     title: 'Get Company Settings',
-    description: 'Get invoice payment details, company contact details and the custom invoice email texts. Use before creating invoices or staging a settings update.',
+    description: 'Get invoice payment details, company contact details, tax registration settings and custom invoice email texts. Use before creating invoices or staging a settings update.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2425,6 +2417,13 @@ export const tools: McpTool[] = [
         email: { type: ['string', 'null'], description: 'Company contact email shown on invoices.' },
         phone: { type: ['string', 'null'], description: 'Company contact phone shown on invoices.' },
         website: { type: ['string', 'null'], description: 'Company website shown on invoices.' },
+        f_skatt: { type: 'boolean' },
+        vat_registered: { type: 'boolean' },
+        vat_number: { type: ['string', 'null'] },
+        vat_liability_start_date: { type: ['string', 'null'], format: 'date' },
+        moms_period: { type: ['string', 'null'], enum: ['monthly', 'quarterly', 'yearly', null] },
+        accounting_method: { type: 'string', enum: ['accrual', 'cash'] },
+        employer_registered: { type: ['boolean', 'null'] },
         invoice_email_texts: {
           type: ['object', 'null'],
           additionalProperties: false,
@@ -2467,6 +2466,13 @@ export const tools: McpTool[] = [
         'email',
         'phone',
         'website',
+        'f_skatt',
+        'vat_registered',
+        'vat_number',
+        'vat_liability_start_date',
+        'moms_period',
+        'accounting_method',
+        'employer_registered',
         'invoice_email_texts',
       ],
     },
@@ -2480,7 +2486,7 @@ export const tools: McpTool[] = [
     async execute(_args, companyId, _userId, supabase) {
       const { data, error } = await supabase
         .from('company_settings')
-        .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
+        .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, f_skatt, vat_registered, vat_number, vat_liability_start_date, moms_period, accounting_method, employer_registered, invoice_email_texts')
         .eq('company_id', companyId)
         .maybeSingle()
 
@@ -2501,6 +2507,13 @@ export const tools: McpTool[] = [
         email: data.email ?? null,
         phone: data.phone ?? null,
         website: data.website ?? null,
+        f_skatt: data.f_skatt ?? true,
+        vat_registered: data.vat_registered ?? false,
+        vat_number: data.vat_number ?? null,
+        vat_liability_start_date: data.vat_liability_start_date ?? null,
+        moms_period: data.moms_period ?? null,
+        accounting_method: data.accounting_method ?? 'accrual',
+        employer_registered: data.employer_registered ?? null,
         invoice_email_texts: data.invoice_email_texts ?? null,
       }
     },
